@@ -4,13 +4,12 @@ Date: 2026-06-21
 
 ## Purpose
 
-A phone-reachable dashboard so the user can, while away from the PC (e.g.
-waiting on a doordash order), see at a glance whether a wiz has sent a
-tell (top priority — needed to respond to a "bot check" before it causes
-trouble), check pending reminders, glance at mud output to confirm a
-character is actually fighting, and optionally kick off a bot command
-(including starting a `Hunt` in a different area). HP bars, MIP data, and
-other richer visuals are explicitly out of scope for this first pass.
+A phone-reachable dashboard so the user can, while away from the PC, see
+at a glance whether they've received a tell, check pending reminders,
+see mud output to confirm a character is actually fighting, and
+optionally kick off a bot command (including starting a `Hunt` in a
+different area). HP bars, MIP data, and other richer visuals are
+explicitly out of scope for this first pass.
 
 Today the system is desktop-only: `katmud.pyw` spawns one detached
 Tkinter process per character (see `README.md`); there is no server or
