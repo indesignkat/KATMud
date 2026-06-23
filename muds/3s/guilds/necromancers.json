@@ -1,0 +1,64 @@
+{
+  "_comment": [
+    "Necromancers guild layer for 3s. Necros have NO guild-specific MIP",
+    "tag - vitals ride the mud-wide FFF feed (hp=A, sp=C, np=gp1=E) and",
+    "the FFF hpbar text (I-field); the rest is parsed from typed readouts",
+    "(powers/gs/inv) in katmud_lib/necro.py + the guild==necromancers",
+    "branches in client.py. Cascade rule REPLACE (character file wins).",
+    "NP shows nothing until it changes (composite only sends moved fields)."
+  ],
+  "login_commands": [],
+  "aliases": {},
+  "triggers": [],
+  "corpse": {
+    "solo": "preserve;=get corpse;get corpse;get coins;lineofsight;glance",
+    "toggle": "harvest"
+  },
+  "gags": [],
+  "keys": {},
+  "mip": {},
+  "vitals": [
+    {
+      "label": "HP",
+      "cur": "hp",
+      "max": "hpmax",
+      "color": "#33aa33",
+      "width": 200,
+      "warn": [
+        [
+          0.25,
+          "#cc3333"
+        ],
+        [
+          0.5,
+          "#cc9933"
+        ]
+      ]
+    },
+    {
+      "label": "SP",
+      "cur": "sp",
+      "max": "spmax",
+      "color": "#3366cc",
+      "width": 200
+    },
+    {
+      "label": "NP",
+      "cur": "gp1",
+      "max": "gp1max",
+      "color": "#9955cc",
+      "width": 200
+    },
+    {
+      "label": "Enemy",
+      "enemy": true,
+      "color": "#aa3333",
+      "width": 260
+    }
+  ],
+  "mip_required": [],
+  "map_patches": [],
+  "settings": {
+    "autoattack_command": ""
+  }
+}

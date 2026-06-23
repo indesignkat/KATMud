@@ -1,0 +1,23 @@
+{
+  "name": "recruits",
+  "area": "Angarboda: Giant training grounds",
+  "label": "training",
+  "_note": "Converted from the katmud_scripts.py 'recruits' script bot. Loot (get plate) and revalrie are handled by the bladesinger guild kill-trigger, so after_kill is left empty here to avoid double-looting; the post-kill revalrie hold is the guild setting post_kill_resume_text. Run skips rooms with a non-party player (look_player underline) or a skip_phrase. Start: -training (Run recruits). Stop: .stop / #stop / Run off.",
+  "setup": [],
+  "loop": true,
+  "path": [
+    "e", "s", "e", "e", "e", "e", "e", "n",
+    "w", "w", "w", "w", "w", "n",
+    "e", "e", "e", "e", "e", "n",
+    "w", "w", "w", "sw", "w", "s", "w"
+  ],
+  "mobs": [
+    {"match": "recruit", "target": "recruit", "contains": true}
+  ],
+  "after_kill": [],
+  "skip_phrases": [
+    "big black wolf",
+    "dread pirate roberts",
+    "avatar of lucanus"
+  ]
+}

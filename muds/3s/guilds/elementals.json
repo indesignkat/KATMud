@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "GUILD TEMPLATE - copy to muds/<mud>/guilds/<guildname>.json",
+    "(lowercase, no spaces; paths.safe_name strips anything else).",
+    "Files starting with underscore are ignored by the picker.",
+    "Once the file exists, the guild appears in the profile form's",
+    "Guild dropdown. All sections optional; cascade rule is REPLACE",
+    "(same key in character file beats this; this beats mud/global)."
+  ],
+  "login_commands": [],
+  "aliases": {},
+  "triggers": [],
+  "gags": [],
+  "keys": {},
+  "mip": {},
+  "mip_required": [],
+  "map_patches": [],
+  "settings": {
+    "autoattack_command": ""
+  }
+}

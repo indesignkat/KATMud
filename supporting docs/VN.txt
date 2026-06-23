@@ -1,0 +1,294 @@
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*  Newbie Errands                                           *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7270] Lodbrok's Hold: Collect a sealed letter in       *~-
+-~*        Nidaros and return to Lodbrok's Hold.              *~-
+-~*        Fetch from Nidaros  ->  +173 daler                 *~-
+-~*        +1 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7271] Lodbrok's Hold: Bjorn the Factor: fetch a        *~-
+-~*        merchant's satchel from Borgarfjord.               *~-
+-~*        Fetch from Borgarfjord  ->  +134 daler             *~-
+-~*        +1 fish                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7272] Lodbrok's Hold: Bjorn the Factor: fetch a        *~-
+-~*        bolt of linen from Eiriksby.                       *~-
+-~*        Fetch from Eiriksby  ->  +189 daler                *~-
+-~*        +1 grain                                           *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7273] Lodbrok's Hold: Bjorn the Factor: fetch a        *~-
+-~*        roll of cured furs from Uppsala.                   *~-
+-~*        Fetch from Uppsala  ->  +225 daler                 *~-
+-~*        +3 amber                                           *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7274] Eiriksby: Carry a merchant's satchel from        *~-
+-~*        Uppsala back to Eiriksby.                          *~-
+-~*        Fetch from Uppsala  ->  +81 daler                  *~-
+-~*        +1 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7275] Eiriksby: Carry a crate of provisions from       *~-
+-~*        Lodbrok's Hold back to Eiriksby.                   *~-
+-~*        Fetch from Lodbrok's Hold  ->  +115 daler          *~-
+-~*        +1 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7276] Eiriksby: Collect a pouch of amber beads in      *~-
+-~*        Ericsgard and return to Eiriksby.                  *~-
+-~*        Fetch from Ericsgard  ->  +203 daler               *~-
+-~*        +1 amber                                           *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7277] Eiriksby: Retrieve a tally stick from            *~-
+-~*        Borgarfjord for Thorvald Leaf-Seeker.              *~-
+-~*        Fetch from Borgarfjord  ->  +113 daler             *~-
+-~*        +1 amber                                           *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7278] Imaird: Mael Caich the Broker: fetch a roll      *~-
+-~*        of cured furs from Birka.                          *~-
+-~*        Fetch from Birka  ->  +229 daler +3 fish +1-2 rep  *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7279] Imaird: Collect a roll of cured furs in Birka    *~-
+-~*        and return to Imaird.                              *~-
+-~*        Fetch from Birka  ->  +86 daler +4 grain +1-2 rep  *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7280] Imaird: Retrieve a consignment note from         *~-
+-~*        Uppsala for Mael Caich the Broker.                 *~-
+-~*        Fetch from Uppsala  ->  +166 daler                 *~-
+-~*        +1 fish                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7281] Imaird: Retrieve a merchant's satchel from       *~-
+-~*        Vestergotland for Mael Caich the Broker.           *~-
+-~*        Fetch from Vestergotland  ->  +228 daler           *~-
+-~*        +3 mead                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7282] Holmgard: Vadim the Trader: fetch a sealed       *~-
+-~*        letter from Uppsala.                               *~-
+-~*        Fetch from Uppsala  ->  +163 daler                 *~-
+-~*        +4 furs                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7283] Holmgard: Collect a merchant's satchel in        *~-
+-~*        Vestergotland and return to Holmgard.              *~-
+-~*        Fetch from Vestergotland  ->  +174 daler           *~-
+-~*        +3 grain                                           *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7284] Holmgard: Carry a tally stick from Birka back    *~-
+-~*        to Holmgard.                                       *~-
+-~*        Fetch from Birka  ->  +167 daler +1 fish +1-2 rep  *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Holmgard: Incoming errand, available in 8m              *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7286] Hafrfjord: Collect a merchant's satchel in       *~-
+-~*        Holmgard and return to Hafrfjord.                  *~-
+-~*        Fetch from Holmgard  ->  +136 daler                *~-
+-~*        +4 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7287] Hafrfjord: Carry a consignment note from         *~-
+-~*        Sverkersby back to Hafrfjord.                      *~-
+-~*        Fetch from Sverkersby  ->  +138 daler              *~-
+-~*        +1 grain                                           *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7288] Hafrfjord: Retrieve a pouch of amber beads       *~-
+-~*        from Sverkersby for Ulf Harald's Man.              *~-
+-~*        Fetch from Sverkersby  ->  +218 daler              *~-
+-~*        +1 grain                                           *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7289] Hafrfjord: Collect a small chest of trinkets     *~-
+-~*        in Borgarfjord and return to Hafrfjord.            *~-
+-~*        Fetch from Borgarfjord  ->  +201 daler             *~-
+-~*        +3 mead                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7290] Uppsala: Freydis the Keeper: fetch a small       *~-
+-~*        chest of trinkets from Lejre.                      *~-
+-~*        Fetch from Lejre  ->  +228 daler +3 mead +1-2 rep  *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7291] Uppsala: Carry a tally stick from Lodbrok's      *~-
+-~*        Hold back to Uppsala.                              *~-
+-~*        Fetch from Lodbrok's Hold  ->  +197 daler          *~-
+-~*        +1 fish                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7292] Uppsala: Carry a roll of cured furs from         *~-
+-~*        Lejre back to Uppsala.                             *~-
+-~*        Fetch from Lejre  ->  +78 daler +4 mead +1-2 rep   *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7293] Uppsala: Retrieve a satchel of dried fish        *~-
+-~*        from Hafrfjord for Freydis the Keeper.             *~-
+-~*        Fetch from Hafrfjord  ->  +232 daler               *~-
+-~*        +3 mead                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7294] Borgarfjord: Egil's Steward: fetch a tally       *~-
+-~*        stick from Birka.                                  *~-
+-~*        Fetch from Birka  ->  +81 daler                    *~-
+-~*        +2 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7295] Borgarfjord: Egil's Steward: fetch a roll of     *~-
+-~*        cured furs from Birka.                             *~-
+-~*        Fetch from Birka  ->  +183 daler +4 fish +1-2 rep  *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7296] Borgarfjord: Retrieve a bundle of timber         *~-
+-~*        samples from Ericsgard for Egil's Steward.         *~-
+-~*        Fetch from Ericsgard  ->  +141 daler               *~-
+-~*        +3 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7297] Borgarfjord: Collect a bundle of timber          *~-
+-~*        samples in Ericsgard and return to Borgarfjord.    *~-
+-~*        Fetch from Ericsgard  ->  +244 daler               *~-
+-~*        +3 fish                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7298] Vestergotland: Retrieve a pouch of amber         *~-
+-~*        beads from Sverkersby for Haakon the Steward.      *~-
+-~*        Fetch from Sverkersby  ->  +190 daler              *~-
+-~*        +4 mead                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7299] Vestergotland: Collect a merchant's satchel      *~-
+-~*        in Borgarfjord and return to Vestergotland.        *~-
+-~*        Fetch from Borgarfjord  ->  +87 daler              *~-
+-~*        +4 iron                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7300] Vestergotland: Collect a grain sample in         *~-
+-~*        Eiriksby and return to Vestergotland.              *~-
+-~*        Fetch from Eiriksby  ->  +173 daler                *~-
+-~*        +4 fish                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7301] Vestergotland: Collect a consignment note in     *~-
+-~*        Imaird and return to Vestergotland.                *~-
+-~*        Fetch from Imaird  ->  +201 daler                  *~-
+-~*        +1 furs                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Sverkersby: Incoming errand, available in 29m           *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7303] Sverkersby: Ragnhild the Merchant: fetch a       *~-
+-~*        pouch of amber beads from Hafrfjord.               *~-
+-~*        Fetch from Hafrfjord  ->  +194 daler               *~-
+-~*        +2 mead                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7304] Sverkersby: Carry a small chest of trinkets      *~-
+-~*        from Borgarfjord back to Sverkersby.               *~-
+-~*        Fetch from Borgarfjord  ->  +188 daler             *~-
+-~*        +4 grain                                           *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7305] Sverkersby: Retrieve a sealed letter from        *~-
+-~*        Holmgard for Ragnhild the Merchant.                *~-
+-~*        Fetch from Holmgard  ->  +126 daler                *~-
+-~*        +1 iron                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7306] Ericsgard: Collect a sealed letter in            *~-
+-~*        Lodbrok's Hold and return to Ericsgard.            *~-
+-~*        Fetch from Lodbrok's Hold  ->  +75 daler           *~-
+-~*        +2 amber                                           *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7307] Ericsgard: Carry a flask of mead from Birka      *~-
+-~*        back to Ericsgard.                                 *~-
+-~*        Fetch from Birka  ->  +115 daler                   *~-
+-~*        +2 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7308] Ericsgard: Gunnar Ironmaster: fetch a            *~-
+-~*        consignment note from Borgarfjord.                 *~-
+-~*        Fetch from Borgarfjord  ->  +241 daler             *~-
+-~*        +1 iron                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7309] Ericsgard: Carry a pouch of amber beads from     *~-
+-~*        Imaird back to Ericsgard.                          *~-
+-~*        Fetch from Imaird  ->  +180 daler                  *~-
+-~*        +4 fish                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7310] Birka: Collect a crate of provisions in          *~-
+-~*        Imaird and return to Birka.                        *~-
+-~*        Fetch from Imaird  ->  +137 daler                  *~-
+-~*        +4 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7311] Birka: Olof the Scribe: fetch a grain sample     *~-
+-~*        from Imaird.                                       *~-
+-~*        Fetch from Imaird  ->  +185 daler                  *~-
+-~*        +3 amber                                           *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7312] Birka: Carry a grain sample from                 *~-
+-~*        Vestergotland back to Birka.                       *~-
+-~*        Fetch from Vestergotland  ->  +206 daler           *~-
+-~*        +2 iron                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7313] Birka: Collect an iron ingot sample in           *~-
+-~*        Eiriksby and return to Birka.                      *~-
+-~*        Fetch from Eiriksby  ->  +124 daler                *~-
+-~*        +4 fish                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7314] Lejre: Retrieve a roll of cured furs from        *~-
+-~*        Holmgard for Hrothgar's Factor.                    *~-
+-~*        Fetch from Holmgard  ->  +175 daler                *~-
+-~*        +4 iron                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7315] Lejre: Retrieve a crate of provisions from       *~-
+-~*        Imaird for Hrothgar's Factor.                      *~-
+-~*        Fetch from Imaird  ->  +183 daler                  *~-
+-~*        +1 iron                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7316] Lejre: Collect a crate of provisions in          *~-
+-~*        Holmgard and return to Lejre.                      *~-
+-~*        Fetch from Holmgard  ->  +220 daler                *~-
+-~*        +1 iron                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7317] Lejre: Retrieve a small chest of trinkets        *~-
+-~*        from Nidaros for Hrothgar's Factor.                *~-
+-~*        Fetch from Nidaros  ->  +224 daler                 *~-
+-~*        +2 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7318] Nidaros: Collect a flask of mead in Uppsala      *~-
+-~*        and return to Nidaros.                             *~-
+-~*        Fetch from Uppsala  ->  +221 daler                 *~-
+-~*        +1 fish                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7319] Nidaros: Astrid the Saint's Wife: fetch a        *~-
+-~*        sealed letter from Birka.                          *~-
+-~*        Fetch from Birka  ->  +184 daler +2 iron +1-2 rep  *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7320] Nidaros: Carry a flask of mead from Imaird       *~-
+-~*        back to Nidaros.                                   *~-
+-~*        Fetch from Imaird  ->  +82 daler                   *~-
+-~*        +3 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [7322] Nidaros: Astrid the Saint's Wife: fetch a        *~-
+-~*        consignment note from Lejre.                       *~-
+-~*        Fetch from Lejre  ->  +121 daler +1 iron +1-2 rep  *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*  vmission newbie accept <id>    earn daler + goods + rep  *~-
+-~*   Refresh: 5h 41m  Quota: 0/3                             *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-

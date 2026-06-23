@@ -1,0 +1,67 @@
+{
+  "_comment": [
+    "Monks guild layer for 3s. Like Necromancers, this guild has NO private MIP tag - vitals ride the mud-wide FFF composite feed (A=hp C=sp E=gp1 G=gp2). Maxes self-calibrate from peak observed value. Cascade rule REPLACE (character file wins).",
+    "Pool labels: HP/SP verified from score; GP2 still GUESSED (value didn't echo to a named gscore line) - rename live. "
+  ],
+  "login_commands": [],
+  "aliases": {},
+  "triggers": [],
+  "corpse": {
+    "solo": "study corpse;bury corpse;lineofsight;glance",
+    "toggle": "harvest"
+  },
+  "gags": [],
+  "keys": {},
+  "mip": {},
+  "vitals": [
+    {
+      "label": "HP",
+      "cur": "hp",
+      "max": "hpmax",
+      "color": "#33aa33",
+      "width": 200,
+      "warn": [
+        [
+          0.25,
+          "#cc3333"
+        ],
+        [
+          0.5,
+          "#cc9933"
+        ]
+      ]
+    },
+    {
+      "label": "PP",
+      "cur": "sp",
+      "max": "spmax",
+      "color": "#3366cc",
+      "width": 200
+    },
+    {
+      "label": "Chi",
+      "cur": "gp1",
+      "max": "gp1max",
+      "color": "#9955cc",
+      "width": 200
+    },
+    {
+      "label": "GP2",
+      "cur": "gp2",
+      "max": "gp2max",
+      "color": "#cc8833",
+      "width": 200
+    },
+    {
+      "label": "Enemy",
+      "enemy": true,
+      "color": "#aa3333",
+      "width": 260
+    }
+  ],
+  "mip_required": [],
+  "map_patches": [],
+  "settings": {
+    "autoattack_command": "akill"
+  }
+}

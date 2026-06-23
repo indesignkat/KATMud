@@ -1,0 +1,91 @@
+{
+  "_comment": [
+    "Mud-wide layer for 3s: connection details,",
+    "mud-global MIP tags, mud-wide triggers/aliases."
+  ],
+  "connection": {
+    "host": "172.232.4.129",
+    "port": 3200,
+    "mip": true
+  },
+  "mip": {
+    "FFF": {
+      "handler": "vitals_composite"
+    },
+    "BAD": {
+      "handler": "room"
+    },
+    "DDD": {
+      "handler": "exits"
+    },
+    "AAF": {
+      "handler": "uptime"
+    },
+    "AAC": {
+      "handler": "reboot_eta"
+    },
+    "BAE": {
+      "handler": "mudlag"
+    },
+    "CAA": {
+      "handler": "chat"
+    },
+    "BAB": {
+      "handler": "tell"
+    },
+    "BAG": {
+      "handler": "social"
+    },
+    "CAP": {
+      "handler": "caption"
+    },
+    "EEE": {
+      "handler": "reboot_notice"
+    },
+    "BBC": {
+      "handler": "mercenary"
+    }
+  },
+  "aliases": {
+    "tocrysmal": ";3nwn2wsw3n2enesed5sesw2sw2s3wd5e5nd2s5enene4n2et2ntnq2n5t7s10v14e10t8n10t14w10zevtez5set5n7t10e7v2w2szv2s5z5wz3wq3n2vetn2eqetq2t2wz",
+    "crysmalback": ";st2e2zvzwv2wszw2q3sv3et5e5t2nqt2n2e7q10w7z5szw6ntwzqw10t14e10v8s10z14w10q7n5z2svsz2sz2w4swsws5w2nu5s5wu3e2ne2nenw5nuwnws2w3sen2ese4su",
+    "tostaysafe": ";ru3ede(path)8e17ner10e10t3wqwwser",
+    "staysafeback": ";lwneevee10z9wswsw17s8w(path)wu3wdo",
+    "toxyl": ";15el8esr(open gate)q",
+    "xylback": ";ln8wr15wp",
+    "tospiders": ";12nl5n11wsd",
+    "spidersback": ";un11e5sr12sp",
+    "toreactor": ";ru4nd10n5er",
+    "reactorback": ";l5w10su4sdo",
+    "tovago": ";12nl8n4e6n13w2qwtrwq4n2t(press stone)2z4sven",
+    "vagoback": ";slze2v4ep",
+    "totower": ";12wl4w11n5wqzwq12w7nr",
+    "towerback": ";o7s12evetv5e11s4er12ep",
+    "-training": "Run recruits",
+    ".stop": "#stop",
+    "sf": "select %1;enter %1;challenge %1;kill %1"
+  },
+  "triggers": [
+    {
+      "pattern": "You try to leave, but the rocks crumble beneath your feet!!",
+      "command": "out",
+      "recursion_limit": 0,
+      "_note": "MUD-forced escape loop: spam 'out' until it succeeds (self-terminates when the message stops). recursion_limit 0 = unlimited + exempt from the flood breaker."
+    }
+  ],
+  "setup_commands": [
+    "aset look_monster italics",
+    "aset look_player underline",
+    "setmod DISPLAY_ROOMID 1"
+  ],
+  "gags": [],
+  "kill_patterns": [
+    "dealt the killing blow to (.+?)\\.\\s*$"
+  ],
+  "settings": { "map_backend": "sqlite" },
+  "keys": {
+    "KP_Divide": "lll",
+    "KP_0": "d",
+    "KP_Decimal": "u"
+  }
+}

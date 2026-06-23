@@ -1,0 +1,1007 @@
+=====================================================================
+Random :: Guardian of the Beyond [|*|]
+Level 150 / Rank 50 :: Defense Division : Science Class 
+=====================================================================
+HP [3683/3984]     SP [282/282]     PU [9313/9450]    SPU [4071/4725]
+GEXP: 356548 (643452 to Echelon 135)  RC: 11284467  Slots: 81/81
+CPC [10000/10000] Guild Age: 139 days 14 hours 3 minutes 46 seconds
+=====================================================================
+Timeslides: [2--2][ 22%] Contributed: 1200000  Store Credits: [60/60]
+Retained GEXP     [ 50%] Subsidies  : 2150   Guild Storage: 23838/142
+Gen Eff:        [  100%] Tech Eff   :[  100%]   Autorepair: [Stable]
+=====================================================================
+Ferrous DNA : [     On     ] Adrenaline Rush : [Off]
+Energy Field: [ On-Adaptive] DDB Transfection: [Sonic]
+Life Support: [     On     ] Synthorg Setting: [Sonicator-On ]
+E-Capsules  : [ 0 -Resupply] Medkit          : [646/999]
+Timescan    : [Off | Silent] Tactical [ None]: [Off  ]
+---------------------------------------------------------------------
+Autocombat: Disabled
+Panic Heal: surgekit at <50%> HP.
+Autoguild : health recharge meditate ddb conduit lsupp efield edna
+            tshift ionbeam                                         
+HMS Config: surge at <85%> HP [Combat].
+Gentimer  : Off [Audio]  Alarm in: 
+DNA Splicing: N/A
+=====================================================================
+
+
+[>-------------------------------------------------------------------<]
+                 G E N T E C H : Documentation System
+[>-------------------------------------------------------------------<]
+
+[[ Guild Basics ]]
+------------------
+Admin, Bias, Class, Command, Communication, CPC, Division, Experiments,
+Efficiency, Gentech, Gen-High Council, Gexp, Guild Quests, HMS, HQ,
+Items, Maps, New, Newbie, Newbie2, Phases, Power List, Powerslots,
+Rank, Utilities, Version
+
+[[ Important Commands ]]
+------------------------
+Autocombat, Autoguild, Autohealth, Autokill, Beaconscan, Biaslock,
+Genbrief, Calibrate, Color, Combatstat, Conform, Experiment Tree,
+Family Tree, Gfinger, Gmembers, Genhist, Genpowers, Genprob,
+Genrecover, Genparty, Genscan, Genset, Genstat, Genstat2, Gentimer,
+Gentitle, Glog, Gread, Gpurge, Gwho, Gwhox, Illuminate,
+Killswitch, Pheal, Power Areas, Ratepowers, Ratepowers2, Rcost,
+Recharge, Recruits, Rlist, Rrequired, Rwho, Switchsubs, Showbias,
+Standing
+
+[[ Division Experiments - Offense ]]
+------------------------------------
+
+Advanced Combat, Adaptive DDB, DDB, DDB II, DDB III, DDB Mastery, 
+Enhanced Capacity, Ionbeam, Ionbeam II, Ionlink, Ionfocus, 
+Oxidation Capacity, Psionic Capacity, Sonic Capacity, Synthorg, 
+Synthorg II, Subkelvin Capacity, Thermal Capacity, Toxin Capacity, 
+Valence Capacity, Voltage Capacity
+
+[[ Division Experiments - Defense ]]
+------------------------------------
+
+Adaptive TacShield, Bladed Shielding, Defense Systems, 
+Disruptive Shielding, Energy Field, Energy Field II, Energy Field III, 
+Energy Field Bubble, Enhanced Shielding, Ferrous DNA, Life Support, 
+Oxidation Shielding, Psionic Shielding, Tacshield, Tacshield Mastery,
+Thermal Shielding, Toxin Shielding, Sonic Shielding,
+Subkelvin Shielding, Valence Shielding
+
+[[ Class Experiments - Medical ]]
+---------------------------------
+
+Adrenaline Rush, Adrenaline Surge, Biochem Analysis, Biochem Enhancement, 
+Biochem Mastery, Bioscan, Cellular Regen, Infirmary Staff,
+Meditation Field, Medkit, Medkit II, Metabolic Conversion, Neurologics,
+Neuronocytes, Powercore, Powercell, Powerfeed, Respirocytes               
+
+[[ Class Experiments - Science ]]
+---------------------------------
+
+Clone, Concentration, Experiment Staff, Research, Research II,
+Research III, Scientific Methods, Scientific Metrics, Scientific Mastery,
+Slot Reclaimation, Slot Purge, Timescan, Timeshift, Timeshift II,
+Timeslide, Workout Room
+    
+[[ Class Experiments - Engineering ]]
+-------------------------------------
+
+Autorepair Gen, Autorepair Tech, CBS, Engineering, Engineering Gen,
+Engineering Tech, Engineering Mastery, Engineering Staff,
+Enhanced Engineering, Grav Inducer, Hologen, Microforge, Rec-chamber,
+Ship-pilot, Stabilize, Techscan, Tripwire
+
+[[ Items ]]
+-----------
+Arsenal, Backpack, Flashlight, Gravity Well Inducer, Infimary,
+Plasma Grenade
+
+-* To access any of the information listed here, type 'genhelp <topic>'
+   where <topic> is one of the above subjects.
+
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+
+[[ Reporting Help on bias topic ]]
+
+====GENTECH====         bias(general)        ====GENTECH====
+
+Bias is an indicator of a gentech's current combat adaptation.
+As a gentech grows in power he or she can learn to maintain
+higher overall levels of both offensive and defensive readiness.
+This comes in the form of a 2%/rank bias, with the base being
+90% overall combat readiness.
+ 
+With greater levels of defensive readiness, the gentech form
+adapts to close itself off from any damaging effects of its
+environment.  In doing so the gentech's surrounding energy fields
+(energy field, life support) are strengthened as is internal dna
+structuring (ferrous DNA).
+ 
+Increasing attack bias levels increases a tech's ability to
+extend into his or her surroundings.  Genetic research involves
+increasing the gentech ability to move quickly in combat and strike
+powerfully with physical weapons, and optimizing use time flux fields 
+(timeshift). With the relaxing of internal structures, dense dark 
+bodies (DDB) can move more freely and act more strongly under the 
+direction of the gentech.  Cellular polymer fusions become more 
+reactive and easier for the tech to manipulate (synthorg). Both 
+internal and external data flow speeds are greatly increased, 
+enabling increased reaction time and targeting ability to all 
+attack powers (esp. ionbeam).
+
+While bias levels can go over 100%, it should be noted that this
+'overmax' output level will cause some bleeding of PU.
+ 
+See also: showbias, biaslock, power areas, conform
+
+[[ Reporting Help on cpc topic ]]
+
+====GENTECH====           cpc (general)          ====GENTECH====
+
+Central Power Core (CPC). Found in Main Engineering, the Central Power
+Core provides the main power to all of the major systems of the HQ
+orbital battleplatform. Activation of a major system within HQ will
+draw CPC from the core, thus lowering its power.
+
+Many systems require CPC for usage. They are:
+
+Advancement    Experimentation   Infirmary    Arsenal     Facility
+Workout Room   Transfer tubes    Storage      Cloning     Ionbeam
+
+The main fusion drives of Main Engineering supply enough power to the
+Central Power Core to slowly recharge the power of the core over time.
+Also, a Gentech may transfer Power Units into the core within Main
+Engineering by using the <transfer> command.
+
+See also: Contribute, Engineering Staff
+
+[[ Reporting Help on efficiency topic ]]
+
+====GENTECH====       efficiency (general)       ====GENTECH====
+
+The life of Gentech is a life dominated by constant combat. Even
+though Gentech systems are built to be battle-ready, the extended
+time fighting takes a massive toll on the effectiveness of a Gentech's
+systems. The powers available to a Gentech walk the fine line between
+Genetics and Technology, and this is reflected in Efficiencies.
+
+As you use your powers within the guild, those powers will loose
+efficiency over time. There are two types of efficiency, Gen Eff and
+Tech Eff. Different powers are reflected in the different Effs.
+As an example, DDB is a genetics based power, so it will decrease
+Gen Eff, Synthorg is a technology based power, so it will decrease
+Tech Eff. With the usage of a power, the corresponding Eff will
+decrease by a percentage. This percentage reflects how well your
+power is doing based on 100%. So, a 75% Tech Eff means that your
+Synthorg is only doing 75% of the damage that it could be.
+
+Efficiencies can be repaired through many experiments found in
+the Engineering Class.
+
+Note: Due to the limited nature of combat and power usage by a
+new Gentech, anyone Rank 5 or under does not incur any damage
+to Efficiencies.
+
+See also: genstat, class, autorepair gen, autorepair tech,
+          engineering gen, engineering tech
+
+[[ Reporting Help on gexp topic ]]
+
+====GENTECH====          gexp (general)         ====GENTECH====
+
+GEXP, or guild experience, is the key to advancement within the
+Gentech guild.  Guild experience is earned through the use of
+a variety of guild powers during combat.  Gentech soldiers may
+select to retain all of their earned guild experience as
+gexp (accumulated towards increasing rank) or to put any multiple
+of 10% (up to 100%) into research credits (accumulated toward
+advanced research projects).
+
+To gain gexp you must be doing the following:
+- You must be in combat.
+- You must either use PU or take damage.
+
+You also will gain more gexp as you push yourself against larger
+and more complex fights. The factors that increase the added
+gexp are:
+1) Using as much PU and CPC as possible per round.
+2) Fighting the toughest enemy you can.
+3) Wearing the best armour you can and taking the most damage
+   that you can handle.
+4) Wielding the best weapon you can find.
+5) Spending time within Gentech helping, outside of combat.
+6) Partying with other players, and especially other Gentech.
+7) Questing.
+8) Exploring.
+
+A rating of how well you're doing for numbers 5, 7, and 8 is
+shown within the <standing> command.
+
+A rating of an enemy as it pertains to number 2 is shown
+within the <genscan> command.
+
+See also: Research Credits, gsplit, standing, genscan, hypergen
+
+[[ Reporting Help on research credits topic ]]
+
+====GENTECH====   research credits (general)    ====GENTECH====
+
+Research credits are experiential knowledge units required for
+advanced research into phases of experiments. The amount of
+guild experience which should be retained as research credits
+may be set anywhere between 0% and 100% using the gsplit
+command.
+
+See also: GEXP, Phases, Experiments, gsplit
+
+[[ Reporting Help on phases topic ]]
+
+====GENTECH====         phases (general)        ====GENTECH====
+
+Once a new experiment is completed, your research into that area
+is not yet complete. Each experiment has a number of phases of
+advanced research. These phases represent knowledge above and
+beyond the base knowledge you gain while working on the first
+experiment and generally lead to improved efficiency, cost,
+or accuracy to the abilities provided by the base experiments.
+
+In order to undertake advanced research into experiments, you
+must first complete the basic experiment. Then you must gain
+sufficient research credits to undertake the advanced research
+project. Finally, you must pay a coin cost for the materials
+needed for your project.
+
+The costs for your advanced research project can be found by
+examining the information from <ratepowers>. For experiments
+in which you have completed basic research, ratepowers will
+report the phase you currently have completed, the number of
+phases in the experiment, and the research credit and coin
+cost for the next phase.
+
+Note: The Gentech Research Council monitors the acts of all
+Gentech members, and has been reported to subsidize the 
+monetary cost of advanced research for those who serve
+the guild well.
+
+Once you have met the requirements for your advanced research
+project, you can undertake the project by returning to
+the Gentech experiment chambers and typing <commence power>,
+where power is the experiment you wish to do advanced
+research on. Your phase level in that experiment increases once
+the research completes.
+
+See also: Experiments, ratepowers
+
+[[ Reporting Help on gsplit topic ]]
+
+====GENTECH====         gsplit (command)        ====GENTECH====
+
+Syntax  : gsplit <percentage>
+
+The <gsplit> command allows you to determine how much of your
+earned guild experience should be retained and how much should
+go towards funding advanced research projects. The <percentage>
+argument specifies the percentage that should be retained, and
+must be an even multiple of 10 between 0 and 100.
+
+Example:
+
+   gsplit 100: Specifies that all earned gexp should be credited
+               towards research credits.
+   gsplit 50 : Specifies that earned gexp should be split in half,
+               which half retained for progression to new glevels
+               and half used for research credits.
+   gsplit 0  : Specifies that all earned gexp should be retained
+               and no research credits should be accumulated.
+
+See also: Phases, Guild Levels, GEXP, Research Credits
+
+[[ Reporting Help on hms topic ]]
+
+====GENTECH====          HMS(general)        ====GENTECH====
+
+The Lower Arm Casing of every Gentech soldier includes a built-in
+Health Monitoring System (HMS).  The HMS monitors all vital signs
+of the Gentech to provide unparalleled reaction speed in the case
+of serious injury.
+
+The HMS can be configured to react to injury in two ways, which
+may be employed simultaneously.
+
+First, by the command 'pheal', to react immediately before a hit
+that would injure the Gentech to a previously specified threshold.
+
+Second, by the command 'autohealth', to react each round to
+continued injury beyond a previously specified threshold.
+
+The thresholds above, and the commands to be invoked thereby,
+may be the same or different, as chosen by the individual
+Gentech.
+
+See also: autoguild, autohealth, pheal
+
+[[ Reporting Help on autoguild topic ]]
+
+====GENTECH====       autoguild (command)      ====GENTECH====
+ 
+Syntax : autoguild <ability>
+         autoguild <ability> on       : on instead of toggle
+         autoguild <ability> off      : off instead of toggle
+         autoguild health ... [see 'gh HMS']
+ 
+Autoguild is a toggle that turns on and off the execution of
+guild powers during each round of combat. Autoguild does
+some checking of powers (for instance, it will not activate
+energy field if you already have one active) but will
+attempt to activate powers which you do not have enough
+PU for. This is simply so that you see the low PU message
+and know that your PUs are out.
+ 
+When autoguild says that a power is ENABLED, that means that
+it will be invoked (if it isn't already active) each round
+of combat. If the power is DISABLED, it will not be invoked
+and you must invoke it manually if you wish to use it.  Out
+of combat, autoguild will only function 1) for efield, lsupp,
+and edna, and 2) if you have 'genset autoguild_ooc_defense on'.
+
+When a Gentech's HMS is engaged via 'autohealth', then
+'health' will be reported with the autoguild powers list,
+though it is not precisely an autoguild power.
+ 
+Type <autoguild> all by itself to see a list of powers which
+are currently enabled.
+ 
+The following powers can be controlled with autoguild:
+
+   o Surge          o Ionbeam        o Efield
+   o Rush           o DDB            o TShift
+   o CBS            o Recharge       o Lsupp
+   o Edna           o Meditate       o Conduit
+
+See also: autocombat, autohealth, genset, HMS, pheal
+
+[[ Reporting Help on cs topic ]]
+
+====GENTECH====           cs(command)          ====GENTECH====
+ 
+Syntax : cs <on>, <off>, <clear>, <login>, <kills>
+
+Combatstat allows the Gentech soldier to track his or her progress
+in and out of combat. To list the information simply 'cs'.
+To activate the combatstat to track your progress in battle,
+'cs on'. When you wish to deactivate the battle tracking
+temporarily, 'cs off'. To reset the combatstat 'cs clear'.
+NOTE: To completely reset everything, clear then off then on.
+For statistics for your login session (or since you recovered),
+'cs login'.
+
+You can see your most recent kills with 'cs kills'.
+
+See also: combatstat
+
+
+[[ Reporting Help on combatstat topic ]]
+
+====GENTECH====       combatstat (command)      ====GENTECH====
+ 
+Syntax : combatstat <on>, <off>, <clear>, <login>, <kills>
+
+Combatstat allows the Gentech soldier to track his or her progress
+in and out of combat. To list the information simply 'combatstat'.
+To activate the combatstat to track your progress in battle,
+'combatstat on'. When you wish to deactivate the battle tracking
+temporarily, 'combatstat off'. To reset the combatstat,
+'combatstat clear'.
+NOTE: To completely reset everything, clear then off then on.
+For statistics for your login session (or since you recovered),
+'combatstat login'.
+
+You can see your most recent kills with 'combatstat kills'.
+
+See also: cs
+
+[[ Reporting Help on ionbeam topic ]]
+
+====GENTECH====        ionbeam (command)        ====GENTECH====
+
+Syntax  : ionbeam <target>
+Research: Ionbeam (Phase 1)
+Cost    : Base 5 PU and 1 CPC per round
+          Plus 1 PU + 1 CPC per phase of Ionbeam and Ionbeam II
+          Minus 1 PU + 1 CPC per phase of Ionfocus
+          With a minimum cost of 6 PU and 2 CPC per round
+
+One of the most powerful and deadly powers at the disposal of the Gentech,
+Ionbeam is available to all members, and fills your first Power Slot.
+With it you may call down a beam of Ionic energy from the main deflector
+array of HQ. Power is consumed by your lower arm casing in the form of
+Power Units to initiate the targeting of the Ionbeam, and power is drawn
+from the Central Power Core of HQ and focused into a beam of pure energy
+directed at your target. Targeting takes some time normally; however,
+the period of latency can be eliminated through the Ionlink experiment.
+The Ionbeam experiment has a total of 10 phases, each progressive
+phase increases the efficiency of targeting, and the CPC power conversion
+mechanisms.
+
+See also: ionlink, ionbeam ii, ionfocus, cpc, calibrate
+
+[[ Reporting Help on calibrate topic ]]
+
+====GENTECH====         calibrate (command)      ====GENTECH====
+
+Syntax: calibrate: check current settings
+        calibrate <type> <PU amount>
+        types: ionbeam, synthorg
+
+Sometimes a new recruit, wishing to focus on improving their
+initial skills, will improve their ionbeam or synthorg, but
+then regret the decision as it reduces their ability to stay
+in combat, and hampers their ability to advance within the
+Battleforce.  To ameliorate this condition, our engineers
+have developed a procedure for scaling back the power usage
+of these weapons.
+
+Calibration is performed in Engineering, by specifying the
+desired PU level to be employed.  HQ computers will calculate
+all necessary adjustments for the soldier's lower arm casing,
+and HQ systems in the case of Ionbeam, to fire the weapon at
+a less-improved level.  The power use and damage both reflect
+a reduced effective phase.  Note that this setting will be
+reset upon login.
+
+NOTE: Experienced soldiers scoff at the concept of scaling
+      down damage input to save a few PU.  Accordingly, if you are
+      of at least Elite rank, and employ calibration, you may find
+      you learn little from the use of the attack power.
+
+Examples:
+    calibrate ionbeam 6
+      - this will scale your ionbeam to minimal PU use per attack.
+    calibrate synthorg 3
+      - this will scale your synthorg to minimal PU use per attack.
+
+See also: ionbeam, synthorg
+
+[[ Reporting Help on synthorg topic ]]
+
+====GENTECH====        synthorg (command)       ====GENTECH====
+
+Syntax  : synthorg <activate or deactivate>
+Cost    : [activation]
+          18 PU                     [glvls 1-15]   
+          18 + 2 x (glevel-14) PU   [glvls 16+ ]
+          
+          [blaster firing cost]
+          3 + (Phases of 'Synthorg')/2 PU/rnd     
+
+Research: Advanced Combat, Synthorg
+
+One of the greatest benefits from the stunning initial loss of the
+Gentech to the Cybers was their dedication to blending Gen and Cyber.
+A key innovation in this field was Synthorg.  Upon completion of the
+Synthorg experiment, a Gen's body is enhanced with a cellular polymer
+fusion. This polymer can be activated to overtake the metabolism of 
+your cells, covering your shoulders in a shiny metal, and raising a set 
+of blasters that can be used in battle. The experiment has ten
+phases, and the power of the blasters is increased with each successive
+phase.
+
+Once activated, targeting and firing of the synthorg blasters is
+coordinated by your lower arm casing without intervention. You
+must <synthorg deactivate> to prevent automatic firing of the
+synthorg blasters.
+
+See also: Advanced Combat, Switch, Calibrate
+
+[[ Reporting Help on ddb topic ]]
+
+====GENTECH====         ddb (experiment)        ====GENTECH====
+
+Pre-Req: Advanced Combat
+
+
+Near the end of the Gen/Cyber wars, Gen-Scientists, hidden away in a 
+deep-space laboratory station, were trying to create the perfect
+genetic soldier. It was rumored that a strange asteroid drifted by the
+station and was brought onboard. After this event, the scientists suddenly
+discovered a new cellular organelle that they could infuse throughout
+a Gen's body, giving them partial control of the world around themselves.
+These Dark Dense Bodies (DDB) were able to migrate into every cell in the
+Gen's body, and working collectively under the Gen's mental directives,
+were able to perform amazing acts of control over their environment. The
+DDBs allow 8 different types of powers. Thermal, Subkelvin, Oxidation, Valence,
+Psionic, Sonic, Toxin, Voltage. A Gen may only have one type active,
+since all of the DDBs must be controlled in unison. The DDB experiment
+has ten phases, the level of control over the resultant organelles
+is increased with each successful advanced research experiment.
+
+See also: Advanced Combat, attack, setDDB, switchDDB, DDB II, DDB III
+
+[[ Reporting Help on attack topic ]]
+
+====GENTECH====         attack (command)        ====GENTECH====
+Syntax  : attack <target>
+Cost    : 4 PU and 7 SP                  [phases 1-5]
+          4 + (phase-5)*2 PU and 7 SP    [phases 6+ ]
+
+Research: Advanced Combat, DDB
+
+The <attack> command triggers Dark Dense Body control over your
+nearby environment. In general, the effects of this are negative
+as the preferred environment of the DDB organelles is hostile to
+most life forms. However, rare reports have trickled into HQ
+regarding potential positive aspects of the environmental
+control. None of these positive uses have yet been confirmed.
+
+See also: Advanced Combat, DDB, setDDB, switchDDB
+
+[[ Reporting Help on edna topic ]]
+
+====GENTECH====          edna (command)         ====GENTECH====
+
+Syntax   : edna
+Cost     : 50 PU + 3 PU/glevel 
+Research : Defense Systems, Ferrous DNA
+
+The 'edna' command invokes genetic level restructuring of your
+cells utilizing Ferrous DNA techniques. This defensive alteration
+makes your physical body more immune to damage. Your Lower Arm
+Casing serves as a sensor and conduit for this change, directing
+energy flows through enhanced regions -- for this reason, it
+must be worn while your DNA is in an enhanced state.
+
+Ferrous DNA techniques and the Energy Field defensive systems
+are designed to be used together. They complement, rather than
+replace, each other.
+
+See also: Ferrous DNA, Energy Field, Defense Systems
+
+[[ Reporting Help on efield topic ]]
+
+====GENTECH====    efield (command)    ====GENTECH====
+ 
+Syntax : efield
+         efield <on/off>
+         efield <enhanced/enhanced on/enhanced off>
+         efield <on enhanced>
+         efield <reverse/reverse on/reverse off>
+         efield <query>
+  
+Cost   : 30 PU/glevel 
+         20 PU/glevel  <enhanced>
+         Variable per round
+
+Research: Defense Systems (Phase 1)
+
+The Efield command toggles the status of your energy field and/or
+life support systems.  'efield' will toggle the basic energy field,
+as discovered by the Energy Field experiment.  'efield on/off' will
+activate or deactivate the field as appropriate if necessary.
+'efield enhanced' will toggle the life support systems enabled by
+the Life Support experiment.  'efield enhanced on/off' will
+activate/deactivate these system as appropriate if necessary.
+Note that the basic energy field must be enabled in order to enable
+the enhanced energy field.  Also note that disabling the basic energy
+field will additionally disable energy field enhancements.
+
+Power units must also be expended over time to maintain the energy
+field. The amount of power units required increases as the phase of
+the energy field increases.
+
+'efield reverse' will toggle the reversal loop module as discovered
+by the Energy Field Reversal experiment.  'efield reverse on/off'
+will activate or deactivate the reversal loop module as appropriate
+if necessary.  Note that the reversal loop module setting persists
+through energy field deactivation and reactivation, but the base
+energy field must be active to employ the reversal loop module.
+
+Also, 'efield query' will allow you to check the specific status of your
+efield. Note that the estimated field power is based on the status of
+your energy field over time but may be cut short due to a low power
+unit status.
+
+NOTE: Not even the most advanced defensive systems can defend a gentech
+      soldier against an ultrapowerful attack. Facing overwhelming
+      odds can be dangerous if not deadly.
+
+See also: Defense Systems, Ferrous DNA, Life Support, Energy Field,
+          Energy Field II, Energy Field III, Energy Field Reversal, Tacshield.
+
+[[ Reporting Help on life support topic ]]
+
+====GENTECH====    life support (experiment)    ====GENTECH====
+ 
+Syntax : efield enhanced <on/off>
+Pre-Req: TacShield
+ 
+The Life Support experiment gives Gentech members the ability to
+enhance the support functions of their energy fields to provide
+for protection against much stronger attacks.  With life support
+engaged and energy fields active, members are able to withstand 
+attacks which would otherwise overwhelm their shieldings.
+ 
+Note: Life Support has no effect without an active TacShield
+shielding  type that matches the incoming attack.  Also, using
+Life Support will use more power than the base energy field alone.
+
+See also: efield, Energy Field, Defense Systems, TacShield
+
+[[ Reporting Help on switchddb topic ]]
+
+====GENTECH====       switchddb (command)       ====GENTECH====
+
+Syntax  : switchDDB <type>
+Cost    : 80 PU
+Research: Advanced Combat, DDB
+
+The <switchDDB> command is used to convert the Dense Dark Body
+organelles to a different environmental preference. You can
+specify any of the following environments: flare, frost, acid,
+static, mental, sonic, toxin, radiation. However, you must first
+understand the operating parameters of that environment type. These
+parameters are acquired through obtaining a capacity in any one or
+more of the types of environmental preferences. Once a capacity
+is successfully researched, switchDDB will allow you to remodulate
+your DDB to that capacity.
+
+See also: Advanced Combat, DDB, setDDB, Offense Tree
+
+[[ DDB Switch Type Must Be Specified: Aborting Change.  ]]
+[[ Valid Types are: Thermal, Subkelvin, Oxidation,      ]]
+[[ Voltage, Sonic, Toxin, or Valence.                   ]]
+
+[[ Reporting Help on switch topic ]]
+
+====GENTECH====         switch (command)        ====GENTECH====
+
+Syntax  : switch <type> [configures Synthorg]
+          switch        [reports current setting]
+Cost    : None
+Research: Advanced Combat, Synthorg
+
+The switch command is used to reconfigure the elements of your
+Synthorg blaster to yield different damage types. You may select
+from the laser, shocker, sonicator, or gamma-ray configurations
+as your preferred type.  The type of Synthorg attack can be changed
+as often and as many times as required using this command.
+
+See also: Advanced Combat, Synthorg
+
+[[     Available Synthorg Battle Types     ]]
+[[ Laser, Shocker, Sonicator and Gamma-Ray ]]
+
+[[ Reporting Help on power areas topic ]]
+
+====GENTECH====     power areas(general)      =====GENTECH====
+
+The following is a list of which powers contribute to which areas
+of battle bias adaptation. Offensive powers add to your offensive
+bias when used in combat, and defensive powers add to your
+defensive bias when used in combat. Using a power from one area
+increases the bias to that area, while decreasing the bias in
+the other area.
+
+Offensive Powers                     Defensive Powers
+----------------                     ----------------
+ Ionbeam                              EDNA
+ DDB                                  HMS's "pheal"
+ Synthorg                             Energy Field
+                                      Life Support
+                                                
+ 
+See also: bias, showbias, biaslock, conform
+
+[[ Reporting Help on bias topic ]]
+
+====GENTECH====         bias(general)        ====GENTECH====
+
+Bias is an indicator of a gentech's current combat adaptation.
+As a gentech grows in power he or she can learn to maintain
+higher overall levels of both offensive and defensive readiness.
+This comes in the form of a 2%/rank bias, with the base being
+90% overall combat readiness.
+ 
+With greater levels of defensive readiness, the gentech form
+adapts to close itself off from any damaging effects of its
+environment.  In doing so the gentech's surrounding energy fields
+(energy field, life support) are strengthened as is internal dna
+structuring (ferrous DNA).
+ 
+Increasing attack bias levels increases a tech's ability to
+extend into his or her surroundings.  Genetic research involves
+increasing the gentech ability to move quickly in combat and strike
+powerfully with physical weapons, and optimizing use time flux fields 
+(timeshift). With the relaxing of internal structures, dense dark 
+bodies (DDB) can move more freely and act more strongly under the 
+direction of the gentech.  Cellular polymer fusions become more 
+reactive and easier for the tech to manipulate (synthorg). Both 
+internal and external data flow speeds are greatly increased, 
+enabling increased reaction time and targeting ability to all 
+attack powers (esp. ionbeam).
+
+While bias levels can go over 100%, it should be noted that this
+'overmax' output level will cause some bleeding of PU.
+ 
+See also: showbias, biaslock, power areas, conform
+
+[[ Reporting Help on showbias topic ]]
+
+====GENTECH====       showbias(command)      ====GENTECH====
+
+Syntax : showbias
+ 
+Showbias displays your battle system information as to which power
+area your casing instrumentation is attuned to. As you use your
+powers in combat, your casing will automatically adapt to your
+combat style. This slow optimization eventually adds to either
+your offensive or defensive power but at the cost of the other
+area of power. The total amount that your casing can bias towards
+offense or defense increases with your rank. Showbias gives both
+a numerical and graphical readout of your current battle bias by
+displaying the % allocation to both areas as well as showing a
+number of 'stars' which correspond to the total proportional bias
+in one area or the other. Once your bias has adjusted to the battle
+style that you wish to keep, use the command 'biaslock' to lock-in
+your casing systems into that adaptation mode.
+
+See also: bias, biaslock, power areas, conform
+
+[[ Reporting Help on biaslock topic ]]
+
+====GENTECH====       biaslock(command)      ====GENTECH====
+ 
+Syntax : biaslock
+
+Biaslock programs your casing to lock-in your current battle bias
+adaptation. The lock remains until it is re-entered. This command
+is a toggle, so type the same command to turn it on or off.
+
+See also: biaslock, power areas, conform
+
+[[ Reporting Help on conform topic ]]
+
+====GENTECH====          conform (command)       ====GENTECH====
+
+Syntax: conform: check current settings
+        conform [bias] off: turn conformation off
+        conform <mode> [bias] <amount>: conform to <amount> bias in <mode>
+        modes: attack, defense
+
+Conform is the out-of-combat equivalent to your normal attack and
+defense biasing of your internal casing battle circuits. To activate
+conform, simply type 'conform <mode> bias <amount>' where the modes
+are either 'attack' or 'defense' and the <amount> is the percentage
+that you wish the conform to stop changing your bias at. If you wish
+your bias to change all of the way to full attack or defense, do
+not supply an amount. If you enter combat while your conform is
+activated, it will automatically suspend its action until you are
+once again out-of-combat. Once conform has reached your specified
+percent biasing, it will notify you of that fact and automatically
+disengage conform. To turn conform completely off type
+'conform bias off'. To see your current settings, type 'conform'.
+
+NOTE: You can only conform in: Engineering, Infirmary, or
+      a dropship infirmary.  You may conform in the field if you
+      have a Neuro-Data Transfer Module or are a member of the
+      Gen-High Council.
+
+Examples:
+    conform attack
+      - this will drive your attack bias to full.
+    conform defense bias 45.
+      - this will drive your defense bias up to 45.
+
+See also: bias, showbias, biaslock, power areas
+
+[[ Reporting Help on recharge topic ]]
+
+====GENTECH====       recharge (command)        ====GENTECH====
+
+Your Lower Arm Casing is equipped with a Power Unit storage device.
+This device can be charged in the infirmaries (located in HQ and the
+dropships) or through the use of the Reclamation Chamber.
+Once charged, you may recharge your current Power Units
+by typing 'recharge'. This will transfer stored Power Units into 
+your main casing array which then makes them immediately available
+for use.  You may optionally supply a limit on the PU to be
+transferred from SPU to PU, for example 'recharge 1000' to only
+transfer up to 1000 PU.  This can be thought of as a third,
+optional limit in addition to 'the # of PU in storage' and 'the
+# of PU needed to fully charge the main casing'.
+
+See also: Rec-chamber, Infirmary, Power Units
+
+[[ Reporting Help on reclaim topic ]]
+
+====GENTECH====        reclaim (command)        ====GENTECH====
+
+Syntax  : reclaim [options]
+Research: Rec-Chamber (Phase 1)
+
+This command uses the reclamation facilities of the
+Lower Arm Casing to restore SPU directly from corpses.
+
+Optionally, you may provide this command with one or more
+space-delimited options, which will be executed in sequence
+until a valid corpse is found:
+
+'spammy' - Enable verbose output for the remainder of the command
+'hp' - Get an hpbar at the end of the command, successful or not
+'full' - Check if SPU is full already, if so, abort
+'ground' - Look for a corpse on the ground
+'inventory' - Look for a corpse in your inventory
+'unkept' - Look for a corpse in your inventory, unkept only
+'coffin' - Get a corpse from your coffin (as per 'unwrap')
+'c5' (or other number) - Get a particular corpse from coffin ('unwrap 5')
+
+All except the last may be abbreviated to one letter.
+
+If no options are passed, 'ground' is used.
+
+The command will skip invalid corpses (things you can see with
+'exa corpse', but are not usable as corpses, or not gettable).
+
+Example: reclaim ground unkept spammy coffin inv
+       - This will try to find a valid corpse on the ground,
+         then unkept corpses, then coffin, then kept corpses.
+         If no corpse is found by the 'coffin' check, an extra
+         line of output is produced to alert you that you are
+         down to your emergency stock of kept preserved corpses.
+
+See also: rec-chamber
+
+[[ Reporting Help on genset topic ]]
+
+====GENTECH====        genset (command)         ====GENTECH====
+
+Syntax: genset [enter|exit] [some message]
+       genset hpbar [hp-bar-text and vars]
+       genset hpbar [reset|clear|autowrap]
+       genset tswarn [on|off]
+       genset autoguild_ooc_defense [on|off]
+       genset meditate [sp|sp%]
+       genset recharge [pu|pu%] <optional amount>
+       genset conduit [PU CPC XFER]
+       genset adaptive_messages [on|off]
+       genset review
+
+Genset allows you to set either your login/logout messages or to reconfigure
+your hitpoint bar. To set your login/logout messages type:
+
+Syntax: genset [enter|exit] <some message>
+Valid variables for enter|exit genset:
+    N         - Your name
+Example: genset enter returns looking for trouble...
+        -This will display to the guild on the notify channel when you
+         login 'Yourname returns looking for trouble...'.
+Example: genset exit In a flash, $N$ is gone!
+        -This will display to the guild on the notify channel when you
+         logoff 'In a flash, Yourname is gone!'.
+
+Genset may also toggle a timeslide reset warning.
+
+Syntax: genset tswarn [on|off]
+Example: genset tswarn on
+        -This will display a warning message that your timeslides are about
+         to reset.
+
+Genset may also toggle whether autoguild refreshes defenses out of combat.
+
+Syntax: genset autoguild_ooc_defense [on|off]
+Example: genset autoguild_ooc_defense on
+        -This will cause autoguild to refresh efield/lsupp/edna, if they
+         are listed in autoguild, out of combat as well as in combat.
+
+Genset may also toggle whether Adaptive TacShield and Adaptive DDB notify
+you of the chosen shielding or damage type.
+
+Syntax: genset adaptive_messages [on|off]
+Example: genset adaptive_messages on
+
+Genset may also configure your autoguild meditate.
+
+Syntax: genset meditate [sp|sp%]
+Example: genset meditate 100
+        -This will meditate when you are at or below 100 SP.
+Example: genset meditate 40%
+        -This will meditate when you are at or below 40% of max SP.
+
+Genset may also configure your autoguild recharge.
+
+Syntax: genset recharge [pu|pu%] <optional amount>
+Example: genset recharge 100
+        -This will recharge when you are at or below 100 PU, full recharge.
+Example: genset recharge 40% 50
+        -This will recharge when you are at or below 40% of max PU, and
+         the recharge will be limited to 50 PU.
+
+Genset may also configure your autoguild conduit.
+
+Syntax: genset conduit [PU CPC XFER]
+Example: genset conduit 3000 9000 10
+        -This will transfer 10 PU when you have at least 3000 PU and
+         the CPC is at or below 9000.
+
+Genset may also be used to change the configuration of your hpbar.
+
+Syntax: genset hpbar autowrap
+Example: genset hpbar autowrap
+        - This will toggle hpbar autowrapping. Default is on.
+
+Syntax: genset hpbar [reset|clear]
+Example: genset hpbar reset
+        - This will reset your hpbar to the default.
+
+Syntax: genset hpbar [hp-bar-text vars]
+Example: genset hpbar My hit points are at $hp-now$ out of $hp-max$
+        -This will replace your hpbar with 'My hit points are 100 out of 100,
+         or whatever your current and max hit points are.
+
+Valid variables for hpbar genset:
+    hp        - Displays hp-now/hp-max. [in color 'hp']
+    hp-now    - Current HP.
+    hp-max    - Max HP. ['hp']
+    sp        - Displays sp-now/sp-max. [in color 'sp']
+    sp-now    - Current SP.
+    sp-max    - Max SP. ['sp']
+    pu        - Displays pu-now(pu-store)pu-max [in color 'pu']
+    pu-now    - Current PU.
+    pu-max    - Max PU. ['pu']
+    pu-store  - Current PU store. ['pu']
+    cpc       - Displays cpc-now/cpc-max [in color 'cpc']
+    cpc-now   - Current CPC
+    cpc-max   - Max CPC
+    coffin    - Displays coffin-now/coffin-max. [in color 'coffin']
+    coffin-now - Current # of corpses in morgue coffin.
+    coffin-max - Maximum # of corpses in morgue coffin. ['coffin']
+    e-tslide  - Emergency Timeslide (Either a 1 or a 0) ['tslide']
+    gen-eff   - Current percentage Gen-Efficiencies
+    tech-eff  - Current percentage Tech-Efficiencies
+    gexp      - Current GEXP.
+    dgexp     - Delta GEXP (GEXP gained last round).
+    g2n       - GEXP required for next glevel.
+    g2n-pct   - GEXP percentage for next glevel. ['g2n']
+    rc        - Accumulated Research Credits
+    tslide    - Displays tslide/tslide-max.
+    reset-pct - % of time to reset.
+    bias      - Current <Attack/Defense> Bias setting.
+              - bias locked  [],  bias unlocked ().
+    efield    - Time Remaining for efield in minutes.
+    tacshield - Tacshield type ['tacshield']  See below.
+    medkit    - Number of medkits you've got.
+    rush      - Current Rush Setting [On/Off].
+    edna      - Time Remaining for edna in minute/secs.
+    synthorg  - Current synthorg damage type.
+    illum     - Currently Illuminating [On/Off].
+    hypergen  - Current HyperGen Level
+    hypergent - Current time left in HyperGen duration
+    tace      - Current Tactical Enhancement amount
+    tacet     - Current time left for Tactical Enhancement
+    stablet   - Current time left for Stabilize
+    enemy     - Current Enemy Health Status.
+    ename     - Current Enemy Name (abbreviated). ['enemy']
+    ksenemy   - Current Killswitch Enemy Health Status
+    ksename   - Current Killswitch Enemy Name (abbreviated).  ['ksenemy']
+
+NOTE:  All the above allow setting a mud ansi variable to color
+       the item in question, the name of the ansivar being the same as
+       the variable except where specified as ['ansivar'].
+
+    nl        - To force a newline.
+
+NOTE:  You can also color ordinary text, using the syntax
+       '$color:text$'.
+Example: genset hpbar My $hired:H$$yellow:P$ is $hp$.  Wow!
+       - This will display 'My HP is 344/344.  Wow!'
+
+NOTE:  The 'tacshield' var will report '--' if you have no
+       TacShield, '**' if you have Adaptive TacShield.  Otherwise the
+       first two letters of the TacShield type, in lowercase if your
+       Energy Field is off, and in uppercase if it is on.
+
+NOTE:  The 'stablet' var will report '--' if Stabilize is
+       off, and '**' if the applicable guild artifact is in use.
+
+See also: color
+

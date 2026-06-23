@@ -1,0 +1,99 @@
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*  Newbie Errands                                           *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Lodbrok's Hold: Incoming errand, available in 41m       *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Lodbrok's Hold: Incoming errand, available in 56m       *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Eiriksby: Incoming errand, available in 2m              *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [3724] Eiriksby: Thorvald Leaf-Seeker: fetch an iron    *~-
+-~*        ingot sample from Birka.                           *~-
+-~*        Fetch from Birka  ->  +92 daler                    *~-
+-~*        +2 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [3725] Imaird: Carry a satchel of dried fish from       *~-
+-~*        Nidaros back to Imaird.                            *~-
+-~*        Fetch from Nidaros  ->  +83 daler                  *~-
+-~*        +2 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [3726] Imaird: Collect a pouch of amber beads in        *~-
+-~*        Lodbrok's Hold and return to Imaird.               *~-
+-~*        Fetch from Lodbrok's Hold  ->  +138 daler          *~-
+-~*        +1 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [3793] Holmgard: Collect a sealed letter in Eiriksby    *~-
+-~*        and return to Holmgard.                            *~-
+-~*        Fetch from Eiriksby  ->  +116 daler                *~-
+-~*        +3 mead                                            *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Holmgard: Incoming errand, available in 1h 13m          *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [3752] Hafrfjord: Ulf Harald's Man: fetch a satchel     *~-
+-~*        of dried fish from Birka.                          *~-
+-~*        Fetch from Birka  ->  +127 daler                   *~-
+-~*        +1 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Hafrfjord: Incoming errand, available in 1h 9m          *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Uppsala: Incoming errand, available in 1m               *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Uppsala: Incoming errand, available in 27m              *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Borgarfjord: Incoming errand, available in 36m          *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [3734] Borgarfjord: Retrieve a small chest of           *~-
+-~*        trinkets from Lodbrok's Hold for Egil's            *~-
+-~*        Steward.                                           *~-
+-~*        Fetch from Lodbrok's Hold  ->  +108 daler          *~-
+-~*        +1 grain                                           *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [3773] Vestergotland: Collect a roll of cured furs      *~-
+-~*        in Lodbrok's Hold and return to Vestergotland.     *~-
+-~*        Fetch from Lodbrok's Hold  ->  +89 daler           *~-
+-~*        +1 grain                                           *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Vestergotland: Incoming errand, available in 48m        *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [3794] Sverkersby: Carry a bolt of linen from Imaird    *~-
+-~*        back to Sverkersby.                                *~-
+-~*        Fetch from Imaird  ->  +95 daler                   *~-
+-~*        +3 timber                                          *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Sverkersby: Incoming errand, available in 1h 14m        *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [3739] Ericsgard: Collect a roll of cured furs in       *~-
+-~*        Lejre and return to Ericsgard.                     *~-
+-~*        Fetch from Lejre  ->  +101 daler                   *~-
+-~*        +3 amber                                           *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Ericsgard: Incoming errand, available in 1h 9m          *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Birka: Incoming errand, available in 26m                *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   [3795] Birka: Collect a satchel of dried fish in        *~-
+-~*        Sverkersby and return to Birka.                    *~-
+-~*        Fetch from Sverkersby  ->  +77 daler               *~-
+-~*        +1 amber                                           *~-
+-~*        +1-2 reputation                                    *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Lejre: Incoming errand, available in 1h 44m             *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Lejre: Incoming errand, available in 47m                *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Nidaros: Incoming errand, available in 1h 42m           *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*   Nidaros: Incoming errand, available in 46m              *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*  vmission newbie accept <id>    earn daler + goods + rep  *~-
+-~*   Refresh: 3h 8m  Quota: 5/5                              *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-

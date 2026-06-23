@@ -1,0 +1,84 @@
+{
+  "_comment": [
+    "KatMUD global layer - applies to every mud, guild, character.",
+    "Default numpad movement set (spec 4.1): both NumLock variants",
+    "of each key. Any later layer overrides per-keysym.",
+    "settings.ntfy_topic enables a push notification on every incoming",
+    "tell (phone/web dashboard). Generate your own random slug before",
+    "setting it - ntfy.sh public topics are world-readable/writable by",
+    "anyone who knows the name: python -c \"import secrets; print(secrets.token_urlsafe(16))\".",
+    "Never commit a real topic value."
+  ],
+  "keys": {
+    "KP_8": "n",
+    "KP_Up": "n",
+    "KP_2": "s",
+    "KP_Down": "s",
+    "KP_4": "w",
+    "KP_Left": "w",
+    "KP_6": "e",
+    "KP_Right": "e",
+    "KP_7": "nw",
+    "KP_Home": "nw",
+    "KP_9": "ne",
+    "KP_Prior": "ne",
+    "KP_1": "sw",
+    "KP_End": "sw",
+    "KP_3": "se",
+    "KP_Next": "se",
+    "KP_Subtract": "u",
+    "KP_Add": "d",
+    "KP_5": "look",
+    "KP_Begin": "look",
+    "KP_0": "d",
+    "KP_Insert": "out"
+  },
+  "aliases": {
+    "odk": "onward;doorway;kill angel",
+    "uod": "unlock door;open door;drop key"
+  },
+  "speedwalk": {
+    "_comment": "single-letter speedwalk map; edit freely, any layer can override per-letter. Anything not listed must be (parenthesized) in a speedwalk.",
+    "n": "n", "s": "s", "e": "e", "w": "w", "u": "u", "d": "d",
+    "t": "ne", "v": "se", "z": "sw", "q": "nw",
+    "r": "enter", "o": "out", "p": "portal", "l": "leave"
+  },
+  "triggers": [
+    {
+      "pattern": "Velica says: The Demoniac Triad is no more.  The world is safe.",
+      "command": "say hi"
+    },
+    {
+      "pattern": "Are you the one who slew the Triad?",
+      "command": "say yes"
+    },
+    {
+      "pattern": "you must prove your deed to me.",
+      "command": "present brenan's gem"
+    },
+    {
+      "pattern": "So you are the one who slew Brenan.  Thank you.",
+      "command": "present raqna's gem"
+    },
+    {
+      "pattern": "So you are the one who slew Raqna.  Thank you.",
+      "command": "present tyra's gem"
+    },
+    {
+      "pattern": "You have to retreat against the onslaught of fire!",
+      "command": "vortex"
+    }
+  ],
+  "gags": [],
+  "mip": {},
+  "settings": {
+    "numpad_only_when_empty": false,
+    "walk_ms": 0,
+    "deadman_minutes": 15,
+    "tell_sound": "beep",
+    "history_min_chars": 0,
+    "command_separator": ";",
+    "auto_mapping": true,
+    "ntfy_topic": null
+  }
+}

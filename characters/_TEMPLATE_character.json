@@ -1,0 +1,22 @@
+{
+  "_comment": [
+    "CHARACTER TEMPLATE - personal layer for one character, loaded",
+    "last in the cascade (global.json -> mud.json -> guild.json ->",
+    "this file), wins all collisions.",
+    "DISCIPLINE RULE (spec 2.4): guild-specific config belongs in the",
+    "guild file, never here, or guild-switching breaks.",
+    "Copy this file to characters/<character>.json and edit freely -",
+    "the picker also scaffolds one automatically on profile save.",
+    "map_patches and seen_max are populated by the client itself",
+    "(manual map corrections / vitals-bar scaling) - safe to leave",
+    "empty and let it fill in over time."
+  ],
+  "aliases": {},
+  "triggers": [],
+  "gags": [],
+  "keys": {},
+  "mip": {},
+  "settings": {},
+  "map_patches": [],
+  "seen_max": {}
+}

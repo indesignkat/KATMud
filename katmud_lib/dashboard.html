@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KatMUD dashboard</title>
+<style>
+  body { background: #101014; color: #ccccdd; font-family: -apple-system, Segoe UI, sans-serif;
+         margin: 0; padding: 8px; }
+  .char { background: #18181f; border: 1px solid #2a2a36; border-radius: 8px;
+          margin-bottom: 12px; padding: 10px; }
+  .char h2 { margin: 0 0 6px; font-size: 16px; color: #9999cc; }
+  .status1, .status2 { font-size: 12px; color: #99aacc; margin: 2px 0; }
+  .dm-off { color: #777788; }
+  .dm-armed { color: #66cc66; }
+  .dm-tripped { color: #ff5555; }
+  .section { margin-top: 8px; }
+  .section h3 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase;
+                letter-spacing: .05em; color: #777799; }
+  .tells .line { color: #ffdd88; }
+  .chats .line { color: #cc99ee; }
+  .reminders .line { color: #ffcc44; }
+  .output .line { color: #8899aa; }
+  .line { font-size: 13px; white-space: pre-wrap; margin: 2px 0; }
+  .output { max-height: 280px; overflow-y: auto; }
+  .cmdrow { display: flex; gap: 6px; margin-top: 8px; }
+  .cmdrow input { flex: 1; background: #101018; color: #ccccdd;
+                  border: 1px solid #334466; border-radius: 6px; padding: 8px; font-size: 14px; }
+  .cmdrow button { background: #334466; color: #fff; border: none;
+                   border-radius: 6px; padding: 8px 14px; font-size: 14px; }
+  #reminders { margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<div id="reminders" class="char section"></div>
+<div id="characters"></div>
+
+<script>
+async function poll() {
+  let state;
+  try {
+    const res = await fetch('/api/state');
+    state = await res.json();
+  } catch (e) {
+    return; // hub hiccup - try again next tick, don't blow away the view
+  }
+  renderReminders(state.reminders || []);
+  // Only the characters you're actually watching belong on a phone
+  // screen - an offline one is dead weight (request: hide it entirely
+  // rather than greying it out).
+  renderCharacters((state.characters || []).filter(c => !c.offline));
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+}
+
+// Mirrors client.py's MudClient._fmt_dur formatting so the countdown
+// reads the same way here as it does in the desktop client.
+function fmtDur(secs) {
+  secs = Math.max(0, Math.round(secs));
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  if (h) return `${h}h${String(m).padStart(2, '0')}m`;
+  if (m) return `${m}m${String(s).padStart(2, '0')}s`;
+  return `${s}s`;
+}
+
+function renderReminders(reminders) {
+  const el = document.getElementById('reminders');
+  if (!reminders.length) { el.innerHTML = ''; return; }
+  const now = Date.now() / 1000;
+  el.innerHTML = '<h3>Reminders</h3>' +
+    reminders.map(r => `<div class="line">${esc(r.text || '')} - ${fmtDur(r.due - now)}</div>`)
+             .join('');
+}
+
+function lines(arr, cls) {
+  return (arr || []).map(item =>
+    `<div class="line ${cls}">${esc(item.line || '')}</div>`).join('');
+}
+
+function fmtNum(n) {
+  return Math.round(n).toLocaleString();
+}
+
+function deadmanSpan(c) {
+  if (c.deadman_tripped) return '<span class="dm-tripped">DM TRIPPED</span>';
+  if (c.deadman_seconds_left == null) return '<span class="dm-off">DM off</span>';
+  return `<span class="dm-armed">DM ${fmtDur(c.deadman_seconds_left)}</span>`;
+}
+
+function statusLine1(c) {
+  return `Room: ${esc(c.room || '-')}   Idle: ${fmtDur(c.idle_seconds || 0)}   ${deadmanSpan(c)}`;
+}
+
+// Generic vitals renderer (spec: docs/superpowers/specs/
+// 2026-06-21-dashboard-status-bar-design.md) - inspects the shape of
+// vitals rather than branching on guild, so any guild following the
+// existing x/xmax convention (Viking, Gentech, Changeling all do) shows
+// up automatically; anything else falls back to a raw key: value line
+// instead of silently vanishing.
+function vitalsLine(c) {
+  const vitals = c.vitals || {};
+  const parts = [];
+  if (c.daler != null) parts.push(`Daler ${fmtNum(c.daler)}`);
+  const consumed = new Set(['enemy', 'enemycond']);
+  for (const key of Object.keys(vitals)) {
+    if (key.endsWith('max') || consumed.has(key)) continue;
+    const maxKey = key + 'max';
+    if (vitals[maxKey] === undefined) continue;
+    consumed.add(key);
+    const label = key.charAt(0).toUpperCase() + key.slice(1);
+    parts.push(`${label} ${vitals[key]}/${vitals[maxKey]}`);
+  }
+  if (vitals.enemy) {
+    parts.push(`Enemy: ${esc(vitals.enemy)} ${vitals.enemycond ?? 0}%`);
+  }
+  for (const key of Object.keys(vitals)) {
+    if (consumed.has(key) || key.endsWith('max')) continue;
+    parts.push(`${esc(key)}: ${esc(vitals[key])}`);
+  }
+  return parts.join('   ');
+}
+
+// One DOM node per online character, created once and never replaced
+// while that character stays online - only the text inside .lines
+// divs is updated on each poll. Rebuilding the whole panel (including
+// the command <input>) every 2s was what dismissed the phone keyboard
+// and wiped in-progress typing: replacing innerHTML destroys focus on
+// any element removed from the DOM, even if its content didn't change.
+function charPanelSkeleton(pid) {
+  return `
+    <h2>${esc(pid)}</h2>
+    <div class="status1" data-role="status1"></div>
+    <div class="status2" data-role="status2"></div>
+    <div class="section tells"><h3>Tells</h3><div class="lines" data-role="tells"></div></div>
+    <div class="section chats"><h3>Chats</h3><div class="lines" data-role="chats"></div></div>
+    <div class="section output"><h3>Output</h3><div class="lines" data-role="output"></div></div>
+    <form class="cmdrow">
+      <input type="text" data-role="cmd-input" placeholder="command..."
+             autocomplete="off" autocapitalize="off" autocorrect="off">
+      <button type="submit">Send</button>
+    </form>`;
+}
+
+function renderCharacters(chars) {
+  const el = document.getElementById('characters');
+  const seen = new Set();
+  for (const c of chars) {
+    seen.add(c.profile_id);
+    let panel = document.getElementById('panel-' + c.profile_id);
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.className = 'char';
+      panel.id = 'panel-' + c.profile_id;
+      panel.innerHTML = charPanelSkeleton(c.profile_id);
+      panel.querySelector('.cmdrow').onsubmit = (e) => {
+        e.preventDefault();
+        sendCommand(c.profile_id);
+      };
+      el.appendChild(panel);
+    }
+    panel.querySelector('[data-role="status1"]').innerHTML = statusLine1(c);
+    const status2El = panel.querySelector('[data-role="status2"]');
+    const status2Text = vitalsLine(c);
+    status2El.innerHTML = status2Text;
+    status2El.style.display = status2Text ? '' : 'none';
+    panel.querySelector('[data-role="tells"]').innerHTML = lines((c.tells || []).slice(-3), 'tells');
+    panel.querySelector('[data-role="chats"]').innerHTML = lines((c.chats || []).slice(-3), 'chats');
+    panel.querySelector('[data-role="output"]').innerHTML = lines(c.output, 'output');
+  }
+  for (const panel of Array.from(el.children)) {
+    if (!seen.has(panel.id.slice('panel-'.length))) panel.remove();
+  }
+}
+
+async function sendCommand(profileId) {
+  const panel = document.getElementById('panel-' + profileId);
+  const input = panel.querySelector('[data-role="cmd-input"]');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  try {
+    await fetch('/api/command', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({profile_id: profileId, text}),
+    });
+  } catch (e) {
+    // best-effort - next poll will reflect whatever actually happened
+  }
+}
+
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

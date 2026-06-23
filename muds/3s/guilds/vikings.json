@@ -1,0 +1,111 @@
+{
+  "_comment": [
+    "Vikings guild layer for 3s - and the DESIGN CHECKPOINT for the",
+    "per-layer config format (spec 5 / open items). Every section a",
+    "guild file can carry is demonstrated below. The cascade rule is",
+    "REPLACE: an entry here with the same key as a mud/global entry",
+    "supplants it; a character-file entry supplants this one.",
+    "",
+    "Sections:",
+    "  login_commands - sent once, on the first MIP vitals packet",
+    "                   (i.e. when actually logged in). Whole-list",
+    "                   replace: defining it here replaces any list",
+    "                   from a lower layer.",
+    "  aliases        - dict, key = alias name",
+    "  triggers       - list of {pattern, command, sound?, mode?};",
+    "                   key = pattern. mode: party|noparty",
+    "  gags           - list of regex strings, merged as a set",
+    "  keys           - keysym -> command (see global.json for the",
+    "                   numpad defaults this can override)",
+    "  vitals         - whole-list replace: bar row layout",
+    "  mip            - tag -> handler declaration; replaces the",
+    "                   mud-layer declaration for the same tag",
+    "  mip_required   - field self-diagnosis (spec 5.1): if 'field'",
+    "                   never appears within 'within' seconds of",
+    "                   combat activity, a ONE-TIME warning naming",
+    "                   the field and the hint appears in the",
+    "                   status pane (never the main output)",
+    "  map_patches    - guild-scope graph patches (spec 6.2), e.g.",
+    "                   the guild exit from a clan house",
+    "  settings       - per-key replace of any client setting",
+    "",
+    "Fill in real Vikings content as the character develops; the",
+    "entries below are working examples, not placeholders that",
+    "break anything if left in place."
+  ],
+  "login_commands": [],
+  "aliases": {
+    "sk": "Vskills"
+  },
+  "triggers": [],
+  "gags": [],
+  "keys": {},
+  "mip": {
+    "BBE": {
+      "handler": "viking"
+    }
+  },
+  "vitals": [
+    {
+      "label": "HP",
+      "cur": "hp",
+      "max": "hpmax",
+      "color": "#33aa33",
+      "width": 190,
+      "warn": [
+        [
+          0.25,
+          "#cc3333"
+        ],
+        [
+          0.5,
+          "#cc9933"
+        ]
+      ]
+    },
+    {
+      "label": "Seid",
+      "cur": "seid",
+      "max": "seidmax",
+      "color": "#3366cc",
+      "width": 190
+    },
+    {
+      "label": "Vig",
+      "cur": "vig",
+      "max": "vigmax",
+      "color": "#cc8833",
+      "width": 190
+    },
+    {
+      "label": "Rad",
+      "cur": "rad",
+      "max": "radmax",
+      "color": "#aa55cc",
+      "width": 190
+    },
+    {
+      "label": "Enemy",
+      "enemy": true,
+      "color": "#aa3333",
+      "width": 260
+    }
+  ],
+  "mip_required": [],
+  "map_patches": [],
+  "settings": {
+    "autoattack_command": "",
+    "_post_kill_resume_note": "vrest (appended to the corpse cascade below) has no completion line to wait on, unlike bladesinger revalrie - so the hold is vitals-gated instead of text-gated: every bot engine (Bot/Hunt/Run) waits until hp/seid/vig/rad are all within post_kill_resume_vitals_margin of max, or the timeout.",
+    "post_kill_resume_vitals": [
+      "hp",
+      "seid",
+      "vig",
+      "rad"
+    ],
+    "post_kill_resume_vitals_margin": 20,
+    "post_kill_resume_timeout": 90
+  },
+  "corpse": {
+    "solo": "merc bury;vrite;vgather;get coins;lineofsight;glance;vrest"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "corpsedump": {
+    "rid": 900009,
+    "desc": "The drow corpse dumping ground"
+  },
+  "trc": {
+    "rid": 55074,
+    "desc": "the Temporal Resonance Chamber"
+  },
+  "giants": {
+    "rid": 900353,
+    "desc": "Dark catacombs"
+  },
+  "midgard": {
+    "rid": 900366,
+    "desc": "Dense northern forest"
+  },
+  "thrymheim": {
+    "rid": 900366,
+    "desc": "Dense northern forest"
+  },
+  "brightfjord": {
+    "rid": 900368,
+    "desc": "Frozen tundra wasteland"
+  },
+  "rayketh": {
+    "rid": 900372,
+    "desc": "Windswept plains of Midgard"
+  },
+  "jovrik": {
+    "rid": 900372,
+    "desc": "Windswept plains of Midgard"
+  },
+  "uppsala": {
+    "rid": 900372,
+    "desc": "Windswept plains of Midgard"
+  },
+  "stormhofn": {
+    "rid": 900368,
+    "desc": "Frozen tundra wasteland"
+  },
+  "sol's": {
+    "rid": 900368,
+    "desc": "pine"
+  },
+  "sol's_pine": {
+    "rid": 900368,
+    "desc": "Frozen tundra wasteland"
+  },
+  "pitea": {
+    "rid": 900371,
+    "desc": "Rolling hills of Midgard"
+  },
+  "baldrsholm": {
+    "rid": 900371,
+    "desc": "Rolling hills of Midgard"
+  }
+}

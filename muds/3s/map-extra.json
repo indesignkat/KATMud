@@ -1,0 +1,7123 @@
+{
+  "patches": [
+    {
+      "op": "add_room",
+      "room": 900000,
+      "name": "A vast training field (e,n)",
+      "area": "Angarboda",
+      "coder": "Skuggis"
+    },
+    {
+      "op": "add_edge",
+      "room": 54264,
+      "exit": "e",
+      "to": 900000
+    },
+    {
+      "op": "add_room",
+      "room": 900001,
+      "name": "A vast training field (e,w,n)",
+      "area": "Angarboda",
+      "coder": "Skuggis"
+    },
+    {
+      "op": "add_edge",
+      "room": 900000,
+      "exit": "kill recruit",
+      "to": 900001
+    },
+    {
+      "op": "add_room",
+      "room": 900002,
+      "name": "A vast training field (w,n)",
+      "area": "Angarboda",
+      "coder": "Skuggis"
+    },
+    {
+      "op": "add_edge",
+      "room": 900001,
+      "exit": "e",
+      "to": 900002
+    },
+    {
+      "op": "add_edge",
+      "room": 900002,
+      "exit": "w",
+      "to": 900001
+    },
+    {
+      "op": "add_room",
+      "room": 900003,
+      "name": "A vast training field (e,w,n,s)",
+      "area": "Angarboda",
+      "coder": "Skuggis"
+    },
+    {
+      "op": "add_edge",
+      "room": 54276,
+      "exit": "w",
+      "to": 900003
+    },
+    {
+      "op": "add_edge",
+      "room": 900003,
+      "exit": "e",
+      "to": 54276
+    },
+    {
+      "op": "add_room",
+      "room": 900004,
+      "name": "On a Road (e,w,portal)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 54263,
+      "exit": "sw",
+      "to": 900004
+    },
+    {
+      "op": "add_room",
+      "room": 900005,
+      "name": "-= Riverford Drive =- (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 3909,
+      "exit": "e",
+      "to": 900005
+    },
+    {
+      "op": "add_edge",
+      "room": 900005,
+      "exit": "w",
+      "to": 3909
+    },
+    {
+      "op": "add_room",
+      "room": 900006,
+      "name": "Forest (e,w,n,s)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 4297,
+      "exit": "s",
+      "to": 900006
+    },
+    {
+      "op": "add_edge",
+      "room": 900006,
+      "exit": "n",
+      "to": 4297
+    },
+    {
+      "op": "add_room",
+      "room": 900007,
+      "name": "Open Field (e,w,n,s,sw)",
+      "area": "Rabbit Fields",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 19810,
+      "exit": "s",
+      "to": 900007
+    },
+    {
+      "op": "add_edge",
+      "room": 900007,
+      "exit": "n",
+      "to": 19810
+    },
+    {
+      "op": "add_room",
+      "room": 900008,
+      "name": "Open Field (e,w,n,nw,ne)",
+      "area": "Rabbit Fields",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 10259,
+      "exit": "e",
+      "to": 900008
+    },
+    {
+      "op": "add_edge",
+      "room": 900008,
+      "exit": "w",
+      "to": 10259
+    },
+    {
+      "op": "add_room",
+      "room": 900009,
+      "name": "The drow corpse dumping ground (u,n)",
+      "area": "Corpse Dump",
+      "coder": "Blarf"
+    },
+    {
+      "op": "add_edge",
+      "room": 4953,
+      "exit": "d",
+      "to": 900009
+    },
+    {
+      "op": "add_edge",
+      "room": 900009,
+      "exit": "u",
+      "to": 4953
+    },
+    {
+      "op": "add_room",
+      "room": 900010,
+      "name": "Open Field (e,w,n,nw,ne)",
+      "area": "Rabbit Fields",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 4853,
+      "exit": "sw",
+      "to": 900010
+    },
+    {
+      "op": "add_edge",
+      "room": 900010,
+      "exit": "ne",
+      "to": 4853
+    },
+    {
+      "op": "add_room",
+      "room": 900011,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900009,
+      "exit": "u",
+      "to": 900011
+    },
+    {
+      "op": "add_room",
+      "room": 900012,
+      "name": "Underdark (n,s)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 4953,
+      "exit": "s",
+      "to": 900012
+    },
+    {
+      "op": "add_edge",
+      "room": 900012,
+      "exit": "n",
+      "to": 4953
+    },
+    {
+      "op": "add_room",
+      "room": 900013,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 4859,
+      "exit": "e",
+      "to": 900013
+    },
+    {
+      "op": "add_edge",
+      "room": 900013,
+      "exit": "w",
+      "to": 4859
+    },
+    {
+      "op": "add_room",
+      "room": 900014,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900009,
+      "exit": "w",
+      "to": 900014
+    },
+    {
+      "op": "add_edge",
+      "room": 900014,
+      "exit": "e",
+      "to": 900009
+    },
+    {
+      "op": "add_room",
+      "room": 900015,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900014,
+      "exit": "w",
+      "to": 900015
+    },
+    {
+      "op": "add_edge",
+      "room": 900015,
+      "exit": "e",
+      "to": 900014
+    },
+    {
+      "op": "add_room",
+      "room": 900016,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900015,
+      "exit": "w",
+      "to": 900016
+    },
+    {
+      "op": "add_edge",
+      "room": 900016,
+      "exit": "e",
+      "to": 900015
+    },
+    {
+      "op": "add_room",
+      "room": 900017,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900016,
+      "exit": "w",
+      "to": 900017
+    },
+    {
+      "op": "add_edge",
+      "room": 900017,
+      "exit": "e",
+      "to": 900016
+    },
+    {
+      "op": "add_room",
+      "room": 900018,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900017,
+      "exit": "w",
+      "to": 900018
+    },
+    {
+      "op": "add_edge",
+      "room": 900018,
+      "exit": "e",
+      "to": 900017
+    },
+    {
+      "op": "add_room",
+      "room": 900019,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900018,
+      "exit": "w",
+      "to": 900019
+    },
+    {
+      "op": "add_edge",
+      "room": 900019,
+      "exit": "e",
+      "to": 900018
+    },
+    {
+      "op": "add_room",
+      "room": 900020,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900019,
+      "exit": "w",
+      "to": 900020
+    },
+    {
+      "op": "add_edge",
+      "room": 900020,
+      "exit": "e",
+      "to": 900019
+    },
+    {
+      "op": "add_room",
+      "room": 900021,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900020,
+      "exit": "w",
+      "to": 900021
+    },
+    {
+      "op": "add_edge",
+      "room": 900021,
+      "exit": "e",
+      "to": 900020
+    },
+    {
+      "op": "add_room",
+      "room": 900022,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900021,
+      "exit": "w",
+      "to": 900022
+    },
+    {
+      "op": "add_edge",
+      "room": 900022,
+      "exit": "e",
+      "to": 900021
+    },
+    {
+      "op": "add_room",
+      "room": 900023,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900022,
+      "exit": "w",
+      "to": 900023
+    },
+    {
+      "op": "add_edge",
+      "room": 900023,
+      "exit": "e",
+      "to": 900022
+    },
+    {
+      "op": "add_room",
+      "room": 900024,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900023,
+      "exit": "w",
+      "to": 900024
+    },
+    {
+      "op": "add_edge",
+      "room": 900024,
+      "exit": "e",
+      "to": 900023
+    },
+    {
+      "op": "add_room",
+      "room": 900025,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900024,
+      "exit": "w",
+      "to": 900025
+    },
+    {
+      "op": "add_edge",
+      "room": 900025,
+      "exit": "e",
+      "to": 900024
+    },
+    {
+      "op": "add_room",
+      "room": 900026,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900025,
+      "exit": "w",
+      "to": 900026
+    },
+    {
+      "op": "add_edge",
+      "room": 900026,
+      "exit": "e",
+      "to": 900025
+    },
+    {
+      "op": "add_room",
+      "room": 900027,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900026,
+      "exit": "w",
+      "to": 900027
+    },
+    {
+      "op": "add_edge",
+      "room": 900027,
+      "exit": "e",
+      "to": 900026
+    },
+    {
+      "op": "add_room",
+      "room": 900028,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900027,
+      "exit": "w",
+      "to": 900028
+    },
+    {
+      "op": "add_edge",
+      "room": 900028,
+      "exit": "e",
+      "to": 900027
+    },
+    {
+      "op": "add_room",
+      "room": 900029,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900028,
+      "exit": "w",
+      "to": 900029
+    },
+    {
+      "op": "add_edge",
+      "room": 900029,
+      "exit": "e",
+      "to": 900028
+    },
+    {
+      "op": "add_room",
+      "room": 900030,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900029,
+      "exit": "w",
+      "to": 900030
+    },
+    {
+      "op": "add_edge",
+      "room": 900030,
+      "exit": "e",
+      "to": 900029
+    },
+    {
+      "op": "add_room",
+      "room": 900031,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900030,
+      "exit": "w",
+      "to": 900031
+    },
+    {
+      "op": "add_edge",
+      "room": 900031,
+      "exit": "e",
+      "to": 900030
+    },
+    {
+      "op": "add_room",
+      "room": 900032,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900031,
+      "exit": "w",
+      "to": 900032
+    },
+    {
+      "op": "add_edge",
+      "room": 900032,
+      "exit": "e",
+      "to": 900031
+    },
+    {
+      "op": "add_room",
+      "room": 900033,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900032,
+      "exit": "w",
+      "to": 900033
+    },
+    {
+      "op": "add_edge",
+      "room": 900033,
+      "exit": "e",
+      "to": 900032
+    },
+    {
+      "op": "add_room",
+      "room": 900034,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900033,
+      "exit": "w",
+      "to": 900034
+    },
+    {
+      "op": "add_edge",
+      "room": 900034,
+      "exit": "e",
+      "to": 900033
+    },
+    {
+      "op": "add_room",
+      "room": 900035,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900034,
+      "exit": "w",
+      "to": 900035
+    },
+    {
+      "op": "add_edge",
+      "room": 900035,
+      "exit": "e",
+      "to": 900034
+    },
+    {
+      "op": "add_room",
+      "room": 900036,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900035,
+      "exit": "w",
+      "to": 900036
+    },
+    {
+      "op": "add_edge",
+      "room": 900036,
+      "exit": "e",
+      "to": 900035
+    },
+    {
+      "op": "add_room",
+      "room": 900037,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900036,
+      "exit": "w",
+      "to": 900037
+    },
+    {
+      "op": "add_edge",
+      "room": 900037,
+      "exit": "e",
+      "to": 900036
+    },
+    {
+      "op": "add_room",
+      "room": 900038,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900037,
+      "exit": "w",
+      "to": 900038
+    },
+    {
+      "op": "add_edge",
+      "room": 900038,
+      "exit": "e",
+      "to": 900037
+    },
+    {
+      "op": "add_room",
+      "room": 900039,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900038,
+      "exit": "w",
+      "to": 900039
+    },
+    {
+      "op": "add_edge",
+      "room": 900039,
+      "exit": "e",
+      "to": 900038
+    },
+    {
+      "op": "add_room",
+      "room": 900040,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900039,
+      "exit": "w",
+      "to": 900040
+    },
+    {
+      "op": "add_edge",
+      "room": 900040,
+      "exit": "e",
+      "to": 900039
+    },
+    {
+      "op": "add_room",
+      "room": 900041,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900040,
+      "exit": "w",
+      "to": 900041
+    },
+    {
+      "op": "add_edge",
+      "room": 900041,
+      "exit": "e",
+      "to": 900040
+    },
+    {
+      "op": "add_room",
+      "room": 900042,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900041,
+      "exit": "w",
+      "to": 900042
+    },
+    {
+      "op": "add_edge",
+      "room": 900042,
+      "exit": "e",
+      "to": 900041
+    },
+    {
+      "op": "add_room",
+      "room": 900043,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900042,
+      "exit": "w",
+      "to": 900043
+    },
+    {
+      "op": "add_edge",
+      "room": 900043,
+      "exit": "e",
+      "to": 900042
+    },
+    {
+      "op": "add_room",
+      "room": 900044,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900043,
+      "exit": "w",
+      "to": 900044
+    },
+    {
+      "op": "add_edge",
+      "room": 900044,
+      "exit": "e",
+      "to": 900043
+    },
+    {
+      "op": "add_room",
+      "room": 900045,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900044,
+      "exit": "w",
+      "to": 900045
+    },
+    {
+      "op": "add_edge",
+      "room": 900045,
+      "exit": "e",
+      "to": 900044
+    },
+    {
+      "op": "add_room",
+      "room": 900046,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900045,
+      "exit": "w",
+      "to": 900046
+    },
+    {
+      "op": "add_edge",
+      "room": 900046,
+      "exit": "e",
+      "to": 900045
+    },
+    {
+      "op": "add_room",
+      "room": 900047,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900046,
+      "exit": "w",
+      "to": 900047
+    },
+    {
+      "op": "add_edge",
+      "room": 900047,
+      "exit": "e",
+      "to": 900046
+    },
+    {
+      "op": "add_room",
+      "room": 900048,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900047,
+      "exit": "w",
+      "to": 900048
+    },
+    {
+      "op": "add_edge",
+      "room": 900048,
+      "exit": "e",
+      "to": 900047
+    },
+    {
+      "op": "add_room",
+      "room": 900049,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900048,
+      "exit": "w",
+      "to": 900049
+    },
+    {
+      "op": "add_edge",
+      "room": 900049,
+      "exit": "e",
+      "to": 900048
+    },
+    {
+      "op": "add_room",
+      "room": 900050,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900049,
+      "exit": "w",
+      "to": 900050
+    },
+    {
+      "op": "add_edge",
+      "room": 900050,
+      "exit": "e",
+      "to": 900049
+    },
+    {
+      "op": "add_room",
+      "room": 900051,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900050,
+      "exit": "w",
+      "to": 900051
+    },
+    {
+      "op": "add_edge",
+      "room": 900051,
+      "exit": "e",
+      "to": 900050
+    },
+    {
+      "op": "add_room",
+      "room": 900052,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900051,
+      "exit": "w",
+      "to": 900052
+    },
+    {
+      "op": "add_edge",
+      "room": 900052,
+      "exit": "e",
+      "to": 900051
+    },
+    {
+      "op": "add_room",
+      "room": 900053,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900052,
+      "exit": "w",
+      "to": 900053
+    },
+    {
+      "op": "add_edge",
+      "room": 900053,
+      "exit": "e",
+      "to": 900052
+    },
+    {
+      "op": "add_room",
+      "room": 900054,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900053,
+      "exit": "w",
+      "to": 900054
+    },
+    {
+      "op": "add_edge",
+      "room": 900054,
+      "exit": "e",
+      "to": 900053
+    },
+    {
+      "op": "add_room",
+      "room": 900055,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900054,
+      "exit": "w",
+      "to": 900055
+    },
+    {
+      "op": "add_edge",
+      "room": 900055,
+      "exit": "e",
+      "to": 900054
+    },
+    {
+      "op": "add_room",
+      "room": 900056,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900055,
+      "exit": "w",
+      "to": 900056
+    },
+    {
+      "op": "add_edge",
+      "room": 900056,
+      "exit": "e",
+      "to": 900055
+    },
+    {
+      "op": "add_room",
+      "room": 900057,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900056,
+      "exit": "w",
+      "to": 900057
+    },
+    {
+      "op": "add_edge",
+      "room": 900057,
+      "exit": "e",
+      "to": 900056
+    },
+    {
+      "op": "add_room",
+      "room": 900058,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900057,
+      "exit": "w",
+      "to": 900058
+    },
+    {
+      "op": "add_edge",
+      "room": 900058,
+      "exit": "e",
+      "to": 900057
+    },
+    {
+      "op": "add_room",
+      "room": 900059,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900058,
+      "exit": "w",
+      "to": 900059
+    },
+    {
+      "op": "add_edge",
+      "room": 900059,
+      "exit": "e",
+      "to": 900058
+    },
+    {
+      "op": "add_room",
+      "room": 900060,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900059,
+      "exit": "w",
+      "to": 900060
+    },
+    {
+      "op": "add_edge",
+      "room": 900060,
+      "exit": "e",
+      "to": 900059
+    },
+    {
+      "op": "add_room",
+      "room": 900061,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900060,
+      "exit": "w",
+      "to": 900061
+    },
+    {
+      "op": "add_edge",
+      "room": 900061,
+      "exit": "e",
+      "to": 900060
+    },
+    {
+      "op": "add_room",
+      "room": 900062,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900061,
+      "exit": "w",
+      "to": 900062
+    },
+    {
+      "op": "add_edge",
+      "room": 900062,
+      "exit": "e",
+      "to": 900061
+    },
+    {
+      "op": "add_room",
+      "room": 900063,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900062,
+      "exit": "w",
+      "to": 900063
+    },
+    {
+      "op": "add_edge",
+      "room": 900063,
+      "exit": "e",
+      "to": 900062
+    },
+    {
+      "op": "add_room",
+      "room": 900064,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900063,
+      "exit": "w",
+      "to": 900064
+    },
+    {
+      "op": "add_edge",
+      "room": 900064,
+      "exit": "e",
+      "to": 900063
+    },
+    {
+      "op": "add_room",
+      "room": 900065,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900064,
+      "exit": "w",
+      "to": 900065
+    },
+    {
+      "op": "add_edge",
+      "room": 900065,
+      "exit": "e",
+      "to": 900064
+    },
+    {
+      "op": "add_room",
+      "room": 900066,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900065,
+      "exit": "w",
+      "to": 900066
+    },
+    {
+      "op": "add_edge",
+      "room": 900066,
+      "exit": "e",
+      "to": 900065
+    },
+    {
+      "op": "add_room",
+      "room": 900067,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900066,
+      "exit": "w",
+      "to": 900067
+    },
+    {
+      "op": "add_edge",
+      "room": 900067,
+      "exit": "e",
+      "to": 900066
+    },
+    {
+      "op": "add_room",
+      "room": 900068,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900067,
+      "exit": "w",
+      "to": 900068
+    },
+    {
+      "op": "add_edge",
+      "room": 900068,
+      "exit": "e",
+      "to": 900067
+    },
+    {
+      "op": "add_room",
+      "room": 900069,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900068,
+      "exit": "w",
+      "to": 900069
+    },
+    {
+      "op": "add_edge",
+      "room": 900069,
+      "exit": "e",
+      "to": 900068
+    },
+    {
+      "op": "add_room",
+      "room": 900070,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900069,
+      "exit": "w",
+      "to": 900070
+    },
+    {
+      "op": "add_edge",
+      "room": 900070,
+      "exit": "e",
+      "to": 900069
+    },
+    {
+      "op": "add_room",
+      "room": 900071,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900070,
+      "exit": "w",
+      "to": 900071
+    },
+    {
+      "op": "add_edge",
+      "room": 900071,
+      "exit": "e",
+      "to": 900070
+    },
+    {
+      "op": "add_room",
+      "room": 900072,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900071,
+      "exit": "w",
+      "to": 900072
+    },
+    {
+      "op": "add_edge",
+      "room": 900072,
+      "exit": "e",
+      "to": 900071
+    },
+    {
+      "op": "add_room",
+      "room": 900073,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900072,
+      "exit": "w",
+      "to": 900073
+    },
+    {
+      "op": "add_edge",
+      "room": 900073,
+      "exit": "e",
+      "to": 900072
+    },
+    {
+      "op": "add_room",
+      "room": 900074,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900073,
+      "exit": "w",
+      "to": 900074
+    },
+    {
+      "op": "add_edge",
+      "room": 900074,
+      "exit": "e",
+      "to": 900073
+    },
+    {
+      "op": "add_room",
+      "room": 900075,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900074,
+      "exit": "w",
+      "to": 900075
+    },
+    {
+      "op": "add_edge",
+      "room": 900075,
+      "exit": "e",
+      "to": 900074
+    },
+    {
+      "op": "add_room",
+      "room": 900076,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900075,
+      "exit": "w",
+      "to": 900076
+    },
+    {
+      "op": "add_edge",
+      "room": 900076,
+      "exit": "e",
+      "to": 900075
+    },
+    {
+      "op": "add_room",
+      "room": 900077,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900076,
+      "exit": "w",
+      "to": 900077
+    },
+    {
+      "op": "add_edge",
+      "room": 900077,
+      "exit": "e",
+      "to": 900076
+    },
+    {
+      "op": "add_room",
+      "room": 900078,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900077,
+      "exit": "w",
+      "to": 900078
+    },
+    {
+      "op": "add_edge",
+      "room": 900078,
+      "exit": "e",
+      "to": 900077
+    },
+    {
+      "op": "add_room",
+      "room": 900079,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900078,
+      "exit": "w",
+      "to": 900079
+    },
+    {
+      "op": "add_edge",
+      "room": 900079,
+      "exit": "e",
+      "to": 900078
+    },
+    {
+      "op": "add_room",
+      "room": 900080,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900079,
+      "exit": "w",
+      "to": 900080
+    },
+    {
+      "op": "add_edge",
+      "room": 900080,
+      "exit": "e",
+      "to": 900079
+    },
+    {
+      "op": "add_room",
+      "room": 900081,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900080,
+      "exit": "w",
+      "to": 900081
+    },
+    {
+      "op": "add_edge",
+      "room": 900081,
+      "exit": "e",
+      "to": 900080
+    },
+    {
+      "op": "add_room",
+      "room": 900082,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900081,
+      "exit": "w",
+      "to": 900082
+    },
+    {
+      "op": "add_edge",
+      "room": 900082,
+      "exit": "e",
+      "to": 900081
+    },
+    {
+      "op": "add_room",
+      "room": 900083,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900082,
+      "exit": "w",
+      "to": 900083
+    },
+    {
+      "op": "add_edge",
+      "room": 900083,
+      "exit": "e",
+      "to": 900082
+    },
+    {
+      "op": "add_room",
+      "room": 900084,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900083,
+      "exit": "w",
+      "to": 900084
+    },
+    {
+      "op": "add_edge",
+      "room": 900084,
+      "exit": "e",
+      "to": 900083
+    },
+    {
+      "op": "add_room",
+      "room": 900085,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900084,
+      "exit": "w",
+      "to": 900085
+    },
+    {
+      "op": "add_edge",
+      "room": 900085,
+      "exit": "e",
+      "to": 900084
+    },
+    {
+      "op": "add_room",
+      "room": 900086,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900085,
+      "exit": "w",
+      "to": 900086
+    },
+    {
+      "op": "add_edge",
+      "room": 900086,
+      "exit": "e",
+      "to": 900085
+    },
+    {
+      "op": "add_room",
+      "room": 900087,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900086,
+      "exit": "w",
+      "to": 900087
+    },
+    {
+      "op": "add_edge",
+      "room": 900087,
+      "exit": "e",
+      "to": 900086
+    },
+    {
+      "op": "add_room",
+      "room": 900088,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900087,
+      "exit": "w",
+      "to": 900088
+    },
+    {
+      "op": "add_edge",
+      "room": 900088,
+      "exit": "e",
+      "to": 900087
+    },
+    {
+      "op": "add_room",
+      "room": 900089,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900088,
+      "exit": "w",
+      "to": 900089
+    },
+    {
+      "op": "add_edge",
+      "room": 900089,
+      "exit": "e",
+      "to": 900088
+    },
+    {
+      "op": "add_room",
+      "room": 900090,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900089,
+      "exit": "w",
+      "to": 900090
+    },
+    {
+      "op": "add_edge",
+      "room": 900090,
+      "exit": "e",
+      "to": 900089
+    },
+    {
+      "op": "add_room",
+      "room": 900091,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900090,
+      "exit": "w",
+      "to": 900091
+    },
+    {
+      "op": "add_edge",
+      "room": 900091,
+      "exit": "e",
+      "to": 900090
+    },
+    {
+      "op": "add_room",
+      "room": 900092,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900091,
+      "exit": "w",
+      "to": 900092
+    },
+    {
+      "op": "add_edge",
+      "room": 900092,
+      "exit": "e",
+      "to": 900091
+    },
+    {
+      "op": "add_room",
+      "room": 900093,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900092,
+      "exit": "w",
+      "to": 900093
+    },
+    {
+      "op": "add_edge",
+      "room": 900093,
+      "exit": "e",
+      "to": 900092
+    },
+    {
+      "op": "add_room",
+      "room": 900094,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900093,
+      "exit": "w",
+      "to": 900094
+    },
+    {
+      "op": "add_edge",
+      "room": 900094,
+      "exit": "e",
+      "to": 900093
+    },
+    {
+      "op": "add_room",
+      "room": 900095,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900094,
+      "exit": "w",
+      "to": 900095
+    },
+    {
+      "op": "add_edge",
+      "room": 900095,
+      "exit": "e",
+      "to": 900094
+    },
+    {
+      "op": "add_room",
+      "room": 900096,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900095,
+      "exit": "w",
+      "to": 900096
+    },
+    {
+      "op": "add_edge",
+      "room": 900096,
+      "exit": "e",
+      "to": 900095
+    },
+    {
+      "op": "add_room",
+      "room": 900097,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900096,
+      "exit": "w",
+      "to": 900097
+    },
+    {
+      "op": "add_edge",
+      "room": 900097,
+      "exit": "e",
+      "to": 900096
+    },
+    {
+      "op": "add_room",
+      "room": 900098,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900097,
+      "exit": "w",
+      "to": 900098
+    },
+    {
+      "op": "add_edge",
+      "room": 900098,
+      "exit": "e",
+      "to": 900097
+    },
+    {
+      "op": "add_room",
+      "room": 900099,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900098,
+      "exit": "w",
+      "to": 900099
+    },
+    {
+      "op": "add_edge",
+      "room": 900099,
+      "exit": "e",
+      "to": 900098
+    },
+    {
+      "op": "add_room",
+      "room": 900100,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900099,
+      "exit": "w",
+      "to": 900100
+    },
+    {
+      "op": "add_edge",
+      "room": 900100,
+      "exit": "e",
+      "to": 900099
+    },
+    {
+      "op": "add_room",
+      "room": 900101,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900100,
+      "exit": "w",
+      "to": 900101
+    },
+    {
+      "op": "add_edge",
+      "room": 900101,
+      "exit": "e",
+      "to": 900100
+    },
+    {
+      "op": "add_room",
+      "room": 900102,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900101,
+      "exit": "w",
+      "to": 900102
+    },
+    {
+      "op": "add_edge",
+      "room": 900102,
+      "exit": "e",
+      "to": 900101
+    },
+    {
+      "op": "add_room",
+      "room": 900103,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900102,
+      "exit": "w",
+      "to": 900103
+    },
+    {
+      "op": "add_edge",
+      "room": 900103,
+      "exit": "e",
+      "to": 900102
+    },
+    {
+      "op": "add_room",
+      "room": 900104,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900103,
+      "exit": "w",
+      "to": 900104
+    },
+    {
+      "op": "add_edge",
+      "room": 900104,
+      "exit": "e",
+      "to": 900103
+    },
+    {
+      "op": "add_room",
+      "room": 900105,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900104,
+      "exit": "w",
+      "to": 900105
+    },
+    {
+      "op": "add_edge",
+      "room": 900105,
+      "exit": "e",
+      "to": 900104
+    },
+    {
+      "op": "add_room",
+      "room": 900106,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900105,
+      "exit": "w",
+      "to": 900106
+    },
+    {
+      "op": "add_edge",
+      "room": 900106,
+      "exit": "e",
+      "to": 900105
+    },
+    {
+      "op": "add_room",
+      "room": 900107,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900106,
+      "exit": "w",
+      "to": 900107
+    },
+    {
+      "op": "add_edge",
+      "room": 900107,
+      "exit": "e",
+      "to": 900106
+    },
+    {
+      "op": "add_room",
+      "room": 900108,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900107,
+      "exit": "w",
+      "to": 900108
+    },
+    {
+      "op": "add_edge",
+      "room": 900108,
+      "exit": "e",
+      "to": 900107
+    },
+    {
+      "op": "add_room",
+      "room": 900109,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900108,
+      "exit": "w",
+      "to": 900109
+    },
+    {
+      "op": "add_edge",
+      "room": 900109,
+      "exit": "e",
+      "to": 900108
+    },
+    {
+      "op": "add_room",
+      "room": 900110,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900109,
+      "exit": "w",
+      "to": 900110
+    },
+    {
+      "op": "add_edge",
+      "room": 900110,
+      "exit": "e",
+      "to": 900109
+    },
+    {
+      "op": "add_room",
+      "room": 900111,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900110,
+      "exit": "w",
+      "to": 900111
+    },
+    {
+      "op": "add_edge",
+      "room": 900111,
+      "exit": "e",
+      "to": 900110
+    },
+    {
+      "op": "add_room",
+      "room": 900112,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900111,
+      "exit": "w",
+      "to": 900112
+    },
+    {
+      "op": "add_edge",
+      "room": 900112,
+      "exit": "e",
+      "to": 900111
+    },
+    {
+      "op": "add_room",
+      "room": 900113,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900112,
+      "exit": "w",
+      "to": 900113
+    },
+    {
+      "op": "add_edge",
+      "room": 900113,
+      "exit": "e",
+      "to": 900112
+    },
+    {
+      "op": "add_room",
+      "room": 900114,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900113,
+      "exit": "w",
+      "to": 900114
+    },
+    {
+      "op": "add_edge",
+      "room": 900114,
+      "exit": "e",
+      "to": 900113
+    },
+    {
+      "op": "add_room",
+      "room": 900115,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900114,
+      "exit": "w",
+      "to": 900115
+    },
+    {
+      "op": "add_edge",
+      "room": 900115,
+      "exit": "e",
+      "to": 900114
+    },
+    {
+      "op": "add_room",
+      "room": 900116,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900115,
+      "exit": "w",
+      "to": 900116
+    },
+    {
+      "op": "add_edge",
+      "room": 900116,
+      "exit": "e",
+      "to": 900115
+    },
+    {
+      "op": "add_room",
+      "room": 900117,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900116,
+      "exit": "w",
+      "to": 900117
+    },
+    {
+      "op": "add_edge",
+      "room": 900117,
+      "exit": "e",
+      "to": 900116
+    },
+    {
+      "op": "add_room",
+      "room": 900118,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900117,
+      "exit": "w",
+      "to": 900118
+    },
+    {
+      "op": "add_edge",
+      "room": 900118,
+      "exit": "e",
+      "to": 900117
+    },
+    {
+      "op": "add_room",
+      "room": 900119,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900118,
+      "exit": "w",
+      "to": 900119
+    },
+    {
+      "op": "add_edge",
+      "room": 900119,
+      "exit": "e",
+      "to": 900118
+    },
+    {
+      "op": "add_room",
+      "room": 900120,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900119,
+      "exit": "w",
+      "to": 900120
+    },
+    {
+      "op": "add_edge",
+      "room": 900120,
+      "exit": "e",
+      "to": 900119
+    },
+    {
+      "op": "add_room",
+      "room": 900121,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900120,
+      "exit": "w",
+      "to": 900121
+    },
+    {
+      "op": "add_edge",
+      "room": 900121,
+      "exit": "e",
+      "to": 900120
+    },
+    {
+      "op": "add_room",
+      "room": 900122,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900121,
+      "exit": "w",
+      "to": 900122
+    },
+    {
+      "op": "add_edge",
+      "room": 900122,
+      "exit": "e",
+      "to": 900121
+    },
+    {
+      "op": "add_room",
+      "room": 900123,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900122,
+      "exit": "w",
+      "to": 900123
+    },
+    {
+      "op": "add_edge",
+      "room": 900123,
+      "exit": "e",
+      "to": 900122
+    },
+    {
+      "op": "add_room",
+      "room": 900124,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900123,
+      "exit": "w",
+      "to": 900124
+    },
+    {
+      "op": "add_edge",
+      "room": 900124,
+      "exit": "e",
+      "to": 900123
+    },
+    {
+      "op": "add_room",
+      "room": 900125,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900124,
+      "exit": "w",
+      "to": 900125
+    },
+    {
+      "op": "add_edge",
+      "room": 900125,
+      "exit": "e",
+      "to": 900124
+    },
+    {
+      "op": "add_room",
+      "room": 900126,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900125,
+      "exit": "w",
+      "to": 900126
+    },
+    {
+      "op": "add_edge",
+      "room": 900126,
+      "exit": "e",
+      "to": 900125
+    },
+    {
+      "op": "add_room",
+      "room": 900127,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900126,
+      "exit": "w",
+      "to": 900127
+    },
+    {
+      "op": "add_edge",
+      "room": 900127,
+      "exit": "e",
+      "to": 900126
+    },
+    {
+      "op": "add_room",
+      "room": 900128,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900127,
+      "exit": "w",
+      "to": 900128
+    },
+    {
+      "op": "add_edge",
+      "room": 900128,
+      "exit": "e",
+      "to": 900127
+    },
+    {
+      "op": "add_room",
+      "room": 900129,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900128,
+      "exit": "w",
+      "to": 900129
+    },
+    {
+      "op": "add_edge",
+      "room": 900129,
+      "exit": "e",
+      "to": 900128
+    },
+    {
+      "op": "add_room",
+      "room": 900130,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900129,
+      "exit": "w",
+      "to": 900130
+    },
+    {
+      "op": "add_edge",
+      "room": 900130,
+      "exit": "e",
+      "to": 900129
+    },
+    {
+      "op": "add_room",
+      "room": 900131,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900130,
+      "exit": "w",
+      "to": 900131
+    },
+    {
+      "op": "add_edge",
+      "room": 900131,
+      "exit": "e",
+      "to": 900130
+    },
+    {
+      "op": "add_room",
+      "room": 900132,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900131,
+      "exit": "w",
+      "to": 900132
+    },
+    {
+      "op": "add_edge",
+      "room": 900132,
+      "exit": "e",
+      "to": 900131
+    },
+    {
+      "op": "add_room",
+      "room": 900133,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900132,
+      "exit": "w",
+      "to": 900133
+    },
+    {
+      "op": "add_edge",
+      "room": 900133,
+      "exit": "e",
+      "to": 900132
+    },
+    {
+      "op": "add_room",
+      "room": 900134,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900133,
+      "exit": "w",
+      "to": 900134
+    },
+    {
+      "op": "add_edge",
+      "room": 900134,
+      "exit": "e",
+      "to": 900133
+    },
+    {
+      "op": "add_room",
+      "room": 900135,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900134,
+      "exit": "w",
+      "to": 900135
+    },
+    {
+      "op": "add_edge",
+      "room": 900135,
+      "exit": "e",
+      "to": 900134
+    },
+    {
+      "op": "add_room",
+      "room": 900136,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900135,
+      "exit": "w",
+      "to": 900136
+    },
+    {
+      "op": "add_edge",
+      "room": 900136,
+      "exit": "e",
+      "to": 900135
+    },
+    {
+      "op": "add_room",
+      "room": 900137,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900136,
+      "exit": "w",
+      "to": 900137
+    },
+    {
+      "op": "add_edge",
+      "room": 900137,
+      "exit": "e",
+      "to": 900136
+    },
+    {
+      "op": "add_room",
+      "room": 900138,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900137,
+      "exit": "w",
+      "to": 900138
+    },
+    {
+      "op": "add_edge",
+      "room": 900138,
+      "exit": "e",
+      "to": 900137
+    },
+    {
+      "op": "add_room",
+      "room": 900139,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900138,
+      "exit": "w",
+      "to": 900139
+    },
+    {
+      "op": "add_edge",
+      "room": 900139,
+      "exit": "e",
+      "to": 900138
+    },
+    {
+      "op": "add_room",
+      "room": 900140,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900139,
+      "exit": "w",
+      "to": 900140
+    },
+    {
+      "op": "add_edge",
+      "room": 900140,
+      "exit": "e",
+      "to": 900139
+    },
+    {
+      "op": "add_room",
+      "room": 900141,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900140,
+      "exit": "w",
+      "to": 900141
+    },
+    {
+      "op": "add_edge",
+      "room": 900141,
+      "exit": "e",
+      "to": 900140
+    },
+    {
+      "op": "add_room",
+      "room": 900142,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900141,
+      "exit": "w",
+      "to": 900142
+    },
+    {
+      "op": "add_edge",
+      "room": 900142,
+      "exit": "e",
+      "to": 900141
+    },
+    {
+      "op": "add_room",
+      "room": 900143,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900142,
+      "exit": "w",
+      "to": 900143
+    },
+    {
+      "op": "add_edge",
+      "room": 900143,
+      "exit": "e",
+      "to": 900142
+    },
+    {
+      "op": "add_room",
+      "room": 900144,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900143,
+      "exit": "w",
+      "to": 900144
+    },
+    {
+      "op": "add_edge",
+      "room": 900144,
+      "exit": "e",
+      "to": 900143
+    },
+    {
+      "op": "add_room",
+      "room": 900145,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900144,
+      "exit": "w",
+      "to": 900145
+    },
+    {
+      "op": "add_edge",
+      "room": 900145,
+      "exit": "e",
+      "to": 900144
+    },
+    {
+      "op": "add_room",
+      "room": 900146,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900145,
+      "exit": "w",
+      "to": 900146
+    },
+    {
+      "op": "add_edge",
+      "room": 900146,
+      "exit": "e",
+      "to": 900145
+    },
+    {
+      "op": "add_room",
+      "room": 900147,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900146,
+      "exit": "w",
+      "to": 900147
+    },
+    {
+      "op": "add_edge",
+      "room": 900147,
+      "exit": "e",
+      "to": 900146
+    },
+    {
+      "op": "add_room",
+      "room": 900148,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900147,
+      "exit": "w",
+      "to": 900148
+    },
+    {
+      "op": "add_edge",
+      "room": 900148,
+      "exit": "e",
+      "to": 900147
+    },
+    {
+      "op": "add_room",
+      "room": 900149,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900148,
+      "exit": "w",
+      "to": 900149
+    },
+    {
+      "op": "add_edge",
+      "room": 900149,
+      "exit": "e",
+      "to": 900148
+    },
+    {
+      "op": "add_room",
+      "room": 900150,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900149,
+      "exit": "w",
+      "to": 900150
+    },
+    {
+      "op": "add_edge",
+      "room": 900150,
+      "exit": "e",
+      "to": 900149
+    },
+    {
+      "op": "add_room",
+      "room": 900151,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900150,
+      "exit": "w",
+      "to": 900151
+    },
+    {
+      "op": "add_edge",
+      "room": 900151,
+      "exit": "e",
+      "to": 900150
+    },
+    {
+      "op": "add_room",
+      "room": 900152,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900151,
+      "exit": "w",
+      "to": 900152
+    },
+    {
+      "op": "add_edge",
+      "room": 900152,
+      "exit": "e",
+      "to": 900151
+    },
+    {
+      "op": "add_room",
+      "room": 900153,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900152,
+      "exit": "w",
+      "to": 900153
+    },
+    {
+      "op": "add_edge",
+      "room": 900153,
+      "exit": "e",
+      "to": 900152
+    },
+    {
+      "op": "add_room",
+      "room": 900154,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900153,
+      "exit": "w",
+      "to": 900154
+    },
+    {
+      "op": "add_edge",
+      "room": 900154,
+      "exit": "e",
+      "to": 900153
+    },
+    {
+      "op": "add_room",
+      "room": 900155,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900154,
+      "exit": "w",
+      "to": 900155
+    },
+    {
+      "op": "add_edge",
+      "room": 900155,
+      "exit": "e",
+      "to": 900154
+    },
+    {
+      "op": "add_room",
+      "room": 900156,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900155,
+      "exit": "w",
+      "to": 900156
+    },
+    {
+      "op": "add_edge",
+      "room": 900156,
+      "exit": "e",
+      "to": 900155
+    },
+    {
+      "op": "add_room",
+      "room": 900157,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900156,
+      "exit": "w",
+      "to": 900157
+    },
+    {
+      "op": "add_edge",
+      "room": 900157,
+      "exit": "e",
+      "to": 900156
+    },
+    {
+      "op": "add_room",
+      "room": 900158,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900157,
+      "exit": "w",
+      "to": 900158
+    },
+    {
+      "op": "add_edge",
+      "room": 900158,
+      "exit": "e",
+      "to": 900157
+    },
+    {
+      "op": "add_room",
+      "room": 900159,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900158,
+      "exit": "w",
+      "to": 900159
+    },
+    {
+      "op": "add_edge",
+      "room": 900159,
+      "exit": "e",
+      "to": 900158
+    },
+    {
+      "op": "add_room",
+      "room": 900160,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900159,
+      "exit": "w",
+      "to": 900160
+    },
+    {
+      "op": "add_edge",
+      "room": 900160,
+      "exit": "e",
+      "to": 900159
+    },
+    {
+      "op": "add_room",
+      "room": 900161,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900160,
+      "exit": "w",
+      "to": 900161
+    },
+    {
+      "op": "add_edge",
+      "room": 900161,
+      "exit": "e",
+      "to": 900160
+    },
+    {
+      "op": "add_room",
+      "room": 900162,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900161,
+      "exit": "w",
+      "to": 900162
+    },
+    {
+      "op": "add_edge",
+      "room": 900162,
+      "exit": "e",
+      "to": 900161
+    },
+    {
+      "op": "add_room",
+      "room": 900163,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900162,
+      "exit": "w",
+      "to": 900163
+    },
+    {
+      "op": "add_edge",
+      "room": 900163,
+      "exit": "e",
+      "to": 900162
+    },
+    {
+      "op": "add_room",
+      "room": 900164,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900163,
+      "exit": "w",
+      "to": 900164
+    },
+    {
+      "op": "add_edge",
+      "room": 900164,
+      "exit": "e",
+      "to": 900163
+    },
+    {
+      "op": "add_room",
+      "room": 900165,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900164,
+      "exit": "w",
+      "to": 900165
+    },
+    {
+      "op": "add_edge",
+      "room": 900165,
+      "exit": "e",
+      "to": 900164
+    },
+    {
+      "op": "add_room",
+      "room": 900166,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900165,
+      "exit": "w",
+      "to": 900166
+    },
+    {
+      "op": "add_edge",
+      "room": 900166,
+      "exit": "e",
+      "to": 900165
+    },
+    {
+      "op": "add_room",
+      "room": 900167,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900166,
+      "exit": "w",
+      "to": 900167
+    },
+    {
+      "op": "add_edge",
+      "room": 900167,
+      "exit": "e",
+      "to": 900166
+    },
+    {
+      "op": "add_room",
+      "room": 900168,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900167,
+      "exit": "w",
+      "to": 900168
+    },
+    {
+      "op": "add_edge",
+      "room": 900168,
+      "exit": "e",
+      "to": 900167
+    },
+    {
+      "op": "add_room",
+      "room": 900169,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900168,
+      "exit": "w",
+      "to": 900169
+    },
+    {
+      "op": "add_edge",
+      "room": 900169,
+      "exit": "e",
+      "to": 900168
+    },
+    {
+      "op": "add_room",
+      "room": 900170,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900169,
+      "exit": "w",
+      "to": 900170
+    },
+    {
+      "op": "add_edge",
+      "room": 900170,
+      "exit": "e",
+      "to": 900169
+    },
+    {
+      "op": "add_room",
+      "room": 900171,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900170,
+      "exit": "w",
+      "to": 900171
+    },
+    {
+      "op": "add_edge",
+      "room": 900171,
+      "exit": "e",
+      "to": 900170
+    },
+    {
+      "op": "add_room",
+      "room": 900172,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900171,
+      "exit": "w",
+      "to": 900172
+    },
+    {
+      "op": "add_edge",
+      "room": 900172,
+      "exit": "e",
+      "to": 900171
+    },
+    {
+      "op": "add_room",
+      "room": 900173,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900172,
+      "exit": "w",
+      "to": 900173
+    },
+    {
+      "op": "add_edge",
+      "room": 900173,
+      "exit": "e",
+      "to": 900172
+    },
+    {
+      "op": "add_room",
+      "room": 900174,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900173,
+      "exit": "w",
+      "to": 900174
+    },
+    {
+      "op": "add_edge",
+      "room": 900174,
+      "exit": "e",
+      "to": 900173
+    },
+    {
+      "op": "add_room",
+      "room": 900175,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900174,
+      "exit": "w",
+      "to": 900175
+    },
+    {
+      "op": "add_edge",
+      "room": 900175,
+      "exit": "e",
+      "to": 900174
+    },
+    {
+      "op": "add_room",
+      "room": 900176,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900175,
+      "exit": "w",
+      "to": 900176
+    },
+    {
+      "op": "add_edge",
+      "room": 900176,
+      "exit": "e",
+      "to": 900175
+    },
+    {
+      "op": "add_room",
+      "room": 900177,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900176,
+      "exit": "w",
+      "to": 900177
+    },
+    {
+      "op": "add_edge",
+      "room": 900177,
+      "exit": "e",
+      "to": 900176
+    },
+    {
+      "op": "add_room",
+      "room": 900178,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900177,
+      "exit": "w",
+      "to": 900178
+    },
+    {
+      "op": "add_edge",
+      "room": 900178,
+      "exit": "e",
+      "to": 900177
+    },
+    {
+      "op": "add_room",
+      "room": 900179,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900178,
+      "exit": "w",
+      "to": 900179
+    },
+    {
+      "op": "add_edge",
+      "room": 900179,
+      "exit": "e",
+      "to": 900178
+    },
+    {
+      "op": "add_room",
+      "room": 900180,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900179,
+      "exit": "w",
+      "to": 900180
+    },
+    {
+      "op": "add_edge",
+      "room": 900180,
+      "exit": "e",
+      "to": 900179
+    },
+    {
+      "op": "add_room",
+      "room": 900181,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900180,
+      "exit": "w",
+      "to": 900181
+    },
+    {
+      "op": "add_edge",
+      "room": 900181,
+      "exit": "e",
+      "to": 900180
+    },
+    {
+      "op": "add_room",
+      "room": 900182,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900181,
+      "exit": "w",
+      "to": 900182
+    },
+    {
+      "op": "add_edge",
+      "room": 900182,
+      "exit": "e",
+      "to": 900181
+    },
+    {
+      "op": "add_room",
+      "room": 900183,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900182,
+      "exit": "w",
+      "to": 900183
+    },
+    {
+      "op": "add_edge",
+      "room": 900183,
+      "exit": "e",
+      "to": 900182
+    },
+    {
+      "op": "add_room",
+      "room": 900184,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900183,
+      "exit": "w",
+      "to": 900184
+    },
+    {
+      "op": "add_edge",
+      "room": 900184,
+      "exit": "e",
+      "to": 900183
+    },
+    {
+      "op": "add_room",
+      "room": 900185,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900184,
+      "exit": "w",
+      "to": 900185
+    },
+    {
+      "op": "add_edge",
+      "room": 900185,
+      "exit": "e",
+      "to": 900184
+    },
+    {
+      "op": "add_room",
+      "room": 900186,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900185,
+      "exit": "w",
+      "to": 900186
+    },
+    {
+      "op": "add_edge",
+      "room": 900186,
+      "exit": "e",
+      "to": 900185
+    },
+    {
+      "op": "add_room",
+      "room": 900187,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900186,
+      "exit": "w",
+      "to": 900187
+    },
+    {
+      "op": "add_edge",
+      "room": 900187,
+      "exit": "e",
+      "to": 900186
+    },
+    {
+      "op": "add_room",
+      "room": 900188,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900187,
+      "exit": "w",
+      "to": 900188
+    },
+    {
+      "op": "add_edge",
+      "room": 900188,
+      "exit": "e",
+      "to": 900187
+    },
+    {
+      "op": "add_room",
+      "room": 900189,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900188,
+      "exit": "w",
+      "to": 900189
+    },
+    {
+      "op": "add_edge",
+      "room": 900189,
+      "exit": "e",
+      "to": 900188
+    },
+    {
+      "op": "add_room",
+      "room": 900190,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900189,
+      "exit": "w",
+      "to": 900190
+    },
+    {
+      "op": "add_edge",
+      "room": 900190,
+      "exit": "e",
+      "to": 900189
+    },
+    {
+      "op": "add_room",
+      "room": 900191,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900190,
+      "exit": "w",
+      "to": 900191
+    },
+    {
+      "op": "add_edge",
+      "room": 900191,
+      "exit": "e",
+      "to": 900190
+    },
+    {
+      "op": "add_room",
+      "room": 900192,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900191,
+      "exit": "w",
+      "to": 900192
+    },
+    {
+      "op": "add_edge",
+      "room": 900192,
+      "exit": "e",
+      "to": 900191
+    },
+    {
+      "op": "add_room",
+      "room": 900193,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900192,
+      "exit": "w",
+      "to": 900193
+    },
+    {
+      "op": "add_edge",
+      "room": 900193,
+      "exit": "e",
+      "to": 900192
+    },
+    {
+      "op": "add_room",
+      "room": 900194,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900193,
+      "exit": "w",
+      "to": 900194
+    },
+    {
+      "op": "add_edge",
+      "room": 900194,
+      "exit": "e",
+      "to": 900193
+    },
+    {
+      "op": "add_room",
+      "room": 900195,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900194,
+      "exit": "w",
+      "to": 900195
+    },
+    {
+      "op": "add_edge",
+      "room": 900195,
+      "exit": "e",
+      "to": 900194
+    },
+    {
+      "op": "add_room",
+      "room": 900196,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900195,
+      "exit": "w",
+      "to": 900196
+    },
+    {
+      "op": "add_edge",
+      "room": 900196,
+      "exit": "e",
+      "to": 900195
+    },
+    {
+      "op": "add_room",
+      "room": 900197,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900196,
+      "exit": "w",
+      "to": 900197
+    },
+    {
+      "op": "add_edge",
+      "room": 900197,
+      "exit": "e",
+      "to": 900196
+    },
+    {
+      "op": "add_room",
+      "room": 900198,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900197,
+      "exit": "w",
+      "to": 900198
+    },
+    {
+      "op": "add_edge",
+      "room": 900198,
+      "exit": "e",
+      "to": 900197
+    },
+    {
+      "op": "add_room",
+      "room": 900199,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900198,
+      "exit": "w",
+      "to": 900199
+    },
+    {
+      "op": "add_edge",
+      "room": 900199,
+      "exit": "e",
+      "to": 900198
+    },
+    {
+      "op": "add_room",
+      "room": 900200,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900199,
+      "exit": "w",
+      "to": 900200
+    },
+    {
+      "op": "add_edge",
+      "room": 900200,
+      "exit": "e",
+      "to": 900199
+    },
+    {
+      "op": "add_room",
+      "room": 900201,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900200,
+      "exit": "w",
+      "to": 900201
+    },
+    {
+      "op": "add_edge",
+      "room": 900201,
+      "exit": "e",
+      "to": 900200
+    },
+    {
+      "op": "add_room",
+      "room": 900202,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900201,
+      "exit": "w",
+      "to": 900202
+    },
+    {
+      "op": "add_edge",
+      "room": 900202,
+      "exit": "e",
+      "to": 900201
+    },
+    {
+      "op": "add_room",
+      "room": 900203,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900202,
+      "exit": "w",
+      "to": 900203
+    },
+    {
+      "op": "add_edge",
+      "room": 900203,
+      "exit": "e",
+      "to": 900202
+    },
+    {
+      "op": "add_room",
+      "room": 900204,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900203,
+      "exit": "w",
+      "to": 900204
+    },
+    {
+      "op": "add_edge",
+      "room": 900204,
+      "exit": "e",
+      "to": 900203
+    },
+    {
+      "op": "add_room",
+      "room": 900205,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900204,
+      "exit": "w",
+      "to": 900205
+    },
+    {
+      "op": "add_edge",
+      "room": 900205,
+      "exit": "e",
+      "to": 900204
+    },
+    {
+      "op": "add_room",
+      "room": 900206,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900205,
+      "exit": "w",
+      "to": 900206
+    },
+    {
+      "op": "add_edge",
+      "room": 900206,
+      "exit": "e",
+      "to": 900205
+    },
+    {
+      "op": "add_room",
+      "room": 900207,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900206,
+      "exit": "w",
+      "to": 900207
+    },
+    {
+      "op": "add_edge",
+      "room": 900207,
+      "exit": "e",
+      "to": 900206
+    },
+    {
+      "op": "add_room",
+      "room": 900208,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900207,
+      "exit": "w",
+      "to": 900208
+    },
+    {
+      "op": "add_edge",
+      "room": 900208,
+      "exit": "e",
+      "to": 900207
+    },
+    {
+      "op": "add_room",
+      "room": 900209,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900208,
+      "exit": "w",
+      "to": 900209
+    },
+    {
+      "op": "add_edge",
+      "room": 900209,
+      "exit": "e",
+      "to": 900208
+    },
+    {
+      "op": "add_room",
+      "room": 900210,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900209,
+      "exit": "w",
+      "to": 900210
+    },
+    {
+      "op": "add_edge",
+      "room": 900210,
+      "exit": "e",
+      "to": 900209
+    },
+    {
+      "op": "add_room",
+      "room": 900211,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900210,
+      "exit": "w",
+      "to": 900211
+    },
+    {
+      "op": "add_edge",
+      "room": 900211,
+      "exit": "e",
+      "to": 900210
+    },
+    {
+      "op": "add_room",
+      "room": 900212,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900211,
+      "exit": "w",
+      "to": 900212
+    },
+    {
+      "op": "add_edge",
+      "room": 900212,
+      "exit": "e",
+      "to": 900211
+    },
+    {
+      "op": "add_room",
+      "room": 900213,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900212,
+      "exit": "w",
+      "to": 900213
+    },
+    {
+      "op": "add_edge",
+      "room": 900213,
+      "exit": "e",
+      "to": 900212
+    },
+    {
+      "op": "add_room",
+      "room": 900214,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900213,
+      "exit": "w",
+      "to": 900214
+    },
+    {
+      "op": "add_edge",
+      "room": 900214,
+      "exit": "e",
+      "to": 900213
+    },
+    {
+      "op": "add_room",
+      "room": 900215,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900214,
+      "exit": "w",
+      "to": 900215
+    },
+    {
+      "op": "add_edge",
+      "room": 900215,
+      "exit": "e",
+      "to": 900214
+    },
+    {
+      "op": "add_room",
+      "room": 900216,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900215,
+      "exit": "w",
+      "to": 900216
+    },
+    {
+      "op": "add_edge",
+      "room": 900216,
+      "exit": "e",
+      "to": 900215
+    },
+    {
+      "op": "add_room",
+      "room": 900217,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900216,
+      "exit": "w",
+      "to": 900217
+    },
+    {
+      "op": "add_edge",
+      "room": 900217,
+      "exit": "e",
+      "to": 900216
+    },
+    {
+      "op": "add_room",
+      "room": 900218,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900217,
+      "exit": "w",
+      "to": 900218
+    },
+    {
+      "op": "add_edge",
+      "room": 900218,
+      "exit": "e",
+      "to": 900217
+    },
+    {
+      "op": "add_room",
+      "room": 900219,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900218,
+      "exit": "w",
+      "to": 900219
+    },
+    {
+      "op": "add_edge",
+      "room": 900219,
+      "exit": "e",
+      "to": 900218
+    },
+    {
+      "op": "add_room",
+      "room": 900220,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900219,
+      "exit": "w",
+      "to": 900220
+    },
+    {
+      "op": "add_edge",
+      "room": 900220,
+      "exit": "e",
+      "to": 900219
+    },
+    {
+      "op": "add_room",
+      "room": 900221,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900220,
+      "exit": "w",
+      "to": 900221
+    },
+    {
+      "op": "add_edge",
+      "room": 900221,
+      "exit": "e",
+      "to": 900220
+    },
+    {
+      "op": "add_room",
+      "room": 900222,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900221,
+      "exit": "w",
+      "to": 900222
+    },
+    {
+      "op": "add_edge",
+      "room": 900222,
+      "exit": "e",
+      "to": 900221
+    },
+    {
+      "op": "add_room",
+      "room": 900223,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900222,
+      "exit": "w",
+      "to": 900223
+    },
+    {
+      "op": "add_edge",
+      "room": 900223,
+      "exit": "e",
+      "to": 900222
+    },
+    {
+      "op": "add_room",
+      "room": 900224,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900223,
+      "exit": "w",
+      "to": 900224
+    },
+    {
+      "op": "add_edge",
+      "room": 900224,
+      "exit": "e",
+      "to": 900223
+    },
+    {
+      "op": "add_room",
+      "room": 900225,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900224,
+      "exit": "w",
+      "to": 900225
+    },
+    {
+      "op": "add_edge",
+      "room": 900225,
+      "exit": "e",
+      "to": 900224
+    },
+    {
+      "op": "add_room",
+      "room": 900226,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900225,
+      "exit": "w",
+      "to": 900226
+    },
+    {
+      "op": "add_edge",
+      "room": 900226,
+      "exit": "e",
+      "to": 900225
+    },
+    {
+      "op": "add_room",
+      "room": 900227,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900226,
+      "exit": "w",
+      "to": 900227
+    },
+    {
+      "op": "add_edge",
+      "room": 900227,
+      "exit": "e",
+      "to": 900226
+    },
+    {
+      "op": "add_room",
+      "room": 900228,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900227,
+      "exit": "w",
+      "to": 900228
+    },
+    {
+      "op": "add_edge",
+      "room": 900228,
+      "exit": "e",
+      "to": 900227
+    },
+    {
+      "op": "add_room",
+      "room": 900229,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900228,
+      "exit": "w",
+      "to": 900229
+    },
+    {
+      "op": "add_edge",
+      "room": 900229,
+      "exit": "e",
+      "to": 900228
+    },
+    {
+      "op": "add_room",
+      "room": 900230,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900229,
+      "exit": "w",
+      "to": 900230
+    },
+    {
+      "op": "add_edge",
+      "room": 900230,
+      "exit": "e",
+      "to": 900229
+    },
+    {
+      "op": "add_room",
+      "room": 900231,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900230,
+      "exit": "w",
+      "to": 900231
+    },
+    {
+      "op": "add_edge",
+      "room": 900231,
+      "exit": "e",
+      "to": 900230
+    },
+    {
+      "op": "add_room",
+      "room": 900232,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900231,
+      "exit": "w",
+      "to": 900232
+    },
+    {
+      "op": "add_edge",
+      "room": 900232,
+      "exit": "e",
+      "to": 900231
+    },
+    {
+      "op": "add_room",
+      "room": 900233,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900232,
+      "exit": "w",
+      "to": 900233
+    },
+    {
+      "op": "add_edge",
+      "room": 900233,
+      "exit": "e",
+      "to": 900232
+    },
+    {
+      "op": "add_room",
+      "room": 900234,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900233,
+      "exit": "w",
+      "to": 900234
+    },
+    {
+      "op": "add_edge",
+      "room": 900234,
+      "exit": "e",
+      "to": 900233
+    },
+    {
+      "op": "add_room",
+      "room": 900235,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900234,
+      "exit": "w",
+      "to": 900235
+    },
+    {
+      "op": "add_edge",
+      "room": 900235,
+      "exit": "e",
+      "to": 900234
+    },
+    {
+      "op": "add_room",
+      "room": 900236,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900235,
+      "exit": "w",
+      "to": 900236
+    },
+    {
+      "op": "add_edge",
+      "room": 900236,
+      "exit": "e",
+      "to": 900235
+    },
+    {
+      "op": "add_room",
+      "room": 900237,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900236,
+      "exit": "w",
+      "to": 900237
+    },
+    {
+      "op": "add_edge",
+      "room": 900237,
+      "exit": "e",
+      "to": 900236
+    },
+    {
+      "op": "add_room",
+      "room": 900238,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900237,
+      "exit": "w",
+      "to": 900238
+    },
+    {
+      "op": "add_edge",
+      "room": 900238,
+      "exit": "e",
+      "to": 900237
+    },
+    {
+      "op": "add_room",
+      "room": 900239,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900238,
+      "exit": "w",
+      "to": 900239
+    },
+    {
+      "op": "add_edge",
+      "room": 900239,
+      "exit": "e",
+      "to": 900238
+    },
+    {
+      "op": "add_room",
+      "room": 900240,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900239,
+      "exit": "w",
+      "to": 900240
+    },
+    {
+      "op": "add_edge",
+      "room": 900240,
+      "exit": "e",
+      "to": 900239
+    },
+    {
+      "op": "add_room",
+      "room": 900241,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900240,
+      "exit": "w",
+      "to": 900241
+    },
+    {
+      "op": "add_edge",
+      "room": 900241,
+      "exit": "e",
+      "to": 900240
+    },
+    {
+      "op": "add_room",
+      "room": 900242,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900241,
+      "exit": "w",
+      "to": 900242
+    },
+    {
+      "op": "add_edge",
+      "room": 900242,
+      "exit": "e",
+      "to": 900241
+    },
+    {
+      "op": "add_room",
+      "room": 900243,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900242,
+      "exit": "w",
+      "to": 900243
+    },
+    {
+      "op": "add_edge",
+      "room": 900243,
+      "exit": "e",
+      "to": 900242
+    },
+    {
+      "op": "add_room",
+      "room": 900244,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900243,
+      "exit": "w",
+      "to": 900244
+    },
+    {
+      "op": "add_edge",
+      "room": 900244,
+      "exit": "e",
+      "to": 900243
+    },
+    {
+      "op": "add_room",
+      "room": 900245,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900244,
+      "exit": "w",
+      "to": 900245
+    },
+    {
+      "op": "add_edge",
+      "room": 900245,
+      "exit": "e",
+      "to": 900244
+    },
+    {
+      "op": "add_room",
+      "room": 900246,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900245,
+      "exit": "w",
+      "to": 900246
+    },
+    {
+      "op": "add_edge",
+      "room": 900246,
+      "exit": "e",
+      "to": 900245
+    },
+    {
+      "op": "add_room",
+      "room": 900247,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900246,
+      "exit": "w",
+      "to": 900247
+    },
+    {
+      "op": "add_edge",
+      "room": 900247,
+      "exit": "e",
+      "to": 900246
+    },
+    {
+      "op": "add_room",
+      "room": 900248,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900247,
+      "exit": "w",
+      "to": 900248
+    },
+    {
+      "op": "add_edge",
+      "room": 900248,
+      "exit": "e",
+      "to": 900247
+    },
+    {
+      "op": "add_room",
+      "room": 900249,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900248,
+      "exit": "w",
+      "to": 900249
+    },
+    {
+      "op": "add_edge",
+      "room": 900249,
+      "exit": "e",
+      "to": 900248
+    },
+    {
+      "op": "add_room",
+      "room": 900250,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900249,
+      "exit": "w",
+      "to": 900250
+    },
+    {
+      "op": "add_edge",
+      "room": 900250,
+      "exit": "e",
+      "to": 900249
+    },
+    {
+      "op": "add_room",
+      "room": 900251,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900250,
+      "exit": "w",
+      "to": 900251
+    },
+    {
+      "op": "add_edge",
+      "room": 900251,
+      "exit": "e",
+      "to": 900250
+    },
+    {
+      "op": "add_room",
+      "room": 900252,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900251,
+      "exit": "w",
+      "to": 900252
+    },
+    {
+      "op": "add_edge",
+      "room": 900252,
+      "exit": "e",
+      "to": 900251
+    },
+    {
+      "op": "add_room",
+      "room": 900253,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900252,
+      "exit": "w",
+      "to": 900253
+    },
+    {
+      "op": "add_edge",
+      "room": 900253,
+      "exit": "e",
+      "to": 900252
+    },
+    {
+      "op": "add_room",
+      "room": 900254,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900253,
+      "exit": "w",
+      "to": 900254
+    },
+    {
+      "op": "add_edge",
+      "room": 900254,
+      "exit": "e",
+      "to": 900253
+    },
+    {
+      "op": "add_room",
+      "room": 900255,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900254,
+      "exit": "w",
+      "to": 900255
+    },
+    {
+      "op": "add_edge",
+      "room": 900255,
+      "exit": "e",
+      "to": 900254
+    },
+    {
+      "op": "add_room",
+      "room": 900256,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900255,
+      "exit": "w",
+      "to": 900256
+    },
+    {
+      "op": "add_edge",
+      "room": 900256,
+      "exit": "e",
+      "to": 900255
+    },
+    {
+      "op": "add_room",
+      "room": 900257,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900256,
+      "exit": "w",
+      "to": 900257
+    },
+    {
+      "op": "add_edge",
+      "room": 900257,
+      "exit": "e",
+      "to": 900256
+    },
+    {
+      "op": "add_room",
+      "room": 900258,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900257,
+      "exit": "w",
+      "to": 900258
+    },
+    {
+      "op": "add_edge",
+      "room": 900258,
+      "exit": "e",
+      "to": 900257
+    },
+    {
+      "op": "add_room",
+      "room": 900259,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900258,
+      "exit": "w",
+      "to": 900259
+    },
+    {
+      "op": "add_edge",
+      "room": 900259,
+      "exit": "e",
+      "to": 900258
+    },
+    {
+      "op": "add_room",
+      "room": 900260,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900259,
+      "exit": "w",
+      "to": 900260
+    },
+    {
+      "op": "add_edge",
+      "room": 900260,
+      "exit": "e",
+      "to": 900259
+    },
+    {
+      "op": "add_room",
+      "room": 900261,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900260,
+      "exit": "w",
+      "to": 900261
+    },
+    {
+      "op": "add_edge",
+      "room": 900261,
+      "exit": "e",
+      "to": 900260
+    },
+    {
+      "op": "add_room",
+      "room": 900262,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900261,
+      "exit": "w",
+      "to": 900262
+    },
+    {
+      "op": "add_edge",
+      "room": 900262,
+      "exit": "e",
+      "to": 900261
+    },
+    {
+      "op": "add_room",
+      "room": 900263,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900262,
+      "exit": "w",
+      "to": 900263
+    },
+    {
+      "op": "add_edge",
+      "room": 900263,
+      "exit": "e",
+      "to": 900262
+    },
+    {
+      "op": "add_room",
+      "room": 900264,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900263,
+      "exit": "w",
+      "to": 900264
+    },
+    {
+      "op": "add_edge",
+      "room": 900264,
+      "exit": "e",
+      "to": 900263
+    },
+    {
+      "op": "add_room",
+      "room": 900265,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900264,
+      "exit": "w",
+      "to": 900265
+    },
+    {
+      "op": "add_edge",
+      "room": 900265,
+      "exit": "e",
+      "to": 900264
+    },
+    {
+      "op": "add_room",
+      "room": 900266,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900265,
+      "exit": "w",
+      "to": 900266
+    },
+    {
+      "op": "add_edge",
+      "room": 900266,
+      "exit": "e",
+      "to": 900265
+    },
+    {
+      "op": "add_room",
+      "room": 900267,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900266,
+      "exit": "w",
+      "to": 900267
+    },
+    {
+      "op": "add_edge",
+      "room": 900267,
+      "exit": "e",
+      "to": 900266
+    },
+    {
+      "op": "add_room",
+      "room": 900268,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900267,
+      "exit": "w",
+      "to": 900268
+    },
+    {
+      "op": "add_edge",
+      "room": 900268,
+      "exit": "e",
+      "to": 900267
+    },
+    {
+      "op": "add_room",
+      "room": 900269,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900268,
+      "exit": "w",
+      "to": 900269
+    },
+    {
+      "op": "add_edge",
+      "room": 900269,
+      "exit": "e",
+      "to": 900268
+    },
+    {
+      "op": "add_room",
+      "room": 900270,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900269,
+      "exit": "w",
+      "to": 900270
+    },
+    {
+      "op": "add_edge",
+      "room": 900270,
+      "exit": "e",
+      "to": 900269
+    },
+    {
+      "op": "add_room",
+      "room": 900271,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900270,
+      "exit": "w",
+      "to": 900271
+    },
+    {
+      "op": "add_edge",
+      "room": 900271,
+      "exit": "e",
+      "to": 900270
+    },
+    {
+      "op": "add_room",
+      "room": 900272,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900271,
+      "exit": "w",
+      "to": 900272
+    },
+    {
+      "op": "add_edge",
+      "room": 900272,
+      "exit": "e",
+      "to": 900271
+    },
+    {
+      "op": "add_room",
+      "room": 900273,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900272,
+      "exit": "w",
+      "to": 900273
+    },
+    {
+      "op": "add_edge",
+      "room": 900273,
+      "exit": "e",
+      "to": 900272
+    },
+    {
+      "op": "add_room",
+      "room": 900274,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900273,
+      "exit": "w",
+      "to": 900274
+    },
+    {
+      "op": "add_edge",
+      "room": 900274,
+      "exit": "e",
+      "to": 900273
+    },
+    {
+      "op": "add_room",
+      "room": 900275,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900274,
+      "exit": "w",
+      "to": 900275
+    },
+    {
+      "op": "add_edge",
+      "room": 900275,
+      "exit": "e",
+      "to": 900274
+    },
+    {
+      "op": "add_room",
+      "room": 900276,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900275,
+      "exit": "w",
+      "to": 900276
+    },
+    {
+      "op": "add_edge",
+      "room": 900276,
+      "exit": "e",
+      "to": 900275
+    },
+    {
+      "op": "add_room",
+      "room": 900277,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900276,
+      "exit": "w",
+      "to": 900277
+    },
+    {
+      "op": "add_edge",
+      "room": 900277,
+      "exit": "e",
+      "to": 900276
+    },
+    {
+      "op": "add_room",
+      "room": 900278,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900277,
+      "exit": "w",
+      "to": 900278
+    },
+    {
+      "op": "add_edge",
+      "room": 900278,
+      "exit": "e",
+      "to": 900277
+    },
+    {
+      "op": "add_room",
+      "room": 900279,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900278,
+      "exit": "w",
+      "to": 900279
+    },
+    {
+      "op": "add_edge",
+      "room": 900279,
+      "exit": "e",
+      "to": 900278
+    },
+    {
+      "op": "add_room",
+      "room": 900280,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900279,
+      "exit": "w",
+      "to": 900280
+    },
+    {
+      "op": "add_edge",
+      "room": 900280,
+      "exit": "e",
+      "to": 900279
+    },
+    {
+      "op": "add_room",
+      "room": 900281,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900280,
+      "exit": "w",
+      "to": 900281
+    },
+    {
+      "op": "add_edge",
+      "room": 900281,
+      "exit": "e",
+      "to": 900280
+    },
+    {
+      "op": "add_room",
+      "room": 900282,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900281,
+      "exit": "w",
+      "to": 900282
+    },
+    {
+      "op": "add_edge",
+      "room": 900282,
+      "exit": "e",
+      "to": 900281
+    },
+    {
+      "op": "add_room",
+      "room": 900283,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900282,
+      "exit": "w",
+      "to": 900283
+    },
+    {
+      "op": "add_edge",
+      "room": 900283,
+      "exit": "e",
+      "to": 900282
+    },
+    {
+      "op": "add_room",
+      "room": 900284,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900283,
+      "exit": "w",
+      "to": 900284
+    },
+    {
+      "op": "add_edge",
+      "room": 900284,
+      "exit": "e",
+      "to": 900283
+    },
+    {
+      "op": "add_room",
+      "room": 900285,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900284,
+      "exit": "w",
+      "to": 900285
+    },
+    {
+      "op": "add_edge",
+      "room": 900285,
+      "exit": "e",
+      "to": 900284
+    },
+    {
+      "op": "add_room",
+      "room": 900286,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900285,
+      "exit": "w",
+      "to": 900286
+    },
+    {
+      "op": "add_edge",
+      "room": 900286,
+      "exit": "e",
+      "to": 900285
+    },
+    {
+      "op": "add_room",
+      "room": 900287,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900286,
+      "exit": "w",
+      "to": 900287
+    },
+    {
+      "op": "add_edge",
+      "room": 900287,
+      "exit": "e",
+      "to": 900286
+    },
+    {
+      "op": "add_room",
+      "room": 900288,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900287,
+      "exit": "w",
+      "to": 900288
+    },
+    {
+      "op": "add_edge",
+      "room": 900288,
+      "exit": "e",
+      "to": 900287
+    },
+    {
+      "op": "add_room",
+      "room": 900289,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900288,
+      "exit": "w",
+      "to": 900289
+    },
+    {
+      "op": "add_edge",
+      "room": 900289,
+      "exit": "e",
+      "to": 900288
+    },
+    {
+      "op": "add_room",
+      "room": 900290,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900289,
+      "exit": "w",
+      "to": 900290
+    },
+    {
+      "op": "add_edge",
+      "room": 900290,
+      "exit": "e",
+      "to": 900289
+    },
+    {
+      "op": "add_room",
+      "room": 900291,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900290,
+      "exit": "w",
+      "to": 900291
+    },
+    {
+      "op": "add_edge",
+      "room": 900291,
+      "exit": "e",
+      "to": 900290
+    },
+    {
+      "op": "add_room",
+      "room": 900292,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900291,
+      "exit": "w",
+      "to": 900292
+    },
+    {
+      "op": "add_edge",
+      "room": 900292,
+      "exit": "e",
+      "to": 900291
+    },
+    {
+      "op": "add_room",
+      "room": 900293,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900292,
+      "exit": "w",
+      "to": 900293
+    },
+    {
+      "op": "add_edge",
+      "room": 900293,
+      "exit": "e",
+      "to": 900292
+    },
+    {
+      "op": "add_room",
+      "room": 900294,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900293,
+      "exit": "w",
+      "to": 900294
+    },
+    {
+      "op": "add_edge",
+      "room": 900294,
+      "exit": "e",
+      "to": 900293
+    },
+    {
+      "op": "add_room",
+      "room": 900295,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900294,
+      "exit": "w",
+      "to": 900295
+    },
+    {
+      "op": "add_edge",
+      "room": 900295,
+      "exit": "e",
+      "to": 900294
+    },
+    {
+      "op": "add_room",
+      "room": 900296,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900295,
+      "exit": "w",
+      "to": 900296
+    },
+    {
+      "op": "add_edge",
+      "room": 900296,
+      "exit": "e",
+      "to": 900295
+    },
+    {
+      "op": "add_room",
+      "room": 900297,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900296,
+      "exit": "w",
+      "to": 900297
+    },
+    {
+      "op": "add_edge",
+      "room": 900297,
+      "exit": "e",
+      "to": 900296
+    },
+    {
+      "op": "add_room",
+      "room": 900298,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900297,
+      "exit": "w",
+      "to": 900298
+    },
+    {
+      "op": "add_edge",
+      "room": 900298,
+      "exit": "e",
+      "to": 900297
+    },
+    {
+      "op": "add_room",
+      "room": 900299,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900298,
+      "exit": "w",
+      "to": 900299
+    },
+    {
+      "op": "add_edge",
+      "room": 900299,
+      "exit": "e",
+      "to": 900298
+    },
+    {
+      "op": "add_room",
+      "room": 900300,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900299,
+      "exit": "w",
+      "to": 900300
+    },
+    {
+      "op": "add_edge",
+      "room": 900300,
+      "exit": "e",
+      "to": 900299
+    },
+    {
+      "op": "add_room",
+      "room": 900301,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900300,
+      "exit": "w",
+      "to": 900301
+    },
+    {
+      "op": "add_edge",
+      "room": 900301,
+      "exit": "e",
+      "to": 900300
+    },
+    {
+      "op": "add_room",
+      "room": 900302,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900301,
+      "exit": "w",
+      "to": 900302
+    },
+    {
+      "op": "add_edge",
+      "room": 900302,
+      "exit": "e",
+      "to": 900301
+    },
+    {
+      "op": "add_room",
+      "room": 900303,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900302,
+      "exit": "w",
+      "to": 900303
+    },
+    {
+      "op": "add_edge",
+      "room": 900303,
+      "exit": "e",
+      "to": 900302
+    },
+    {
+      "op": "add_room",
+      "room": 900304,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900303,
+      "exit": "w",
+      "to": 900304
+    },
+    {
+      "op": "add_edge",
+      "room": 900304,
+      "exit": "e",
+      "to": 900303
+    },
+    {
+      "op": "add_room",
+      "room": 900305,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900304,
+      "exit": "w",
+      "to": 900305
+    },
+    {
+      "op": "add_edge",
+      "room": 900305,
+      "exit": "e",
+      "to": 900304
+    },
+    {
+      "op": "add_room",
+      "room": 900306,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900305,
+      "exit": "w",
+      "to": 900306
+    },
+    {
+      "op": "add_edge",
+      "room": 900306,
+      "exit": "e",
+      "to": 900305
+    },
+    {
+      "op": "add_room",
+      "room": 900307,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900306,
+      "exit": "w",
+      "to": 900307
+    },
+    {
+      "op": "add_edge",
+      "room": 900307,
+      "exit": "e",
+      "to": 900306
+    },
+    {
+      "op": "add_room",
+      "room": 900308,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900307,
+      "exit": "w",
+      "to": 900308
+    },
+    {
+      "op": "add_edge",
+      "room": 900308,
+      "exit": "e",
+      "to": 900307
+    },
+    {
+      "op": "add_room",
+      "room": 900309,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900308,
+      "exit": "w",
+      "to": 900309
+    },
+    {
+      "op": "add_edge",
+      "room": 900309,
+      "exit": "e",
+      "to": 900308
+    },
+    {
+      "op": "add_room",
+      "room": 900310,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900309,
+      "exit": "w",
+      "to": 900310
+    },
+    {
+      "op": "add_edge",
+      "room": 900310,
+      "exit": "e",
+      "to": 900309
+    },
+    {
+      "op": "add_room",
+      "room": 900311,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900310,
+      "exit": "w",
+      "to": 900311
+    },
+    {
+      "op": "add_edge",
+      "room": 900311,
+      "exit": "e",
+      "to": 900310
+    },
+    {
+      "op": "add_room",
+      "room": 900312,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900311,
+      "exit": "w",
+      "to": 900312
+    },
+    {
+      "op": "add_edge",
+      "room": 900312,
+      "exit": "e",
+      "to": 900311
+    },
+    {
+      "op": "add_room",
+      "room": 900313,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900312,
+      "exit": "w",
+      "to": 900313
+    },
+    {
+      "op": "add_edge",
+      "room": 900313,
+      "exit": "e",
+      "to": 900312
+    },
+    {
+      "op": "add_room",
+      "room": 900314,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900313,
+      "exit": "w",
+      "to": 900314
+    },
+    {
+      "op": "add_edge",
+      "room": 900314,
+      "exit": "e",
+      "to": 900313
+    },
+    {
+      "op": "add_room",
+      "room": 900315,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900314,
+      "exit": "w",
+      "to": 900315
+    },
+    {
+      "op": "add_edge",
+      "room": 900315,
+      "exit": "e",
+      "to": 900314
+    },
+    {
+      "op": "add_room",
+      "room": 900316,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900315,
+      "exit": "w",
+      "to": 900316
+    },
+    {
+      "op": "add_edge",
+      "room": 900316,
+      "exit": "e",
+      "to": 900315
+    },
+    {
+      "op": "add_room",
+      "room": 900317,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900316,
+      "exit": "w",
+      "to": 900317
+    },
+    {
+      "op": "add_edge",
+      "room": 900317,
+      "exit": "e",
+      "to": 900316
+    },
+    {
+      "op": "add_room",
+      "room": 900318,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900317,
+      "exit": "w",
+      "to": 900318
+    },
+    {
+      "op": "add_edge",
+      "room": 900318,
+      "exit": "e",
+      "to": 900317
+    },
+    {
+      "op": "add_room",
+      "room": 900319,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900318,
+      "exit": "w",
+      "to": 900319
+    },
+    {
+      "op": "add_edge",
+      "room": 900319,
+      "exit": "e",
+      "to": 900318
+    },
+    {
+      "op": "add_room",
+      "room": 900320,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900319,
+      "exit": "w",
+      "to": 900320
+    },
+    {
+      "op": "add_edge",
+      "room": 900320,
+      "exit": "e",
+      "to": 900319
+    },
+    {
+      "op": "add_room",
+      "room": 900321,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900320,
+      "exit": "w",
+      "to": 900321
+    },
+    {
+      "op": "add_edge",
+      "room": 900321,
+      "exit": "e",
+      "to": 900320
+    },
+    {
+      "op": "add_room",
+      "room": 900322,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900321,
+      "exit": "w",
+      "to": 900322
+    },
+    {
+      "op": "add_edge",
+      "room": 900322,
+      "exit": "e",
+      "to": 900321
+    },
+    {
+      "op": "add_room",
+      "room": 900323,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900322,
+      "exit": "w",
+      "to": 900323
+    },
+    {
+      "op": "add_edge",
+      "room": 900323,
+      "exit": "e",
+      "to": 900322
+    },
+    {
+      "op": "add_room",
+      "room": 900324,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900323,
+      "exit": "w",
+      "to": 900324
+    },
+    {
+      "op": "add_edge",
+      "room": 900324,
+      "exit": "e",
+      "to": 900323
+    },
+    {
+      "op": "add_room",
+      "room": 900325,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900324,
+      "exit": "w",
+      "to": 900325
+    },
+    {
+      "op": "add_edge",
+      "room": 900325,
+      "exit": "e",
+      "to": 900324
+    },
+    {
+      "op": "add_room",
+      "room": 900326,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900325,
+      "exit": "w",
+      "to": 900326
+    },
+    {
+      "op": "add_edge",
+      "room": 900326,
+      "exit": "e",
+      "to": 900325
+    },
+    {
+      "op": "add_room",
+      "room": 900327,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900326,
+      "exit": "w",
+      "to": 900327
+    },
+    {
+      "op": "add_edge",
+      "room": 900327,
+      "exit": "e",
+      "to": 900326
+    },
+    {
+      "op": "add_room",
+      "room": 900328,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900327,
+      "exit": "w",
+      "to": 900328
+    },
+    {
+      "op": "add_edge",
+      "room": 900328,
+      "exit": "e",
+      "to": 900327
+    },
+    {
+      "op": "add_room",
+      "room": 900329,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900328,
+      "exit": "w",
+      "to": 900329
+    },
+    {
+      "op": "add_edge",
+      "room": 900329,
+      "exit": "e",
+      "to": 900328
+    },
+    {
+      "op": "add_room",
+      "room": 900330,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900329,
+      "exit": "w",
+      "to": 900330
+    },
+    {
+      "op": "add_edge",
+      "room": 900330,
+      "exit": "e",
+      "to": 900329
+    },
+    {
+      "op": "add_room",
+      "room": 900331,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900330,
+      "exit": "w",
+      "to": 900331
+    },
+    {
+      "op": "add_edge",
+      "room": 900331,
+      "exit": "e",
+      "to": 900330
+    },
+    {
+      "op": "add_room",
+      "room": 900332,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900331,
+      "exit": "w",
+      "to": 900332
+    },
+    {
+      "op": "add_edge",
+      "room": 900332,
+      "exit": "e",
+      "to": 900331
+    },
+    {
+      "op": "add_room",
+      "room": 900333,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900332,
+      "exit": "w",
+      "to": 900333
+    },
+    {
+      "op": "add_edge",
+      "room": 900333,
+      "exit": "e",
+      "to": 900332
+    },
+    {
+      "op": "add_room",
+      "room": 900334,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900333,
+      "exit": "w",
+      "to": 900334
+    },
+    {
+      "op": "add_edge",
+      "room": 900334,
+      "exit": "e",
+      "to": 900333
+    },
+    {
+      "op": "add_room",
+      "room": 900335,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900334,
+      "exit": "w",
+      "to": 900335
+    },
+    {
+      "op": "add_edge",
+      "room": 900335,
+      "exit": "e",
+      "to": 900334
+    },
+    {
+      "op": "add_room",
+      "room": 900336,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900335,
+      "exit": "w",
+      "to": 900336
+    },
+    {
+      "op": "add_edge",
+      "room": 900336,
+      "exit": "e",
+      "to": 900335
+    },
+    {
+      "op": "add_room",
+      "room": 900337,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900336,
+      "exit": "w",
+      "to": 900337
+    },
+    {
+      "op": "add_edge",
+      "room": 900337,
+      "exit": "e",
+      "to": 900336
+    },
+    {
+      "op": "add_room",
+      "room": 900338,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900337,
+      "exit": "w",
+      "to": 900338
+    },
+    {
+      "op": "add_edge",
+      "room": 900338,
+      "exit": "e",
+      "to": 900337
+    },
+    {
+      "op": "add_room",
+      "room": 900339,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900338,
+      "exit": "w",
+      "to": 900339
+    },
+    {
+      "op": "add_edge",
+      "room": 900339,
+      "exit": "e",
+      "to": 900338
+    },
+    {
+      "op": "add_room",
+      "room": 900340,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900339,
+      "exit": "w",
+      "to": 900340
+    },
+    {
+      "op": "add_edge",
+      "room": 900340,
+      "exit": "e",
+      "to": 900339
+    },
+    {
+      "op": "add_room",
+      "room": 900341,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900340,
+      "exit": "w",
+      "to": 900341
+    },
+    {
+      "op": "add_edge",
+      "room": 900341,
+      "exit": "e",
+      "to": 900340
+    },
+    {
+      "op": "add_room",
+      "room": 900342,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900341,
+      "exit": "w",
+      "to": 900342
+    },
+    {
+      "op": "add_edge",
+      "room": 900342,
+      "exit": "e",
+      "to": 900341
+    },
+    {
+      "op": "add_room",
+      "room": 900343,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900342,
+      "exit": "w",
+      "to": 900343
+    },
+    {
+      "op": "add_edge",
+      "room": 900343,
+      "exit": "e",
+      "to": 900342
+    },
+    {
+      "op": "add_room",
+      "room": 900344,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900343,
+      "exit": "w",
+      "to": 900344
+    },
+    {
+      "op": "add_edge",
+      "room": 900344,
+      "exit": "e",
+      "to": 900343
+    },
+    {
+      "op": "add_room",
+      "room": 900345,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900344,
+      "exit": "w",
+      "to": 900345
+    },
+    {
+      "op": "add_edge",
+      "room": 900345,
+      "exit": "e",
+      "to": 900344
+    },
+    {
+      "op": "add_room",
+      "room": 900346,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900345,
+      "exit": "w",
+      "to": 900346
+    },
+    {
+      "op": "add_edge",
+      "room": 900346,
+      "exit": "e",
+      "to": 900345
+    },
+    {
+      "op": "add_room",
+      "room": 900347,
+      "name": "Underdark (e,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900346,
+      "exit": "w",
+      "to": 900347
+    },
+    {
+      "op": "add_edge",
+      "room": 900347,
+      "exit": "e",
+      "to": 900346
+    },
+    {
+      "op": "add_room",
+      "room": 900348,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 900347,
+      "exit": "w",
+      "to": 900348
+    },
+    {
+      "op": "add_edge",
+      "room": 900348,
+      "exit": "e",
+      "to": 900347
+    },
+    {
+      "op": "add_room",
+      "room": 900349,
+      "name": "Underdark (e,w)",
+      "area": "The Drow Kingdom of fe dar Shad",
+      "coder": "Rastafan"
+    },
+    {
+      "op": "add_edge",
+      "room": 4857,
+      "exit": "e",
+      "to": 900349
+    },
+    {
+      "op": "add_edge",
+      "room": 900349,
+      "exit": "w",
+      "to": 4857
+    },
+    {
+      "op": "add_room",
+      "room": 900350,
+      "name": "an abandoned garage laboratory (e,leave,n,s)",
+      "area": "Thorne's Contraption",
+      "coder": "Thoreau"
+    },
+    {
+      "op": "add_edge",
+      "room": 7027,
+      "exit": "enter garage",
+      "to": 900350
+    },
+    {
+      "op": "add_room",
+      "room": 900351,
+      "name": "the assistant's quarters (w,n)",
+      "area": "Thorne's Contraption",
+      "coder": "Thoreau"
+    },
+    {
+      "op": "add_edge",
+      "room": 900350,
+      "exit": "s",
+      "to": 900351
+    },
+    {
+      "op": "add_edge",
+      "room": 900351,
+      "exit": "n",
+      "to": 900350
+    },
+    {
+      "op": "add_room",
+      "room": 900352,
+      "name": "The courtyard (e,n,s)",
+      "area": "Angarboda",
+      "coder": "Skuggis"
+    },
+    {
+      "op": "add_edge",
+      "room": 54263,
+      "exit": "w",
+      "to": 900352
+    },
+    {
+      "op": "add_edge",
+      "room": 900352,
+      "exit": "e",
+      "to": 54263
+    },
+    {
+      "op": "add_room",
+      "room": 900353,
+      "name": "Dark catacombs (w)",
+      "area": "Angarboda",
+      "coder": "Skuggis"
+    },
+    {
+      "op": "add_edge",
+      "room": 54257,
+      "exit": "climb down",
+      "to": 900353
+    },
+    {
+      "op": "add_room",
+      "room": 900354,
+      "name": "Dark catacombs (e,w)",
+      "area": "Angarboda",
+      "coder": "Skuggis"
+    },
+    {
+      "op": "add_edge",
+      "room": 54385,
+      "exit": "e",
+      "to": 900354
+    },
+    {
+      "op": "add_edge",
+      "room": 900354,
+      "exit": "w",
+      "to": 54385
+    },
+    {
+      "op": "add_room",
+      "room": 900355,
+      "name": "Dark catacombs (w)",
+      "area": "Angarboda",
+      "coder": "Skuggis"
+    },
+    {
+      "op": "add_edge",
+      "room": 900354,
+      "exit": "e",
+      "to": 900355
+    },
+    {
+      "op": "add_edge",
+      "room": 900355,
+      "exit": "w",
+      "to": 900354
+    },
+    {
+      "op": "add_room",
+      "room": 900356,
+      "name": "On the way to the well (e,w)",
+      "area": "Angarboda",
+      "coder": "Skuggis"
+    },
+    {
+      "op": "add_edge",
+      "room": 54257,
+      "exit": "w",
+      "to": 900356
+    },
+    {
+      "op": "add_edge",
+      "room": 900356,
+      "exit": "e",
+      "to": 54257
+    },
+    {
+      "op": "add_room",
+      "room": 900357,
+      "name": "A vast training field (e,s,sw)",
+      "area": "Angarboda",
+      "coder": "Skuggis"
+    },
+    {
+      "op": "add_edge",
+      "room": 54285,
+      "exit": "sw",
+      "to": 900357
+    },
+    {
+      "op": "add_room",
+      "room": 900358,
+      "name": "A vast training field (e,w,s,ne)",
+      "area": "Angarboda",
+      "coder": "Skuggis"
+    },
+    {
+      "op": "add_edge",
+      "room": 54266,
+      "exit": "e",
+      "to": 900358
+    },
+    {
+      "op": "add_edge",
+      "room": 900358,
+      "exit": "w",
+      "to": 54266
+    },
+    {
+      "op": "add_room",
+      "room": 900359,
+      "name": "The Bladesingers' Grand Hall (u,out,d,e,n,s)",
+      "area": "Bladesinger Guild",
+      "coder": "Bladesinger"
+    },
+    {
+      "op": "add_edge",
+      "room": 54103,
+      "exit": "coins",
+      "to": 900359
+    },
+    {
+      "op": "add_room",
+      "room": 900360,
+      "name": "The Foundation Emporium (u,d,w)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 54103,
+      "exit": "shop",
+      "to": 900360
+    },
+    {
+      "op": "add_room",
+      "room": 900361,
+      "name": "Olive Lane (e,w,n,s)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 6,
+      "exit": "n",
+      "to": 900361
+    },
+    {
+      "op": "add_edge",
+      "room": 900361,
+      "exit": "s",
+      "to": 6
+    },
+    {
+      "op": "add_room",
+      "room": 900362,
+      "name": "Maple Street (e,w,s,sw,ne)",
+      "area": "",
+      "coder": ""
+    },
+    {
+      "op": "add_edge",
+      "room": 900361,
+      "exit": "n",
+      "to": 900362
+    },
+    {
+      "op": "add_edge",
+      "room": 900362,
+      "exit": "s",
+      "to": 900361
+    },
+    {
+      "op": "add_room",
+      "room": 900363,
+      "name": "The road to Midgard (n,se,ne)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900362,
+      "exit": "sw",
+      "to": 900363
+    },
+    {
+      "op": "add_edge",
+      "room": 900363,
+      "exit": "ne",
+      "to": 900362
+    },
+    {
+      "op": "add_room",
+      "room": 900364,
+      "name": "The Great Hall of Midgard (out,e,w,n,s,records,ne)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900363,
+      "exit": "sw",
+      "to": 900364
+    },
+    {
+      "op": "add_edge",
+      "room": 900364,
+      "exit": "ne",
+      "to": 900363
+    },
+    {
+      "op": "add_room",
+      "room": 900365,
+      "name": "The outer gate of Midgard (leave,sw,ne)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 54296,
+      "exit": "ne",
+      "to": 900365
+    },
+    {
+      "op": "add_edge",
+      "room": 900365,
+      "exit": "sw",
+      "to": 54296
+    },
+    {
+      "op": "add_room",
+      "room": 900366,
+      "name": "Dense northern forest (e,w,enter,n,s)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900365,
+      "exit": "leave",
+      "to": 900366
+    },
+    {
+      "op": "add_room",
+      "room": 900367,
+      "name": "Gates of Thrymheim (e,w,leave,n,s)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900366,
+      "exit": "enter",
+      "to": 900367
+    },
+    {
+      "op": "add_room",
+      "room": 900368,
+      "name": "Frozen tundra wasteland (e,w,n,s)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900366,
+      "exit": "n",
+      "to": 900368
+    },
+    {
+      "op": "add_edge",
+      "room": 900368,
+      "exit": "s",
+      "to": 900366
+    },
+    {
+      "op": "add_room",
+      "room": 900369,
+      "name": "Gates of Brightfjord (e,w,leave,n,s)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900368,
+      "exit": "enter",
+      "to": 900369
+    },
+    {
+      "op": "add_room",
+      "room": 900370,
+      "name": "Rocky coastal shore (e,w,s)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900368,
+      "exit": "s",
+      "to": 900370
+    },
+    {
+      "op": "add_room",
+      "room": 900371,
+      "name": "Rolling hills of Midgard (e,w,n,s)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900368,
+      "exit": "s",
+      "to": 900371
+    },
+    {
+      "op": "add_edge",
+      "room": 900371,
+      "exit": "n",
+      "to": 900368
+    },
+    {
+      "op": "add_room",
+      "room": 900372,
+      "name": "Windswept plains of Midgard (e,w,n,s)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900371,
+      "exit": "s",
+      "to": 900372
+    },
+    {
+      "op": "add_edge",
+      "room": 900372,
+      "exit": "n",
+      "to": 900371
+    },
+    {
+      "op": "add_room",
+      "room": 900373,
+      "name": "Gates of Rayketh (e,w,leave,n,s)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900372,
+      "exit": "leave",
+      "to": 900373
+    },
+    {
+      "op": "add_room",
+      "room": 900374,
+      "name": "Gates of Jorvik (e,w,leave,n,s)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900372,
+      "exit": "leave",
+      "to": 900374
+    },
+    {
+      "op": "add_room",
+      "room": 900375,
+      "name": "The entrance to Uppsala (e,w,leave,n)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900372,
+      "exit": "enter",
+      "to": 900375
+    },
+    {
+      "op": "add_room",
+      "room": 900376,
+      "name": "Gates of Stormhofn (e,w,leave,n,s)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900368,
+      "exit": "enter",
+      "to": 900376
+    },
+    {
+      "op": "add_room",
+      "room": 900377,
+      "name": "Gates of Sol's Pine (e,w,leave,n,s)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900368,
+      "exit": "enter",
+      "to": 900377
+    },
+    {
+      "op": "add_room",
+      "room": 900378,
+      "name": "Rugged mountain terrain (w,n,s)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900370,
+      "exit": "n",
+      "to": 900378
+    },
+    {
+      "op": "add_edge",
+      "room": 900378,
+      "exit": "s",
+      "to": 900370
+    },
+    {
+      "op": "add_room",
+      "room": 900379,
+      "name": "Gates of Baldrsholm (e,w,leave,n,s)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900371,
+      "exit": "enter",
+      "to": 900379
+    },
+    {
+      "op": "add_room",
+      "room": 900380,
+      "name": "Rolling hills of Midgard (e,w,enter,n,s) [150960] (e,w,enter,n,s)",
+      "area": "Midgard",
+      "coder": "Viking"
+    },
+    {
+      "op": "add_edge",
+      "room": 900371,
+      "exit": "l",
+      "to": 900380
+    }
+  ]
+}

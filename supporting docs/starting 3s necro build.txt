@@ -1,0 +1,74 @@
+Excellent. Ok, now on to 3s Necromancers.
+
+sample HPBar:
+HP[1114(118)/1114] SP[652(118)/652] NP[3700/3700|0c] E[none] 
+Status[w125%|pOFF|vON|r57%] Cr[You are miles from advancement.]
+
+HP is HP, SP is SP, NP is GP1, 0c is how many preserved corpses i have in inventory, E is enemy, Status is my 'worth' which caps at 125% and if it's ever below 125% send 'con 100'. pOFF means I don't have protection up, and that should always trigger the command 'protection'. vON means veil is up, and if that says vOFF then send 'veil'. r57% is how close I am to guild reset, which refreshes some things guild-side. Counts up to 100% and then it resets. Cr[You are miles from advancement.] is my guild level progress. It will show Cr[xx%] for Necromancers until they hit max Circle (guild level), like I have, then it will switch to wordy messages like in the sample, which indicate your progress towards the next 'tier'. I'll see if I can find a list of those so we can have a progress bar or % or something for it.
+
+Important things to keep track of:
+1) powers. protection, drain, dream, all critical and I can suddenly get dead in a situation where i'm normally fine if I don't have any more of one of those powers memorized.  Sample powers output:
+
+AVAILABLE POWERS: globes required in [] (assuming you can cast them)
+Intrinsic Necromancer Powers:
+  Sense[1]  Create Light/Darkness[1]  Turn Undead[1]  Funeral Pyre[1]
+  Dispell[2]  Curse[2]  Create Dart[2]  Protection[3]  Animate Dead[3]
+  Mirror[1]  Daemon Graft[3]  Spiritgrasp[2]  Cryptwalk[3]  Unholy Ground[3]
+  Revenant[3]  Di/Nocturnum[3]  Corpselight[2]  Requiem[2]  Corpsecion[3]
+Necromantic Form Powers:
+  Alarm[2]  Fright[2]  Drain[3]  Projection[3]  Clutch[3]  Scythe[3]
+  Dream[3]  Chest[3]  Bloodforge[3]  Soulbind[3]  Deathwatch[3]
+  Shroud[3]  Serenity[3]  Grim Harvest[2]
+
+You currently have 2065/6520 open memory globes, 6 will free in 14%
+You have the following powers memorized this cycle:
+------------------------------------------------------------
+          Power(#)  Amt Globes            Power(#)  Amt Globes
+
+          alarm(2):  10   20       animate dead(3):  13   39    
+     bloodforge(3):   5   15              chest(3):   5   15    
+         clutch(3):   3    9         corpsecion(3):   1    3    
+   create light(1):   9    9          cryptwalk(3):  10   30    
+   daemon graft(3):  10   30         deathwatch(3):   5   15    
+   di/nocturnum(3):  20   60            dispell(2):  10   20    
+          drain(3): 332  996              dream(3): 853 2559    
+         fright(2):  10   20       grim harvest(2):  50  100    
+         mirror(1):  10   10         protection(3):  55  165    
+       revenant(3):   5   15             scythe(3):  64  192    
+          sense(1):  17   17           serenity(3):  10   30    
+       soulbind(3):  10   30        spiritgrasp(2):  10   20    
+  unholy ground(3):  10   30    
+
+For more on any power, type 'info <power>'
+
+The "You currently have 2065/6520 open memory globes, 6 will free in 14%" needs explanation: up until max glvl/tier III, necros have to 'memorize' usages of powers. Anything that doesn't have memorizations left won't show up in the list above of "powers memorized this cycle". I currently have 2065 out of my max 6520 memory gloves available, and at next guild reset (currently 86% of the way towards it) I'll get 6 more available. That 6 represent globes that were freed up by me using a 3-globe power twice, but they don't become available to me again until guild reset. Reset only takes like 40m, so it's not a big deal.
+
+2) reagents. As noted in 1, up until max glvl/tier III we have to memorize powers. The act of memorization uses reagents. Other things also use reagents, like preserving a corpse or using certain powers.  You can see your current reagents in your gs (guild score) screen, sample below:
+
+(|>-=-=-=-=-=-=-=-=<*> Dru, Reaper of the Golden Scythe <*>-=-=-=-=-=-=-=-=-<|)
+ | HP:1114/1114(118/118)  SP:652/652(118/118)  NP:3700/3700  Worth:120%      |
+ | Teleports:5/5, Form Glamors:9/9 (blaze)                                   |
+ |  Memory globes free:2071, Freed at next repower:0, Maximum:6520           |
+ | You are 9% to your next fireopal hourglass repower - You may scribe       |
+ | You were recruited by TheFirst on Sun Aug 08 02:15:09 2021                |
+ | You have 0 recruits, 0 remain in the guild.  You may sponsor again.       |
+ |    ginseng:1095   black pearls:1964   spider web:1926   goldenrod:1034    |
+ |   mandrake:1328   pine needles:1447   nightshade:1901   bloodmoss:2       |
+ | You have a rattler snake familiar named Spike.                            |
+ | You have not avenged any necromantic deaths.                              |
+ | Comtrance:invoke corrosi~, Comtrance2:absorb at 20% np (740)              |
+ | Shadowsave:drain at 50% hp (557)                                          |
+ | Hscan:none, Gscan:off, Hlight:3/4, Gbrief:all, Gore:0/10, Protection:on   |
+ | You are currently protected under a veil of darkness.                     |
+ | You have a small bonus from quest points.                                 |
+ | You have a medium bonus from explored rooms.                              |
+(+>-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-<+)
+
+ginseng, black pearls, mandrake, bloodmoss, etc are reagents. We buy them in a specific room in the guild.
+
+For tracking purposes, let's give 3s necros the ability to 'Track' certain things, like ginseng, goldenrod, drain, protection, etc. so "Track drain" adds 'remaining uses of drain' to the lower right pane. 'Track drain 30' would add/update drain on the tracker, and indicate that when the count of drain gets below 30, highlight it with a dim red background to make it stand out so the Nec knows they need to go memorize drain usages. I'll give examples of what powers look like when they're fired so it can increment the remaining uses, but it should also update whenever the player sends the command 'powers' and gets the readout I gave above. Reagents can just update whenever they check their gs.
+
+3) corpses. This is much more important for lower-glvl necros, but always worth tracking. When you look at inv it shows how many corpses are on you, how many are on your follower, how many you have smuggled away. All should be something the player can Track.
+
+
+As for MIPs, I don't know much about necro MIPs.  See mip_20260614_122626.log for mipraw output doing some things like simple combat, creating my undead follower, buying reagents, memorizing powers, etc.

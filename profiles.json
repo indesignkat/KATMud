@@ -1,0 +1,13 @@
+{
+  "_comment": [
+    "katmud character picker data. NEVER contains passwords -",
+    "those live in the OS credential store (katmud/<mud>/<char>).",
+    "Safe to zip, share, and sync.",
+    "Add a profile by launching the picker and using New, or by hand:",
+    "{ \"id\": \"<mud>-<character>\", \"display_name\": \"...\",",
+    "  \"character\": \"<character>\", \"mud\": \"<mud>\",",
+    "  \"guild\": \"<guild-or-none>\", \"config_override\": null,",
+    "  \"port_override\": null, \"last_launched\": null }"
+  ],
+  "profiles": []
+}

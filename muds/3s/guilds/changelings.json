@@ -1,0 +1,76 @@
+{
+  "_comment": [
+    "Changelings guild layer for 3s. Like Necromancers, this guild has NO private MIP tag - vitals ride the mud-wide FFF composite feed (A=hp C=sp E=gp1 G=gp2). Maxes self-calibrate from peak observed value. Cascade rule REPLACE (character file wins).",
+    "Pool labels: HP/SP verified from score; Density, Flux still GUESSED (value didn't echo to a named gscore line) - rename live. ",
+    "Attack: requires an explicit target ('kill <mob>'); plain 'kill' won't work. autoattack_command left empty so Hunt parses the room and sends 'kill <keyword>'.",
+    "Pool labels CONFIRMED 2026-06-16: the two guessed bars are really Protoplasm (gp1) and Stamina (gp2). Order (which is gp1 vs gp2) to be verified against a 'score' capture. The Agent's 30% flee watches BOTH.",
+    "Agent: heal at agent_heal_pct 50 (the per-round auto-morph keeps HP topped, so no need to heal early), flee by leaving the room at 30% protoplasm/stamina (agent_flee_command empty = engine picks an exit). Survival lives in changeling.py hooks: morph 'triceratops' (capped tank form) when STAMINA < agent_triceratops_pct (60), stay there for the fight, then agent_ensure_form swaps back after combat; otherwise routine HP heal = consume bioplast if any else bare 'morph'. Attack form = the form closest to FF 30 but not yet there (triceratops is capped at 30, only used to survive)."
+  ],
+  "login_commands": [],
+  "aliases": {},
+  "triggers": [],
+  "corpse": {
+    "solo": "bioextract;get all;lineofsight;glance",
+    "toggle": "harvest"
+  },
+  "gags": [
+    "You have no need to reform as you are in perfect health!"
+  ],
+  "keys": {},
+  "mip": {},
+  "vitals": [
+    {
+      "label": "HP",
+      "cur": "hp",
+      "max": "hpmax",
+      "color": "#33aa33",
+      "width": 200,
+      "warn": [
+        [
+          0.25,
+          "#cc3333"
+        ],
+        [
+          0.5,
+          "#cc9933"
+        ]
+      ]
+    },
+    {
+      "label": "SP",
+      "cur": "sp",
+      "max": "spmax",
+      "color": "#3366cc",
+      "width": 200
+    },
+    {
+      "label": "Protoplasm",
+      "cur": "gp1",
+      "max": "gp1max",
+      "color": "#9955cc",
+      "width": 200
+    },
+    {
+      "label": "Stamina",
+      "cur": "gp2",
+      "max": "gp2max",
+      "color": "#cc8833",
+      "width": 200
+    },
+    {
+      "label": "Enemy",
+      "enemy": true,
+      "color": "#aa3333",
+      "width": 260
+    }
+  ],
+  "mip_required": [],
+  "map_patches": [],
+  "settings": {
+    "autoattack_command": "",
+    "agent_heal_pct": 50,
+    "agent_flee_pct": 30,
+    "agent_flee_command": "",
+    "agent_triceratops_pct": 60
+  }
+}

@@ -1,0 +1,29 @@
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*  Viking Toggles                                       *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*  dest_corpse      ON   destroy corpse after vrite     *~-
+-~*  auto_gather      ON   vgather auto-runs after vrite  *~-
+-~*  auto_scavenge    ON   vscavenge fires after each ki  *~-
+-~*  auto_charge      ON   vcharge fires on combat open   *~-
+-~*  auto_bloodeagle  OFF  vbloodeagle fires at <25% HP   *~-
+-~*  auto_warcry      ON   war cry fires when ready       *~-
+-~*  auto_shieldwall  ON   shield wall fires when ready   *~-
+-~*  hide_location    OFF  hide your room from vikings2   *~-
+-~*  hide_gps         OFF  hide location row entirely     *~-
+-~*  brief_combat     OFF  suppress chain/strike message  *~-
+-~*  brief_spells     OFF  suppress spell cast/fade msgs  *~-
+-~*  brief_hird       OFF  suppress hird combat msgs      *~-
+-~*  brief_ward       OFF  suppress ward absorb msgs      *~-
+-~*                        (einvigi & baldursvorn/hit)    *~-
+-~*  brief_threk      OFF  suppress threk absorb/bleed m  *~-
+-~*  valhr_coffin     OFF  valhr upkeep draws from coffi  *~-
+-~*  mip_extra        OFF  send core status MIP feed      *~-
+-~*  mip_city         ON   send city/trade MIP feed       *~-
+-~*  mip_trade_goods  ON   send demand/supply MIP feed    *~-
+-~*  mip_map          OFF  send map payload MIP feed      *~-
+-~*  mip_voyage       OFF  send longship/voyage MIP feed  *~-
+-~*  trade_town_name  ON   vtrade shows town names        *~-
+-~*  rite_god         pat  vrite target: patron           *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*  vtoggle <name> to flip.  Changes save immediately.   *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-

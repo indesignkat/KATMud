@@ -1,0 +1,56 @@
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*                         Client                        *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+
+The mercenary system includes client integration for supported MUD clients, providing real-time visual stat tracking without spamming your game window.
+
+  [ WHAT IS CLIENT INTEGRATION? ]
+  Client integration uses the MIP protocol (MUD Integration Protocol) to send mercenary data directly to your client. This allows you to see mercenary stats in a separate miniwindow that updates automatically during combat.
+
+  [ DISPLAYED INFORMATION ]
+  The client integration shows:
+  * HP, Stamina, and AP (current/max and percentages)
+  * Permanent and Instance levels with XP progress
+  * Active damage type and following status
+  * Target information and target HP percentage
+  * Fund balance and total coins spent
+  * Cost per combat round
+  * Real-time updates every combat round
+
+  [ BENEFITS ]
+  * Clean game window - stats don't spam your combat text
+  * Real-time updates - see changes as they happen
+  * Always visible - miniwindow stays on screen
+  * XP tracking - see XP/hour rates automatically
+  * Resource monitoring - watch stamina and AP usage
+
+  [ TECHNICAL DETAILS ]
+  The system uses MIP code BBC (223) to transmit mercenary data.
+  Data is sent as a tilde-delimited string with 24 elements:
+
+  0: Current HP
+  1: Max HP
+  2: Current Stamina
+  3: Max Stamina
+  4: Current AP
+  5: Max AP
+  6: Mercenary name
+  7: Target HP percentage
+  8: Stamina regeneration rate
+  9: AP regeneration rate
+  10: Permanent level
+  11: Permanent XP current
+  12: Permanent XP needed for next level
+  13: Instance level
+  14: Instance XP current
+  15: Instance XP needed for next level
+  16: Cost per combat round
+  17: Active damage type
+  18: Following status (0/1)
+  19: Fund balance
+  20: Total coins spent
+  21: Target name
+  22: Active abilities string
+  23: Empty terminator
+
+  Updates are sent automatically during combat rounds.

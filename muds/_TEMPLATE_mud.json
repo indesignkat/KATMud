@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "MUD TEMPLATE - to add a new mud:",
+    "  1. mkdir muds/<mudname>   (lowercase, no spaces)",
+    "  2. copy this file there as mud.json and fill in connection",
+    "  3. (optional) mkdir muds/<mudname>/guilds and add guild jsons",
+    "  4. relaunch picker - the mud appears in the Mud dropdown",
+    "Map/speedruns files are optional: with no <mudname>.map the",
+    "client runs maplessly; use '#map new' in a room to bootstrap",
+    "one, after which '#map on' + walking builds it via patches.",
+    "Set mip false for muds that don't speak 3k-style MIP."
+  ],
+  "connection": {
+    "host": "example.com",
+    "port": 4000,
+    "mip": false
+  },
+  "mip": {},
+  "aliases": {},
+  "triggers": [],
+  "gags": [],
+  "kill_patterns": [],
+  "settings": {},
+  "keys": {}
+}
