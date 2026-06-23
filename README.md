@@ -24,8 +24,6 @@ every connect.
 ## Run
 
     katmud.pyw                 -> character picker
-    katmud.pyw 3s-normal       -> that profile directly
-                                  (make per-character shortcuts)
 
 The picker spawns each client as a detached process and exits. A
 crash in one character can never take down another. Startup failures
