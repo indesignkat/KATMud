@@ -1,4 +1,4 @@
-# KatMUD v7
+# KatMUD v0.7
 
 MIP-integrated MUD client for MUDs that speak 3k-style MIP (built and
 tested against 3Scapes). Tkinter, Windows-native, one process per
