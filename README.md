@@ -21,19 +21,6 @@ strongly recommended dependency:
 Without it, passwords cannot be stored and the client prompts on
 every connect.
 
-## Migrate from pymud v6
-
-    python tools\migrate_v6.py <path-to-old-pymud-folder>
-
-This builds profiles.json, writes characters/<name>.json personal
-layers (aliases, triggers, gags, numpad->keys, seen_max), copies
-per-port landmark files to per-mud ones, and stores each profile's
-password in Windows Credential Manager under katmud/<mud>/<character>.
-**Delete the old pymud_profiles.json afterwards - it still contains
-plaintext passwords.** Guild files do NOT migrate (v6's per-port
-format is incompatible); re-author them under muds/<mud>/guilds/
-using muds/3s/guilds/vikings.json as the section reference.
-
 ## Run
 
     katmud.pyw                 -> character picker
@@ -63,19 +50,3 @@ and ordering are preserved.
 `#record [scope]` drive the mapping system; mapping mode auto-engages
 when you walk off the known map (disable: settings.auto_mapping
 false in any layer).
-
-## Verified against live output
-
-Rating capture (AREA NAME / AREA RATING -> / Monster class range,
-including the name-less overland response and [House] detection) is
-confirmed against live 3s captures, 2026-06-12.
-
-## Needs live verification
-
-1. **Auth-failure detection** matches /wrong|incorrect password/i.
-   If 3s words rejection differently, the re-prompt won't trigger -
-   capture the real line and adjust AUTH_FAIL_RE in
-   katmud_lib/client.py.
-2. **Adding another mud**: copy `muds/_TEMPLATE_mud.json` into a new
-   `muds/<mudname>/mud.json` and fill in connection details; the
-   client runs maplessly until you bootstrap a map with `#map new`.
