@@ -1,4 +1,12 @@
 {
+  "_comment": [
+    "Bladesinger guild layer for 3s, migrated from the",
+    "v6 per-port format. See 3s/guilds/vikings.json for the",
+    "full section reference. Corpse/blur/plate triggers + combat",
+    "gags moved here from characters/din.json (2026-06-14) - shared",
+    "din.json is used by 3s-Din and 3k-Din, so both blade layers",
+    "carry them. Tweak for 3s vs 3k command differences as needed."
+  ],
   "login_commands": [],
   "aliases": {},
   "triggers": [
@@ -15,12 +23,24 @@
       "_note": "weapon needed no maintenance (nobreak/undamaged) -> mw is a no-op, revalrie immediately. Same noparty + resume-gate flow as the completion case."
     },
     {
+      "pattern": "As you hand the trader the plate",
+      "command": "give plate to trader"
+    },
+    {
       "pattern": "The reflective shadow surrounding you disintegrates into nothingness",
       "command": "blur"
+    },
+    {
+      "pattern": "Robertson says: If Ford really did send you,",
+      "command": "say jciy3zcv"
+    },
+    {
+      "pattern": "an angelic temptress standing before you.",
+      "command": "say hi"
     }
   ],
   "corpse": {
-    "solo": "salute;bury;mw;get coins;lineofsight;glance",
+    "solo": "merc bury;salute;bury;get coins;get plate;revalrie;lineofsight;glance",
     "party": "mw;lineofsight;glance"
   },
   "gags": [

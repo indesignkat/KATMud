@@ -215,6 +215,7 @@ class MudClient:
         self._vtrade_stock = {}         # last parsed `vtrade stock` totals
         self._missionlist_capture = False  # arming flag for `vmission list`
         self._missionlist_lines = []    # accumulated `vmission list` lines
+        self._missionlist_saw_board = False  # True once 'Global Mission Board' seen
         self._mission_picks = []        # current Missionlist recommendation
         self._vnlist_capture = False    # arming flag for `vmission newbie`
         self._vnlist_lines = []         # accumulated `vmission newbie` lines
@@ -309,6 +310,8 @@ class MudClient:
         self._bot_area_name = ""
         self._bot_start_vnum = None     # room Bot was started in (return point)
         self._bot_prev_vnum = None      # room we came from (avoid backtrack)
+        self._bot_fence_vnum = None     # `Hunt <dir>`: origin room; bot may not
+        self._bot_fence_dir = None      #   exit it in this direction
         self._bot_in_combat = False     # was the last tick a combat tick?
         self._bot_combat_end = 0.0      # when the last fight ended
         self._bot_homing = False        # running the post-deadman return walk
@@ -318,7 +321,7 @@ class MudClient:
         self._bot_no_combat_rooms = 0   # Hunt-only: consecutive rooms entered
                                         # with no fight; resets on any combat
         self._hunt_attacked = False     # swung at this room's mob, waiting for
-                                        # the fight to register (auto-attack then
+                                        # the fight to register (autocombat then
                                         # finishes it - don't roam meanwhile)
         self._hunt_attacked_at = 0.0    # when that swing was sent
         self._hunt_whiffs = 0           # consecutive swings that never engaged
@@ -404,6 +407,9 @@ class MudClient:
                                                # gate (e.g. vrest) before loot
         self._chaossea_engage_at = 0.0      # time.time() when the last kill was sent
         self._chaossea_engage_whiffs = 0    # consecutive kills that never engaged
+        self._chaossea_exits_retry = 0      # consecutive bare-DDD 'look' retries
+                                            # for the current room (see
+                                            # _chaossea_exits_unknown_retry)
         # --- path bot (Run): imported tintin steppers, fixed route + a
         # per-area target whitelist; map-independent so it works on 3k. ---
         self._run_on = False
@@ -1589,20 +1595,29 @@ class MudClient:
         moved = (self._sql_cur_vnum is not None and vnum != self._sql_cur_vnum)
         self._sql_cur_vnum = vnum
         self.room_vnum = vnum
-        self._bot_on_room_packet()              # react before the map render,
-        self._chaossea_on_room_packet()         # so neither bot waits on it
+        # self.exits must be settled before _chaossea_on_room_packet runs -
+        # it synchronously captures self.exits into _chaossea_room_exits, so
+        # calling it first (as before) always recorded the PREVIOUS room's
+        # exit list under the new room's fake id. The (expensive) map render
+        # still happens after, so neither bot waits on it.
         if pe.exits:
             self.exits = pe.exits
-            self.map.update_room(exits=pe.exits)
         elif moved:
-            # An exits-less DDD is normally a same-room glance (a `look`
-            # doesn't resend exits) and keeping the old list is correct -
-            # but the vnum just changed too, so these are NOT a glance at
-            # the room we're standing in; they're stale exits from the room
-            # we just left. Treat them as unknown rather than handing a bot
-            # a neighbor's exit list (caused a live Chaossea move into a
-            # nonexistent 'out' exit - see logs/normal-20260623.log).
+            # An exits-less DDD with an UNCHANGED vnum is usually a
+            # same-room glance, and keeping the old list is correct then.
+            # But the vnum here just changed, so this is NOT a glance at
+            # the room we're standing in - these are stale exits from the
+            # room we just left. Treat them as unknown rather than handing
+            # a bot a neighbor's exit list (caused a live Chaossea move
+            # into a nonexistent 'out' exit - see logs/normal-20260623.log).
+            # (This vnum-change check is itself blind inside a zone that
+            # collapses every room to one vnum, e.g. the Sea of Chaos -
+            # see _chaossea_exits_unknown_retry for that case.)
             self.exits = []
+        self._bot_on_room_packet()
+        self._chaossea_on_room_packet(bool(pe.exits))
+        if pe.exits:
+            self.map.update_room(exits=pe.exits)
         self.sql_set_status()
         self.update_info()
 
@@ -1817,7 +1832,7 @@ class MudClient:
             return
         # Never release a queued charting move into active combat: hold the
         # buffer and retry once the fight ends, so the bot fights where it
-        # stands instead of walking out mid-combat (auto-attack + the kill
+        # stands instead of walking out mid-combat (autocombat + the kill
         # trigger resolve the fight; the next move waits). A single guarded
         # retry avoids stacking timers.
         if self.in_combat:
@@ -3144,7 +3159,7 @@ class MudClient:
     # ------------------------------------------------ area roaming bot
     # A deliberately basic hunter: roam every charted room sharing the
     # CURRENT room's area (no path, no per-area setup), pausing whenever a
-    # mob engages so the MUD's auto-attack + the kill trigger handle the
+    # mob engages so the MUD's autocombat + the kill trigger handle the
     # fight, then resuming. Stop with `Bot off` / `#stop` / disconnect.
     # ---- room presence markers --------------------------------------------
     # The MUD asets `look_monster italics` (SGR 3) and `look_player underline`
@@ -3205,6 +3220,14 @@ class MudClient:
                 + (f" '{self._bot_area_name}'" if not self._bot_mapless
                    else " (mapless)")
                 + f". {running} off to stop.", "#cc9933")
+            return
+        if mode == "hunt" and a in self._REVERSE_DIR:
+            fence_vnum = self._sql_cur_vnum
+            if fence_vnum is None:
+                self.write_local("[hunt] location unknown.", "#cc9933"); return
+            self.send_line(a)
+            self._bot_start(mode, fence_vnum=fence_vnum,
+                            fence_dir=self._REVERSE_DIR[a])
             return
         self._bot_start(mode, mapless=(a == "mapless"))
 
@@ -3604,7 +3627,7 @@ class MudClient:
         row = self.mapdb.get_room(vnum)
         return row["area_id"] if row else None
 
-    def _bot_start(self, mode="aggro", mapless=False):
+    def _bot_start(self, mode="aggro", mapless=False, fence_vnum=None, fence_dir=None):
         verb = "bot" if mode == "aggro" else "hunt"
         v = None
         area_id = None
@@ -3634,6 +3657,8 @@ class MudClient:
         self._bot_area_name = self._area_name(area_id) if area_id else ""
         self._bot_start_vnum = v
         self._bot_prev_vnum = None
+        self._bot_fence_vnum = fence_vnum
+        self._bot_fence_dir = fence_dir
         self._bot_in_combat = self.in_combat
         self._bot_combat_end = 0.0
         self._bot_homing = False
@@ -3663,14 +3688,15 @@ class MudClient:
             self.write_local(
                 f"[hunt] roaming {where} - {markers}; "
                 f"attacks any mob it finds via {how}, skips rooms with a "
-                f"non-party player. Hunt off to stop. (On deadman{clear} it "
-                f"{home}.)",
+                f"non-party player. Hunt off to stop. (Needs autocombat ON; "
+                f"on deadman{clear} it {home}.)",
                 "#66cc66")
         else:
             self.write_local(
                 f"[bot] roaming {where} - {markers}; "
                 "fights aggro as it comes, skips rooms with a non-party "
-                f"player. Bot off to stop. (On deadman it {home}.)",
+                f"player. Bot off to stop. (Needs autocombat ON; on deadman "
+                f"it {home}.)",
                 "#66cc66")
         self._bot_reschedule(0.6)
 
@@ -3684,6 +3710,8 @@ class MudClient:
         self._bot_room_ready = False
         self._hunt_attacked = False
         self._hunt_whiffs = 0
+        self._bot_fence_vnum = None
+        self._bot_fence_dir = None
         if self._bot_job:
             self.root.after_cancel(self._bot_job)
             self._bot_job = None
@@ -3869,7 +3897,7 @@ class MudClient:
             if self._bot_mode == "hunt":        # actively engage
                 # We only reach here OUT of combat. If we already swung at this
                 # mob, the fight just hasn't registered yet (3s can lag a beat
-                # before the first hit lands) - auto-attack finishes the mob once
+                # before the first hit lands) - autocombat finishes the mob once
                 # engaged, so WAIT for combat to start; never roam off a live
                 # mob. The tick's in_combat block clears _hunt_attacked once the
                 # fight is real, and the post-kill re-look moves us on. Only if
@@ -4222,6 +4250,8 @@ class MudClient:
                     and e["direction"] not in self.CARDINAL_DIRS:
                 continue
             cands.append(e)
+        if self._bot_fence_vnum and v == self._bot_fence_vnum:
+            cands = [e for e in cands if e["direction"] != self._bot_fence_dir]
         if not cands:
             return None
         forward = [e for e in cands if e["to_vnum"] != self._bot_prev_vnum]
@@ -4470,17 +4500,20 @@ class MudClient:
         self._chaossea_room_done = False
         self._chaossea_engage_at = 0.0
         self._chaossea_engage_whiffs = 0
+        self._chaossea_exits_retry = 0
+        self._chaossea_skip_ddds = 0
+        self._chaossea_room_entered_at = time.time()
         if fight_mode:
             self.write_local(
                 "[chaossea] fight mode - kills every mutant it meets, "
                 "ignores drops, dives any 'down' exit on sight. Chaossea "
-                "off to stop.", "#66cc66")
+                "off to stop. (Needs autocombat ON.)", "#66cc66")
         else:
             self.write_local(
                 "[chaossea] hunting for a chaotic charm + cube of raw chaos "
                 "- examines every mutant, fights the ones carrying a needed "
                 "item (or that aggro/block you), retreats once both are "
-                "found. Chaossea off to stop.",
+                "found. Chaossea off to stop. (Needs autocombat ON.)",
                 "#66cc66")
         # Every later room display is the natural reply to Chaossea's own
         # previous move, but there is no previous move yet at start - so
@@ -4488,7 +4521,15 @@ class MudClient:
         # display that never spontaneously arrives (confirmed live: it
         # took a manual glance to get it moving at all). Same fix Bot uses
         # at its own start (_bot_enter_room(refresh=True)).
-        self.send_line(self.setting("bot_refresh_command", "glance"))
+        if self.map_backend == "sqlite" and self._sql_charting:
+            self.write_local(
+                "[chaossea] WARNING: charting mode is ON - Chaossea's "
+                "movement commands will be buffered by the chart gate and "
+                "nothing will happen. Turn charting off first (#chart off).",
+                "#cc6666")
+            self._chaossea_stop(); return
+        self.send_line(self.setting("bot_refresh_command", "glance"),
+                       gated=False)
         self._chaossea_reschedule(0.6)
 
     def _chaossea_stop(self, why=""):
@@ -4497,6 +4538,8 @@ class MudClient:
             self.root.after_cancel(self._chaossea_job)
             self._chaossea_job = None
         self.write_local(f"[chaossea] {why or 'off'}.", "#aa88cc")
+        if self.map_backend == "sqlite":
+            self.sql_set_status()   # unblock the map pane (guard was _chaossea_on)
 
     def _chaossea_reschedule(self, secs):
         if self._chaossea_job:
@@ -4588,20 +4631,39 @@ class MudClient:
         self._chaossea_examine_pending = False
         self._chaossea_room_ready = False
         self._chaossea_waiting_room = True
+        self._chaossea_exits_retry = 0
+        self._chaossea_room_entered_at = time.time()
         self._chaossea_reschedule(self._bot_safety_s())
 
     def _chaossea_on_prompt(self):
         if not self._chaossea_on:
             return
+        if self._chaossea_skip_ddds > 0:
+            return
         self._chaossea_room_displayed()
 
-    def _chaossea_on_room_packet(self):
+    def _chaossea_on_room_packet(self, has_exits=True):
         if self._chaossea_on:
             self._chaossea_got_ddd = True
-            self._chaossea_room_displayed()
+            if self._chaossea_skip_ddds > 0:
+                self._chaossea_skip_ddds -= 1
+                self._chaossea_mob_lines = []
+                self._chaossea_room_mob = False
+                return
+            self._chaossea_room_displayed(has_exits)
 
-    def _chaossea_room_displayed(self):
+    def _chaossea_room_displayed(self, has_exits=True):
         if self._chaossea_waiting_room and not self._chaossea_room_ready:
+            if not has_exits:
+                # The Sea of Chaos collapses every room to one vnum, and
+                # its DDD packets routinely omit the exits field entirely
+                # (confirmed live - logs/normal-20260623.log:357,544) -
+                # self.exits may still hold a stale, unrelated room's list
+                # in that case (sql_follow_ddd's moved-detection can't
+                # catch it here since the vnum never changes), so don't
+                # let _chaossea_pick_move act on it.
+                self._chaossea_exits_unknown_retry()
+                return
             self._chaossea_room_ready = True
             self._chaossea_room_mobs = len(self._chaossea_mob_lines)
             # 'out' is excluded here too - see _chaossea_pick_move - so a
@@ -4611,6 +4673,29 @@ class MudClient:
                 d for d in self.exits if d != "out"]
             self._chaossea_render_map()
             self._chaossea_reschedule(0)
+
+    def _chaossea_exits_unknown_retry(self):
+        """Re-poke with 'look' and wait for a fresh response instead of
+        trusting self.exits, bounded so a room that never reveals exits
+        stops Chaossea cleanly rather than looping forever."""
+        cap = int(self.setting("chaossea_exits_retry_cap", 5))
+        if self._chaossea_exits_retry >= cap:
+            self._chaossea_stop(
+                "can't determine this room's exits - stuck (no exits in "
+                f"{cap} attempts)")
+            return
+        self._chaossea_exits_retry += 1
+        self.write_local(
+            f"[chaossea] room gave no exits (attempt "
+            f"{self._chaossea_exits_retry}/{cap}) - retrying with 'look'",
+            "#cc9933")
+        # 'look' re-triggers the italic-marker mob/player scan for this
+        # room; clear what the failed attempt already collected so a
+        # successful retry doesn't double-count mob lines.
+        self._chaossea_room_mob = self._chaossea_room_player = False
+        self._chaossea_mob_lines = []
+        self.send_line("look")
+        self._chaossea_reschedule(self._bot_safety_s())
 
     def _chaossea_scan_markers(self, spans, clean):
         ital, under = self._line_markers(spans)
@@ -4674,6 +4759,15 @@ class MudClient:
         self._chaossea_job = None
         if not self._chaossea_on:
             return
+        if self.setting("chaossea_tick_debug"):
+            self.write_local(
+                f"[cs-tick-early] combat={self.in_combat} "
+                f"dead={self.deadman_tripped} "
+                f"was_fight={self._chaossea_was_fighting} "
+                f"pkwait={self._chaossea_post_kill_wait} "
+                f"loot={self._chaossea_pending_loot} "
+                f"wr={self._chaossea_waiting_room} "
+                f"rr={self._chaossea_room_ready}", "#888888")
         if not (self.conn and self.conn.alive):
             self._chaossea_stop("disconnected"); return
         if self.deadman_tripped:
@@ -4724,8 +4818,23 @@ class MudClient:
         if not self._chaossea_waiting_room and not self._chaossea_room_ready:
             self._chaossea_enter_room(); return
         if not self._chaossea_room_ready:
-            self._chaossea_reschedule(0.3); return   # still waiting on display
+            if time.time() - self._chaossea_room_entered_at > self._bot_safety_s():
+                # DDD didn't arrive in time; poke the server for a fresh display.
+                # 'look' often returns a BAD packet without exits, leaving the
+                # bot stuck indefinitely - the configured refresh command (glance)
+                # reliably produces a DDD with exits.
+                self.send_line(self.setting("bot_refresh_command", "glance"))
+                self._chaossea_room_entered_at = time.time()
+            self._chaossea_reschedule(0.3); return
         self._chaossea_waiting_room = False
+        if self.setting("chaossea_tick_debug"):
+            self.write_local(
+                f"[cs-tick] pre={self._chaossea_pre_move_room} "
+                f"got_ddd={self._chaossea_got_ddd} "
+                f"xpend={self._chaossea_examine_pending} "
+                f"done={self._chaossea_room_done} "
+                f"idx={self._chaossea_mob_idx}/{self._chaossea_room_mobs} "
+                f"exits={self.exits}", "#888888")
         if self._chaossea_pre_move_room is not None:
             unchanged = not self._chaossea_got_ddd
             self._chaossea_pre_move_room = None
@@ -4747,6 +4856,24 @@ class MudClient:
                 self._chaossea_reschedule(0.3); return
         # room fully checked (or empty) and nothing to fight here - move on
         self._chaossea_room_done = False
+        path = self._chaossea_try_fast_backtrack()
+        if path:
+            # Dead end in fight mode: pre-advance the temp-map through every
+            # step so _chaossea_cur lands at the frontier, send all directions
+            # at once (server processes them in sequence at wire speed), and
+            # discard the len(path)-1 intermediate DDD packets that arrive
+            # before the one we actually care about.
+            for d in path:
+                self._chaossea_move(d)
+            self._chaossea_last_dir = path[-1]
+            self._chaossea_pre_move_room = self.room
+            self._chaossea_got_ddd = False
+            self._chaossea_pre_move_mobs = self._chaossea_room_mobs
+            self._chaossea_skip_ddds = len(path) - 1
+            for d in path:
+                self.send_line(d)
+            self._chaossea_enter_room()
+            return
         d = self._chaossea_pick_move(self.exits)
         if d is None:
             self._chaossea_stop("no exit from here"); return
@@ -4812,6 +4939,43 @@ class MudClient:
                     seen.add(nxt)
                     queue.append((nxt, path + [d]))
         return None
+
+    def _chaossea_frontier_path(self):
+        """Like _chaossea_frontier_step but returns the full BFS path list
+        to the nearest room with unexplored exits, not just the first step."""
+        start = self._chaossea_cur
+        seen = {start}
+        queue = deque([(start, [])])
+        while queue:
+            room, path = queue.popleft()
+            if path:
+                room_exits = self._chaossea_room_exits.get(room)
+                known = self._chaossea_map.get(room, {})
+                if room_exits and any(e not in known for e in room_exits):
+                    return path
+            for d, nxt in self._chaossea_map.get(room, {}).items():
+                if nxt not in seen:
+                    seen.add(nxt)
+                    queue.append((nxt, path + [d]))
+        return None
+
+    def _chaossea_try_fast_backtrack(self):
+        """In fight mode only: if the current room is a dead end (all exits
+        already mapped, no 'd'), return the full BFS path to the nearest
+        frontier so the caller can speedwalk there in one burst. Returns None
+        to fall through to normal single-step pick_move."""
+        if not self._chaossea_fight_mode:
+            return None
+        exits_no_out = [d for d in (self.exits or []) if d != "out"]
+        if "d" in exits_no_out:
+            return None
+        known = self._chaossea_map.get(self._chaossea_cur, {})
+        if any(d not in known for d in exits_no_out):
+            return None
+        path = self._chaossea_frontier_path()
+        if not path or len(path) <= 1:
+            return None
+        return path
 
     def _chaossea_pick_move(self, exits):
         """Movement priority: always dive a 'down' exit the moment it's
@@ -5069,7 +5233,7 @@ class MudClient:
             f"[run] '{name}' ({area}): {len(steps)} steps, "
             f"{len(self._run_mobs)} target mobs"
             + (", looping" if self._run_loop else "") + resuming
-            + ". Run off to stop. (Stops on deadman.)",
+            + ". Run off to stop. (Needs autocombat ON; stops on deadman.)",
             "#66cc66")
         if not start_idx:           # entrance setup only applies fresh from
             for c in self._run_setup:   # the start room - skip it on resume
@@ -5219,7 +5383,7 @@ class MudClient:
             # gotcha) - don't roam off a live mob after the short settle. While
             # the target is still in the room AND we're inside the engage grace,
             # keep waiting, re-issuing the kill in case the first whiffed on a
-            # keyword/lag; auto-attack finishes it once engaged. Only give up
+            # keyword/lag; autocombat finishes it once engaged. Only give up
             # once the grace fully expires (mob gone, or keyword never took).
             if time.time() - self._run_kill_start < self._run_engage_grace_s():
                 target, _name = self._run_scan_mob()
@@ -5389,6 +5553,9 @@ class MudClient:
     # ordinal). Up/down/enter/out/in/special exits break the 2D map and are
     # left for manual review (see _explore_flag_review), not auto-walked.
     CARDINAL_DIRS = frozenset(("n", "s", "e", "w", "ne", "nw", "se", "sw"))
+    _REVERSE_DIR = {"n": "s", "s": "n", "e": "w", "w": "e",
+                    "ne": "sw", "sw": "ne", "nw": "se", "se": "nw",
+                    "u": "d", "d": "u"}
     # Explore keeps charting ON (gated, position confirmed by each room packet)
     # for short hops between stubs - so it can never chart from a stale room.
     # Only a jump of MORE than this many rooms drops charting for a fast walk,
@@ -7175,6 +7342,7 @@ class MudClient:
         missions, used, maxq = viking.parse_mission_board(
             self._missionlist_lines)
         self._missionlist_capture = False
+        self._missionlist_saw_board = False
         self._missionlist_lines = []
         if not missions:
             self.write_local("[missionlist] no missions parsed (unexpected "
@@ -7219,7 +7387,12 @@ class MudClient:
         chaining into `vmission list`), then the `vmission list` readout
         (finalizing on its footer Quota: line), each with a safety line
         cap, then parse + recommend. Lines are still displayed normally -
-        capture only reads them."""
+        capture only reads them.
+
+        `vmission list` (and `vmission newbie`) may now prepend the newbie
+        errand board before the 'Global Mission Board' section. We ignore all
+        lines until that banner appears so `_missionlist_lines` only ever
+        contains the regular mission board - identical to the old output."""
         if self._vtradestock_capture:
             self._vtradestock_lines.append(clean)
             if "Daler:" in clean or len(self._vtradestock_lines) > 60:
@@ -7227,8 +7400,14 @@ class MudClient:
             return
         if not self._missionlist_capture:
             return
+        if not self._missionlist_saw_board:
+            if "Global Mission Board" in clean:
+                self._missionlist_saw_board = True
+                self._missionlist_lines.append(clean)
+            return
         self._missionlist_lines.append(clean)
         if "Quota:" in clean or len(self._missionlist_lines) > 200:
+            self._missionlist_saw_board = False
             self._missionlist_finish()
 
     # ---- Viking newbie-errand board read + best-pick advisor (VNlist) --
@@ -9342,9 +9521,9 @@ CLIENT COMMANDS
   #histmin <n> | #separator <char>
   #go <name> | #stop | #speedruns [filter] | #maploc
   Bot | Bot mapless | Bot off   (roam the current room's AREA, fighting
-      aggro mobs as they engage, then moving on; needs the sqlite map and
-      the two room-marker asets - see #markers. Empty rooms are skipped
-      instantly; rooms with a non-party player are ceded.
+      aggro mobs as they engage, then moving on; needs the sqlite map,
+      autocombat, and the two room-marker asets - see #markers. Empty rooms
+      are skipped instantly; rooms with a non-party player are ceded.
       'Bot mapless' drops the map requirement entirely - roams by direction
       only, for zones that can't be charted, e.g. every room sharing one
       vnum. No area-left stop; deadman trip stops in place, not walk-home.)

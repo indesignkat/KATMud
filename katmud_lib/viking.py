@@ -246,6 +246,12 @@ def parse_vtrade_stock(lines):
 _MISSION_ID_RE = re.compile(r"\[(\d{3,6})\]")
 _MISSION_GOOD_RE = re.compile(
     r"(\d+)\s+(" + "|".join(GOOD_NAMES.values()) + r")\b", re.IGNORECASE)
+# Matches the 'Need: stock/required good' line added in newer vmission output.
+# Format: 'Need: 52/13 grain, 8/5 timber' -> captures (13, 'grain'), (5, 'timber').
+# Prefer this over prose-matching when present to avoid double-counting goods
+# that also appear in the description text.
+_MISSION_NEED_RE = re.compile(
+    r"\d+/(\d+)\s+(" + "|".join(GOOD_NAMES.values()) + r")\b", re.IGNORECASE)
 _MISSION_REWARD_RE = re.compile(
     r"Reward:\s*(\d+)\s*rep\s*\+\s*([\d,]+)\s*daler", re.IGNORECASE)
 _MISSION_TOWN_RE = re.compile(r"\[\d+\]\s*([A-Za-z'\s]+?)\s*[:(]")
@@ -265,7 +271,10 @@ def parse_mission_board(lines):
         end = ids[i + 1][0] if i + 1 < len(ids) else len(text)
         chunk = text[pos:end]
         reqs = [(int(q), g.lower())
-                for q, g in _MISSION_GOOD_RE.findall(chunk)]
+                for q, g in _MISSION_NEED_RE.findall(chunk)]
+        if not reqs:
+            reqs = [(int(q), g.lower())
+                    for q, g in _MISSION_GOOD_RE.findall(chunk)]
         rm = _MISSION_REWARD_RE.search(chunk)
         if not rm or not reqs:
             continue

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""katmud.pyw - KatMUD entry point.
+"""katmud.pyw - KatMUD entry point (formerly pymud).
 
 No arguments      -> character picker (transient launcher)
 <profile-id> arg  -> client for that profile, directly

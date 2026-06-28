@@ -106,6 +106,6 @@
     "post_kill_resume_timeout": 90
   },
   "corpse": {
-    "solo": "merc bury;vrite;vgather;get coins;lineofsight;glance;vrest"
+    "solo": "merc bury;vrite;vgather;g;gg;lll;l;vrest"
   }
 }
