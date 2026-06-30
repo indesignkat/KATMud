@@ -114,7 +114,6 @@
   ],
   "settings": { "map_backend": "sqlite" },
   "keys": {
-    "KP_Divide": "lll",
     "KP_0": "d",
     "KP_Decimal": "u"
   }

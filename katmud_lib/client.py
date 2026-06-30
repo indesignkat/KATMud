@@ -318,8 +318,10 @@ class MudClient:
         self._bot_home_reason = ""      # _bot_stop() message once home (deadman
                                         # vs. area-cleared - whichever armed it)
         self._bot_recheck = False       # re-look this room (start / post-combat)
+        self._bot_fence_dest = None     # room on the far side of the fence exit
         self._bot_no_combat_rooms = 0   # Hunt-only: consecutive rooms entered
                                         # with no fight; resets on any combat
+        self._hunt_filter = None        # optional mob-name filter (Hunt n zombie)
         self._hunt_attacked = False     # swung at this room's mob, waiting for
                                         # the fight to register (autocombat then
                                         # finishes it - don't roam meanwhile)
@@ -578,18 +580,14 @@ class MudClient:
         # slow-but-authoritative BAD packet, so the player can never
         # outrun the charting.
         self._sql_cur_vnum = None       # current room (DDD-confirmed)
-        # 3s sometimes truncates the MIP tilde id (drops leading digits);
-        # only the BAD bracket carries the full id. Two recovery maps, both
-        # feeding _sql_resolve_low5 so bracket-less DDD packets resolve to the
-        # full id: low-5 -> high part (6-digit rooms, seeded from the db) and
-        # an OBSERVED truncated-tilde -> full map (any width, learned only
-        # from real bracket mismatches so a genuine low room is never lifted).
+        # 6-digit room ids: high part keyed by low-5, seeded from the db at
+        # open so truncated DDD ids resolve to the full id immediately.
         self._sql_vnum_hi = {}
-        self._sql_trunc = {}
         self._sql_charting = False      # chart mode on? (Chart / #map on)
         self._sql_pending = None        # new room held until rating
         self._sql_in_house = False      # inside a [House]; not charted
         self._sql_bad = None            # last BAD payload, awaiting DDD
+        self._viking_biome_on = False   # in the biome (room 50960); main map suppressed
         self._sql_ddd = None            # last DDD payload, awaiting BAD
         self._sql_rating_pending = False  # rating sent, awaiting name
         self._sql_rating_active = False   # name seen; swallow the burst
@@ -1512,7 +1510,6 @@ class MudClient:
         # Pre-learn the high part of every full (6+ digit) charted room so
         # truncated DDD ids resolve to the full room from the first packet.
         self._sql_vnum_hi = {}
-        self._sql_trunc = {}
         for r in self.mapdb.conn.execute(
                 "SELECT vnum FROM rooms WHERE vnum > 99999"):
             self._sql_learn_vnum(r["vnum"])
@@ -1524,52 +1521,29 @@ class MudClient:
     # refreshes the displayed room name. CHARTING mode ignores DDD as a
     # location source and waits for BAD - the authoritative movement
     # signal - then charts the room behind the lockstep gate.
-    # ---- 3s 5-digit tilde truncation (see mapparse.is_truncated_id) ----
     def _sql_learn_vnum(self, vnum):
         """Record a full (6+ digit) id's high part keyed by its low 5, so a
         later truncated DDD id can be lifted back to the full id."""
         if vnum is not None and vnum > 99999:
             self._sql_vnum_hi[vnum % 100000] = vnum - (vnum % 100000)
 
-    def _sql_note_trunc(self, tilde, bracket):
-        """Record an OBSERVED tilde-truncation (a BAD bracket that reveals the
-        full id) so a later bracket-less DDD carrying the same truncated tilde
-        resolves to the full id. Learned only from real packets - never
-        derived speculatively - so a genuine low-numbered room is never
-        wrongly lifted."""
-        if mapparse.is_truncated_id(tilde, bracket):
-            self._sql_trunc[tilde] = bracket
-            self._sql_learn_vnum(bracket)
-
     def _sql_resolve_low5(self, vnum):
-        """Lift a (possibly truncated) wire id to its full id. First an
-        OBSERVED truncated-tilde -> full mapping (any width, learned from a
-        real bracket mismatch); else the learned high part for its low 5
-        (6-digit rooms). Idempotent on ids already full; unknown ids pass
-        through unchanged. NOTE: a learned low-5 collision could lift a
-        genuine <100000 room - acceptable on 3s (the truncated ids ARE the
-        6-digit rooms; no real rooms clash in that range)."""
+        """Lift a 5-digit wire id to its full 6-digit id using the high part
+        pre-seeded from the DB. Idempotent on ids already full."""
         if vnum is None:
             return None
-        full = self._sql_trunc.get(vnum)
-        if full is not None:
-            return full
         hi = self._sql_vnum_hi.get(vnum % 100000)
         return hi + (vnum % 100000) if hi else vnum
 
     def _sql_canon_vnum(self, tilde, bracket=None):
-        """Canonical full id for a wire room id. A bracket that reveals
-        truncation gives the full id directly (and is learned); otherwise we
-        fall back to the learned/charted resolution."""
-        if mapparse.is_truncated_id(tilde, bracket):
-            self._sql_note_trunc(tilde, bracket)
-            return bracket
         return self._sql_resolve_low5(tilde)
 
     def sql_on_bad(self, data):
         self._sql_bad = data
+        self._viking_biome_on = data.startswith('[50960]')
         if self._sql_charting:
-            self.sql_reconcile_chart()
+            if not self._viking_biome_on:
+                self.sql_reconcile_chart()
         else:
             self.sql_follow_bad(data)
 
@@ -1670,9 +1644,6 @@ class MudClient:
         if pr is None:                      # BAD with no id: unusable
             self._sql_bad = None
             return
-        # charting doesn't go through sql_follow_bad, so learn the bracket's
-        # truncation here too - it's how the matching DDD (no bracket) resolves.
-        self._sql_note_trunc(pr.vnum, pr.bracket_vnum)
         pe = mapparse.parse_exits(self._sql_ddd)
         if pe.vnum is not None and pe.vnum != pr.vnum:
             self._sql_chart_dbg(f"BAD ~{pr.vnum} / DDD ~{pe.vnum} disagree "
@@ -1755,23 +1726,14 @@ class MudClient:
         self.sql_send_rating()
 
     def _sql_migrate_truncated(self, obs):
-        """If this room was previously charted under a truncated id (before we
-        learned to recover the full id from the bracket), re-key that old row
-        to the full id so revisiting heals the data. Tries both truncation
-        shapes - low-5 (6-digit rooms) and leading-digit-dropped (the live
-        [1774]~774 case) - guarded by a short-desc match so two genuinely
-        different rooms sharing a truncated form are never merged."""
+        """If this room was previously charted under a truncated id (before the
+        6-digit high part was known), re-key that old row to the full id so
+        revisiting heals the data. Guarded by a short-desc match so two
+        genuinely different rooms sharing the low-5 form are never merged."""
         full = obs.vnum
         if self.mapdb.has_room(full):
             return
-        s = str(full)
         twins = {full % 100000}                 # 6-digit low-5 (legacy heal)
-        # The leading-digit-dropped twin ([1774]~774) is only attempted when
-        # we ACTUALLY observed this id truncated on the wire - otherwise a
-        # genuine low-numbered room sharing a short_desc (maze rooms!) could
-        # be wrongly merged.
-        if full in self._sql_trunc.values() and len(s) > 1:
-            twins.add(int(s[1:]))
         for twin in twins:
             if twin == full or twin <= 0:
                 continue
@@ -2108,6 +2070,10 @@ class MudClient:
         very next packet, every time (confirmed live: the pane never
         showed the path at all)."""
         if self._chaossea_on:
+            return
+        if self._viking_biome_on:
+            self.map.set_graph(None, status="viking biome - following",
+                               mapping=False)
             return
         v = self._sql_cur_vnum
         if v is None or self.mapdb is None:
@@ -3221,15 +3187,21 @@ class MudClient:
                    else " (mapless)")
                 + f". {running} off to stop.", "#cc9933")
             return
-        if mode == "hunt" and a in self._REVERSE_DIR:
+        words = a.split()
+        first = words[0] if words else ""
+        if mode == "hunt" and first in self._REVERSE_DIR:
             fence_vnum = self._sql_cur_vnum
             if fence_vnum is None:
                 self.write_local("[hunt] location unknown.", "#cc9933"); return
-            self.send_line(a)
+            self.send_line(first)
+            filt = " ".join(words[1:]) or None
             self._bot_start(mode, fence_vnum=fence_vnum,
-                            fence_dir=self._REVERSE_DIR[a])
+                            fence_dir=self._REVERSE_DIR[first],
+                            hunt_filter=filt)
             return
-        self._bot_start(mode, mapless=(a == "mapless"))
+        mapless = (first == "mapless")
+        filt = first if (first and not mapless) else None
+        self._bot_start(mode, mapless=mapless, hunt_filter=filt)
 
     # ============================================================ Agent
     # Autonomous assistant (agent_spec.md). SCAFFOLD STAGE: the tick loop
@@ -3627,7 +3599,7 @@ class MudClient:
         row = self.mapdb.get_room(vnum)
         return row["area_id"] if row else None
 
-    def _bot_start(self, mode="aggro", mapless=False, fence_vnum=None, fence_dir=None):
+    def _bot_start(self, mode="aggro", mapless=False, fence_vnum=None, fence_dir=None, hunt_filter=None):
         verb = "bot" if mode == "aggro" else "hunt"
         v = None
         area_id = None
@@ -3659,12 +3631,19 @@ class MudClient:
         self._bot_prev_vnum = None
         self._bot_fence_vnum = fence_vnum
         self._bot_fence_dir = fence_dir
+        self._bot_fence_dest = None
+        if fence_vnum and fence_dir and self.mapdb:
+            for e in self.mapdb.iter_exits(fence_vnum):
+                if e["direction"] == fence_dir:
+                    self._bot_fence_dest = e["to_vnum"]
+                    break
         self._bot_in_combat = self.in_combat
         self._bot_combat_end = 0.0
         self._bot_homing = False
         self._bot_home_reason = ""
         self._bot_no_combat_rooms = 0
         self._bot_recheck = True        # first tick looks at the current room
+        self._hunt_filter = hunt_filter
         self._hunt_attacked = False
         self._hunt_whiffs = 0
         self._hunt_lines = []
@@ -3683,6 +3662,8 @@ class MudClient:
         if mode == "hunt":
             aa = (self.setting("autoattack_command", "") or "").strip()
             how = (f"autoattack '{aa}'" if aa else "kill <keyword>")
+            if hunt_filter:
+                how += f", filter='{hunt_filter}'"
             limit = self.wander_clear_limit if mapless else self.hunt_clear_limit
             clear = (f", or {limit} rooms with no combat," if limit else "")
             self.write_local(
@@ -4252,6 +4233,8 @@ class MudClient:
             cands.append(e)
         if self._bot_fence_vnum and v == self._bot_fence_vnum:
             cands = [e for e in cands if e["direction"] != self._bot_fence_dir]
+        if self._bot_fence_dest:
+            cands = [e for e in cands if e["to_vnum"] != self._bot_fence_dest]
         if not cands:
             return None
         forward = [e for e in cands if e["to_vnum"] != self._bot_prev_vnum]
@@ -4302,14 +4285,14 @@ class MudClient:
         aa = (self.setting("autoattack_command", "") or "").strip()
         if aa:
             if "{t}" in aa:
-                kw = self._bot_kill_keyword()
+                kw = self._hunt_filter or self._bot_kill_keyword()
                 if not kw:
                     return False
                 self.send_line(aa.replace("{t}", kw))
             else:
                 self.send_line(aa)
             return True
-        kw = self._bot_kill_keyword()
+        kw = self._hunt_filter or self._bot_kill_keyword()
         if kw:
             self.send_line(f"kill {kw}")
             return True
@@ -4439,7 +4422,7 @@ class MudClient:
         if cur is None:
             self._bot_job = self.root.after(1500, self._bot_home_step)
             return
-        if home is None or cur == home:
+        if home is None or cur == home or cur == self._bot_fence_dest:
             self._bot_stop(self._bot_home_reason or "back at start room")
             return
         edges = self.mapdb.find_path(cur, home)
@@ -6294,6 +6277,13 @@ class MudClient:
                         if self._bot_on or self._run_on or self._chaossea_on:
                             self._scan_pwho(clean)       # seed party whitelist
                             self._resume_scan_line(clean)  # post-kill hold
+                        if (self._bot_on and self._hunt_filter
+                                and self._hunt_attacked
+                                and f"there is no {self._hunt_filter}"
+                                    in clean.lower()):
+                            self._bot_room_mob = False
+                            self._hunt_attacked = False
+                            self._bot_reschedule(0)
                         if self._bot_on and self._bot_waiting_room \
                                 and not self.in_combat:
                             self._bot_scan_markers(spans, clean)
@@ -8287,11 +8277,9 @@ class MudClient:
         Separate multiple commands with '/' (NOT the ';' command separator,
         which would split the line before this command sees it): e.g.
         `Corpse bury corpse/glance` is stored as `bury corpse;glance`.
-        Saved to the guild layer (corpse routines are guild-specific); if
-        the character has no guild, falls back to the character layer."""
+        Saved to the character layer."""
         arg = arg.strip()
-        scope = "guild" if (self.guild and self.guild.lower() != "none") \
-            else "character"
+        scope = "character"
         low = arg.lower()
         if not arg:
             cfg = self.corpse_cfg

@@ -7,10 +7,6 @@
   "login_commands": [],
   "aliases": {},
   "triggers": [],
-  "corpse": {
-    "solo": "cast oceans embrace;lineofsight;glance",
-    "toggle": "harvest"
-  },
   "gags": [],
   "keys": {},
   "mip": {},

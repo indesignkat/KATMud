@@ -7,10 +7,6 @@
   "login_commands": [],
   "aliases": {},
   "triggers": [],
-  "corpse": {
-    "solo": "perform rite of renewal;gather;lineofsight;glance",
-    "toggle": "harvest"
-  },
   "gags": [],
   "keys": {},
   "mip": {},

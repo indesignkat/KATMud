@@ -10,10 +10,6 @@
   "login_commands": [],
   "aliases": {},
   "triggers": [],
-  "corpse": {
-    "solo": "preserve;=get corpse;get corpse;get coins;lineofsight;glance",
-    "toggle": "harvest"
-  },
   "gags": [],
   "keys": {},
   "mip": {},

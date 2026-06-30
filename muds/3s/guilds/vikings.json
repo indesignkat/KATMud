@@ -104,8 +104,5 @@
     ],
     "post_kill_resume_vitals_margin": 20,
     "post_kill_resume_timeout": 90
-  },
-  "corpse": {
-    "solo": "merc bury;vrite;vgather;g;gg;lll;l;vrest"
   }
 }

@@ -6,10 +6,6 @@
   "login_commands": [],
   "aliases": {},
   "triggers": [],
-  "corpse": {
-    "solo": "study corpse;bury corpse;lineofsight;glance",
-    "toggle": "harvest"
-  },
   "gags": [],
   "keys": {},
   "mip": {},

@@ -249,6 +249,8 @@ class Picker(tk.Tk):
                   bg="#335544", fg="#ffffff").pack(side="left", padx=5)
         tk.Button(btns, text="Edit", command=self._edit, bg="#554433",
                   fg="#ffffff", width=8).pack(side="left", padx=5)
+        tk.Button(btns, text="Delete", command=self._delete, bg="#553333",
+                  fg="#ffffff", width=8).pack(side="left", padx=5)
         btns.pack(pady=10)
 
         self._fill()
@@ -318,6 +320,21 @@ class Picker(tk.Tk):
             return
         entry = profiles.get(self.data, pid)
         ProfileForm(self, self.data, entry=entry, on_save=self._fill)
+
+    def _delete(self):
+        pid = self._selected_id()
+        if not pid:
+            return
+        entry = profiles.get(self.data, pid)
+        name = entry.get("display_name") or pid
+        if not messagebox.askyesno(
+                "Delete profile",
+                f"Remove '{name}' from the picker?\n\n"
+                "The character file and stored password are kept.",
+                parent=self):
+            return
+        profiles.delete(self.data, pid)
+        self._fill()
 
 
 def run():

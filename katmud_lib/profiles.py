@@ -81,6 +81,14 @@ def touch(data, profile_id):
         save(data)
 
 
+def delete(data, profile_id):
+    """Remove a profile entry. Does NOT touch the character file or
+    stored credential - those may be shared by sibling profiles."""
+    data["profiles"] = [p for p in data["profiles"]
+                        if p.get("id") != profile_id]
+    save(data)
+
+
 def upsert(data, entry):
     """Insert or replace by id, scaffold the character file if absent
     (spec 1.3 / 2.3: an existing characters/<name>.json is REUSED, not

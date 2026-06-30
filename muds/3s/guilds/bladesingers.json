@@ -39,10 +39,6 @@
       "command": "say hi"
     }
   ],
-  "corpse": {
-    "solo": "merc bury;salute;bury;get coins;get plate;revalrie;lineofsight;glance",
-    "party": "mw;lineofsight;glance"
-  },
   "gags": [
     "Casting this spell would not benefit you at this time.",
     "Doing combat strategy: rejuvenate.",

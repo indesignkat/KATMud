@@ -19,10 +19,6 @@
       "_cooldown_note": "Re-sending 'tactical' while one is still active echoes a status line that re-matches this trigger -> loop. cooldown (secs) blocks the refire. Tune toward the tac-enhance duration if it still misfires; the global flood breaker backstops regardless."
     }
   ],
-  "corpse": {
-    "solo": "recharge;reclaim;stack all;lineofsight;glance",
-    "toggle": "harvest"
-  },
   "gags": [],
   "keys": {},
   "mip": {},
