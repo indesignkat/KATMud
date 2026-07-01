@@ -7414,6 +7414,12 @@ class MudClient:
                              "#cc9933")
             return
         metric = (arg.strip().lower() or "daler")
+        if metric == "clear":
+            self._newbie_picks = []
+            self.update_info()
+            self.write_local("[vnlist] cleared the newbie errand picks.",
+                             "#ffcc44")
+            return
         if metric not in viking.NEWBIE_METRICS:
             self.write_local(
                 f"[vnlist] unknown metric '{metric}' - one of "
@@ -9576,11 +9582,13 @@ CLIENT COMMANDS
   Missionlist               (Viking: send 'vmission list' and recommend
       which missions to accept for the highest total daler without
       exceeding current warehouse stock or your remaining daily quota.)
-  VNlist [metric]            (Viking: send 'vmission newbie' and recommend
+  VNlist [metric] | clear    (Viking: send 'vmission newbie' and recommend
       the highest-'metric' newbie errands up to your remaining daily
       quota. metric is 'daler' (default) or one of timber/iron/furs/fish/
       grain/mead/amber - newbie errands cost nothing to accept, so it's a
-      plain top-N pick, no stock to conflict over.)
+      plain top-N pick, no stock to conflict over. `VNlist clear` wipes
+      the Newbie Errands section from the info pane without re-reading
+      the board.)
   Scan [name] | #mobs | #mob <name>   (mob database: Scan/#mob <name>
       searches, no arg = count. Any character can look up; auto-filled from
       Din's 'vscan1' reports, keyed by name+area of the current room.)
