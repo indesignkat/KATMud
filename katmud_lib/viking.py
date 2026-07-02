@@ -227,6 +227,35 @@ def parse_vtrade_stock(lines):
     return totals
 
 
+VTRADE_PRICE_RE = re.compile(
+    r"^-~\*\s+([A-Za-z]+)\s+([\d,]+)\s+daler\b", re.IGNORECASE)
+
+
+def parse_vtrade_prices(lines):
+    """A captured `vtrade prices` readout -> {good: daler per unit}. Each
+    good appears on one bordered line as '<Name>  <n> daler  [ min - max]';
+    the header/border lines don't match the regex and are skipped."""
+    prices = {}
+    for line in lines:
+        m = VTRADE_PRICE_RE.match(line)
+        if not m:
+            continue
+        good = m.group(1).lower()
+        if good not in _GOOD_SET:
+            continue
+        try:
+            prices[good] = int(m.group(2).replace(",", ""))
+        except ValueError:
+            continue
+    return prices
+
+
+def goods_value(goods, prices):
+    """[(qty, good), ...] -> total daler value at current market prices
+    (see parse_vtrade_prices). A good missing from `prices` counts 0."""
+    return sum(q * prices.get(g, 0) for q, g in goods)
+
+
 # --- `vmission list` board capture + pick optimizer (Missionlist) -----
 # Unlike the live MIP feeds above, the global mission board only exists as
 # the text readout of the `vmission list` command (see client.cmd_
@@ -291,33 +320,44 @@ def parse_mission_board(lines):
     return missions, used, maxq
 
 
+def _mission_net(mission):
+    """The optimization value of one mission: its 'net' daler (reward
+    minus the market value of the goods delivered, annotated by the
+    caller from a `vtrade prices` capture), falling back to the raw
+    reward when no prices were captured."""
+    return mission.get("net", mission["daler"])
+
+
 def _greedy_mission_picks(missions, stock, max_picks):
     """Approximate fallback for best_mission_picks: only used when the
-    candidate set is too large to brute-force. Highest-daler-first, skip
-    whatever doesn't fit remaining stock."""
+    candidate set is too large to brute-force. Highest-net-first, skip
+    whatever doesn't fit remaining stock; stop once net goes non-positive
+    (a losing mission never helps the total)."""
     remaining = dict(stock)
     chosen = []
-    for m in sorted(missions, key=lambda m: m["daler"], reverse=True):
-        if len(chosen) >= max_picks:
+    for m in sorted(missions, key=_mission_net, reverse=True):
+        if len(chosen) >= max_picks or _mission_net(m) <= 0:
             break
         if all(remaining.get(g, 0) >= q for q, g in m["requirements"]):
             for q, g in m["requirements"]:
                 remaining[g] -= q
             chosen.append(m)
-    return (chosen, sum(m["daler"] for m in chosen),
+    return (chosen, sum(_mission_net(m) for m in chosen),
             sum(m["rep"] for m in chosen))
 
 
 def best_mission_picks(missions, stock, max_picks):
     """Exact search over every combination of up to `max_picks` missions
-    (the remaining daily quota) for the one maximizing total daler without
-    exceeding `stock` (a {good: available units} dict) for any single
-    good - missions competing for the same good (e.g. two grain deliveries)
-    can't both be picked if stock can't cover both. Ties broken by total
-    rep. The mission board and quota are small enough in practice (~20-30
-    entries, quota in the single digits) that full enumeration is cheap;
-    falls back to a greedy approximation if the candidate set ever grows
-    large enough that it wouldn't be."""
+    (the remaining daily quota) for the one maximizing total net daler
+    (see _mission_net - reward minus market value of the delivered goods,
+    so a mission that pays less than its goods are worth is never picked)
+    without exceeding `stock` (a {good: available units} dict) for any
+    single good - missions competing for the same good (e.g. two grain
+    deliveries) can't both be picked if stock can't cover both. Ties
+    broken by total rep. The mission board and quota are small enough in
+    practice (~20-30 entries, quota in the single digits) that full
+    enumeration is cheap; falls back to a greedy approximation if the
+    candidate set ever grows large enough that it wouldn't be."""
     max_picks = max(0, min(max_picks, len(missions)))
     if max_picks == 0 or not missions:
         return [], 0, 0
@@ -325,7 +365,7 @@ def best_mission_picks(missions, stock, max_picks):
                         for k in range(max_picks + 1))
     if total_combos > 300_000:
         return _greedy_mission_picks(missions, stock, max_picks)
-    best_combo, best_daler, best_rep = [], 0, 0
+    best_combo, best_net, best_rep = [], 0, 0
     for k in range(1, max_picks + 1):
         for combo in itertools.combinations(missions, k):
             used = {}
@@ -340,11 +380,11 @@ def best_mission_picks(missions, stock, max_picks):
                     break
             if not ok:
                 continue
-            daler = sum(m["daler"] for m in combo)
+            net = sum(_mission_net(m) for m in combo)
             rep = sum(m["rep"] for m in combo)
-            if daler > best_daler or (daler == best_daler and rep > best_rep):
-                best_combo, best_daler, best_rep = list(combo), daler, rep
-    return best_combo, best_daler, best_rep
+            if net > best_net or (net == best_net and rep > best_rep):
+                best_combo, best_net, best_rep = list(combo), net, rep
+    return best_combo, best_net, best_rep
 
 
 # --- `vmission newbie` board capture + pick optimizer (VNlist) --------
@@ -408,18 +448,22 @@ def parse_newbie_board(lines):
 
 def _newbie_value(mission, metric):
     """The amount of `metric` (daler, or a trade-good name) one errand
-    yields - 0 for a good it doesn't carry."""
+    yields - 0 for a good it doesn't carry. For 'daler' this is the 'net'
+    value (daler plus the market value of the goods awarded, annotated by
+    the caller from a `vtrade prices` capture), falling back to the raw
+    daler when no prices were captured."""
     if metric == "daler":
-        return mission["daler"]
+        return mission.get("net", mission["daler"])
     return sum(q for q, g in mission["goods"] if g == metric)
 
 
 def best_newbie_picks(missions, max_picks, metric="daler"):
     """Top `max_picks` newbie errands ranked by total `metric` yield (one
-    of NEWBIE_METRICS). Unlike best_mission_picks there's no stock to
-    conflict over - newbie errands are free - so the best set is just the
-    highest-yield entries, capped at the remaining daily quota. Ties
-    broken by daler. Returns (chosen, total_metric, total_daler)."""
+    of NEWBIE_METRICS; 'daler' means net daler - see _newbie_value).
+    Unlike best_mission_picks there's no stock to conflict over - newbie
+    errands are free - so the best set is just the highest-yield entries,
+    capped at the remaining daily quota. Ties broken by daler. Returns
+    (chosen, total_metric, total_daler)."""
     max_picks = max(0, min(max_picks, len(missions)))
     chosen = sorted(
         missions, key=lambda m: (-_newbie_value(m, metric), -m["daler"])

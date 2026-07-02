@@ -30,7 +30,8 @@ from tkinter import font as tkfont
 from tkinter import simpledialog
 
 from . import (blade, changeling, config, credentials, dialogs, mapdata,
-               mapparse, mapsql, mobdb, necro, paths, profiles, viking)
+               mapparse, mapsql, mobdb, necro, paths, picker, profiles,
+               viking)
 from .protocol import (MudConnection, parse_composite,
                        strip_mip_colors, tag_to_style)
 from .widgets import MapPane, VitalsBar
@@ -213,10 +214,16 @@ class MudClient:
         self._vtradestock_capture = False  # arming flag for `vtrade stock`
         self._vtradestock_lines = []    # accumulated `vtrade stock` lines
         self._vtrade_stock = {}         # last parsed `vtrade stock` totals
+        self._vtradeprices_capture = False  # arming flag for `vtrade prices`
+        self._vtradeprices_lines = []   # accumulated `vtrade prices` lines
+        self._vtradeprices_next = None  # step to chain into after the capture
+        self._vtrade_prices = {}        # last parsed `vtrade prices` map
         self._missionlist_capture = False  # arming flag for `vmission list`
         self._missionlist_lines = []    # accumulated `vmission list` lines
         self._missionlist_saw_board = False  # True once 'Global Mission Board' seen
         self._mission_picks = []        # current Missionlist recommendation
+        self._missionlist_top5 = False  # `Missionlist top5` quota override
+        self._vnlist_top5 = False       # `VNlist top5` quota override
         self._vnlist_capture = False    # arming flag for `vmission newbie`
         self._vnlist_lines = []         # accumulated `vmission newbie` lines
         self._vnlist_metric = "daler"   # VNlist's optimization target
@@ -368,6 +375,8 @@ class MudClient:
         self._chaossea_on = False
         self._chaossea_fight_mode = False  # True = `Chaossea fight`: kill
                                            # every mutant, ignore loot/items
+        self._chaossea_dm_paused = False   # deadman: paused in place, all
+                                           # state held; resumes on release
         self._chaossea_job = None
         self._chaossea_map = {}         # fake_vnum -> {direction: fake_vnum}
         self._chaossea_room_exits = {}  # fake_vnum -> live exits seen there
@@ -773,6 +782,9 @@ class MudClient:
         m_tools.add_separator()
         m_tools.add_command(label="Reload cascade",
                             command=self.reload_cascade)
+        m_tools.add_separator()
+        m_tools.add_command(label="Switch Character...",
+                            command=self._switch_character)
         menubar.add_cascade(label="Tools", menu=m_tools)
         self.root.config(menu=menubar)
         self.root.bind("<Control-equal>", lambda e: self.bump_font(+1))
@@ -1837,6 +1849,17 @@ class MudClient:
                 f"no-BAD timeout after '{self._sql_chart_move}' from "
                 f"{self._sql_chart_from} - released; will still chart it if "
                 "its packet arrives before the next move")
+            self._sql_chart_from = self._sql_chart_move = None
+            # Open the gate but DELAY the pump one beat: Explore now queues
+            # whole plans in the buffer, so an instant pump would send the
+            # next move (dropping the stash) the moment this timer fires -
+            # a BAD landing just past the window would then chart under the
+            # WRONG move. The grace mirrors the ~0.4s tick gap that used to
+            # protect the stash by accident. Pump is a no-op if an arrival
+            # (or a user command) already claimed the gate meanwhile.
+            self._sql_gate_open = True
+            self.root.after(400, self._sql_pump)
+            return
         self._sql_chart_from = self._sql_chart_move = None
         self._sql_gate_release()
 
@@ -4443,28 +4466,62 @@ class MudClient:
             else:
                 self.write_local("Chaossea is not running.", "#cc9933")
             return
+        if a == "clear":
+            # The maze regenerates between visits (leave to train skills,
+            # come back), so the temp map from the last trip is garbage.
+            # Wipe it and re-seed from the room we stand in - WITHOUT
+            # restarting the run: mode and found-item progress (charm/cube
+            # are real inventory) survive, unlike a stop/start.
+            self._chaossea_clear_map()
+            if self._chaossea_on:
+                self.write_local(
+                    "[chaossea] temp map cleared - re-mapping from this "
+                    "room.", "#66cc66")
+                self.send_line(self.setting("bot_refresh_command", "glance"),
+                               gated=False)
+                self._chaossea_reschedule(0.6)
+            else:
+                self.write_local(
+                    "[chaossea] temp map cleared. (Starting Chaossea "
+                    "clears it automatically too.)", "#aa88cc")
+            return
         if self._chaossea_on:
             self.write_local(
                 "Chaossea already running. Chaossea off to stop.",
                 "#cc9933")
             return
+        if a == "resume":
+            self._chaossea_resume()
+            return
         if a and a not in ("fight", "fighting"):
             self.write_local(
-                "Chaossea [fight] | Chaossea off - unrecognized arg "
-                f"'{a}'.", "#cc9933")
+                "Chaossea [fight] | Chaossea resume | Chaossea clear | "
+                f"Chaossea off - unrecognized arg '{a}'.", "#cc9933")
             return
         self._chaossea_start(fight_mode=a in ("fight", "fighting"))
 
-    def _chaossea_start(self, fight_mode=False):
-        self._chaossea_on = True
-        self._chaossea_fight_mode = fight_mode
+    def _chaossea_clear_map(self):
+        """Reset the temp map + room-cycle state to a fresh f00001 seeded
+        at the CURRENT room. The single reset used by both `_chaossea_start`
+        and `Chaossea clear` (a NORMAL re-entry lands in a regenerated
+        maze) - one body, so a new per-run field can't be reset in one
+        path and leak stale in the other (the bug class that bit this
+        feature three times). Deliberately does NOT touch run identity
+        (_chaossea_on / fight_mode / dm_paused) or found-item progress
+        (has_charm / has_cube - real inventory, survives a map wipe)."""
         self._chaossea_map = {}
         self._chaossea_room_exits = {}
         self._chaossea_cur = "f00001"
         self._chaossea_next_id = 1
         self._chaossea_last_dir = None
-        self._chaossea_has_charm = False
-        self._chaossea_has_cube = False
+        self._chaossea_reset_cycle()
+
+    def _chaossea_reset_cycle(self):
+        """Reset only the VOLATILE state - what the loop is doing right
+        now (room readiness, examine/engage progress, post-kill waits) -
+        never what it has LEARNED (map/position/found items). Split out of
+        _chaossea_clear_map so `Chaossea resume` can restart the loop while
+        keeping the learned state."""
         self._chaossea_room_mobs = 0
         self._chaossea_mob_idx = 0
         self._chaossea_examine_buf = []
@@ -4486,6 +4543,14 @@ class MudClient:
         self._chaossea_exits_retry = 0
         self._chaossea_skip_ddds = 0
         self._chaossea_room_entered_at = time.time()
+
+    def _chaossea_start(self, fight_mode=False):
+        self._chaossea_on = True
+        self._chaossea_fight_mode = fight_mode
+        self._chaossea_dm_paused = False
+        self._chaossea_has_charm = False
+        self._chaossea_has_cube = False
+        self._chaossea_clear_map()
         if fight_mode:
             self.write_local(
                 "[chaossea] fight mode - kills every mutant it meets, "
@@ -4498,12 +4563,17 @@ class MudClient:
                 "item (or that aggro/block you), retreats once both are "
                 "found. Chaossea off to stop. (Needs autocombat ON.)",
                 "#66cc66")
-        # Every later room display is the natural reply to Chaossea's own
-        # previous move, but there is no previous move yet at start - so
-        # without an explicit refresh here it just sits waiting for a
-        # display that never spontaneously arrives (confirmed live: it
-        # took a manual glance to get it moving at all). Same fix Bot uses
-        # at its own start (_bot_enter_room(refresh=True)).
+        self._chaossea_arm()
+
+    def _chaossea_arm(self):
+        """Shared start/resume tail: refuse under the chart gate, then
+        kickstart with a display refresh. Every later room display is the
+        natural reply to Chaossea's own previous move, but there is no
+        previous move yet at start/resume - so without an explicit refresh
+        it just sits waiting for a display that never spontaneously
+        arrives (confirmed live: it took a manual glance to get it moving
+        at all). Same fix Bot uses at its own start
+        (_bot_enter_room(refresh=True))."""
         if self.map_backend == "sqlite" and self._sql_charting:
             self.write_local(
                 "[chaossea] WARNING: charting mode is ON - Chaossea's "
@@ -4514,6 +4584,29 @@ class MudClient:
         self.send_line(self.setting("bot_refresh_command", "glance"),
                        gated=False)
         self._chaossea_reschedule(0.6)
+
+    def _chaossea_resume(self):
+        """`Chaossea resume` - restart the loop KEEPING the previous run's
+        temp map, position, mode and found items. Exists for the
+        train-skills round trip: `retreat from the sea` teleports out from
+        the room you stand in, and with a cube `return to the sea`
+        teleports back into THAT SAME room; mobs neither respawn nor
+        wander, so the old map is still true and _chaossea_cur still names
+        the room you're standing in. Only the volatile room-cycle state
+        resets. Assumes you really did return to the room you left - a
+        resume anywhere else corrupts the temp map (use Chaossea clear or
+        a fresh start there instead)."""
+        self._chaossea_on = True
+        self._chaossea_dm_paused = False
+        self._chaossea_last_dir = None  # don't 'avoid reversing' a stale dir
+        self._chaossea_reset_cycle()
+        mode = "fight" if self._chaossea_fight_mode else "item hunt"
+        self.write_local(
+            f"[chaossea] resuming {mode} with the previous temp map "
+            f"({len(self._chaossea_map)} room(s) known) - assumes you're "
+            "back in the room you left ('return to the sea'). Chaossea "
+            "off to stop.", "#66cc66")
+        self._chaossea_arm()
 
     def _chaossea_stop(self, why=""):
         self._chaossea_on = False
@@ -4754,11 +4847,22 @@ class MudClient:
         if not (self.conn and self.conn.alive):
             self._chaossea_stop("disconnected"); return
         if self.deadman_tripped:
-            if self.in_combat:
-                self._chaossea_reschedule(1.0); return
-            self._chaossea_stop(
-                "deadman tripped - stopped in place, no verified path home")
-            return
+            # PAUSE in place, don't stop: Chaossea can't walk home from a
+            # collapsed-vnum maze, and a stop discards the temp map + run
+            # progress. The deadman contract still holds - the tick sends
+            # nothing while tripped (an in-progress fight resolves via
+            # mud-side autocombat) - and the run resumes untouched when a
+            # keypress releases it.
+            if not self._chaossea_dm_paused:
+                self._chaossea_dm_paused = True
+                self.write_local(
+                    "[chaossea] deadman tripped - paused in place, state "
+                    "held. Type anything to release and resume.", "#ffaa44")
+            self._chaossea_reschedule(1.0); return
+        if self._chaossea_dm_paused:
+            self._chaossea_dm_paused = False
+            self.write_local("[chaossea] deadman released - resuming.",
+                             "#66cc66")
         if self.in_combat:
             self._chaossea_was_fighting = True
             self._chaossea_engage_whiffs = 0   # the swing connected - real fight
@@ -5544,6 +5648,11 @@ class MudClient:
     # Only a jump of MORE than this many rooms drops charting for a fast walk,
     # which by then is across a mostly-mapped, reliable region.
     _EXPLORE_FAR_HOPS = 2
+    # Moves sent per tick on an UNGATED travel leg (charting off). One hop per
+    # 0.4s tick made far travel timer-bound; a small burst lets the server
+    # queue them while staying interruptible (combat/deadman/Esc are checked
+    # between bursts) and bounding any overshoot when a leg goes wrong.
+    _EXPLORE_TRAVEL_BURST = 4
 
     def cmd_chartwalk(self, arg):
         toks = arg.split()
@@ -5882,6 +5991,14 @@ class MudClient:
         if self._explore_job:
             self.root.after_cancel(self._explore_job)
             self._explore_job = None
+        # Whole plans are handed to the chart gate at once now, so a stop can
+        # leave many Explore moves queued behind it - drop them, or they'd
+        # keep walking after "stopped". (sql_set_chart_mode(False) also clears
+        # the buffer, but the restore below doesn't always turn charting off.)
+        if self._sql_chart_buf:
+            n = len(self._sql_chart_buf)
+            self._sql_chart_buf.clear()
+            self._sql_chart_dbg(f"explore stop - dropped {n} queued move(s)")
         # Restore the charting state we started in. We turn charting OFF during
         # travel/return legs, so simply match the entry state: entered_chart
         # means we armed it (restore following); otherwise the user had it on
@@ -6037,7 +6154,11 @@ class MudClient:
         special exit (e.g. 'leave' into a foreign area) could strand us with no
         compass move back, so those are left for manual rating."""
         cur = self._sql_cur_vnum
+        # ONE shortest-path tree, nearest candidate by precomputed hop count -
+        # same shape as _explore_next_stub (was a find_path per candidate).
+        dist, prev = self.mapdb.paths_from(cur)
         best = None
+        best_d = None
         seen = set()
         for r in self.mapdb.unrated_frontier(self._explore_area_id):
             t = r["to_vnum"]
@@ -6046,13 +6167,17 @@ class MudClient:
             if t in self._explore_rated_tried or t in seen:
                 continue
             seen.add(t)
-            edges = [] if t == cur else self.mapdb.find_path(cur, t)
-            if edges is None:
+            d = 0 if t == cur else dist.get(t)
+            if d is None:
                 self._explore_rated_tried.add(t)    # can't reach it - skip
                 continue
-            if best is None or len(edges) < len(best[0]):
-                best = (edges, t)
-        return best
+            if best_d is None or d < best_d:
+                best_d, best = d, t
+        if best is None:
+            return None
+        edges = [] if best == cur else self.mapdb.reconstruct_path(
+            prev, cur, best)
+        return (edges, best)
 
     def _explore_begin_rating(self, fr):
         """Walk to an unrated room (charting off, fast) so we can rate it; if
@@ -6125,9 +6250,25 @@ class MudClient:
             self._explore_reschedule(1.0); return   # never walk off mid-fight
         if self._sql_cur_vnum is None or not self._explore_gate_idle():
             self._explore_reschedule(0.4); return   # let the gate settle
-        # feed the current run one gated move at a time (combat-checked above)
+        # feed the current run (combat-checked above)
         if self._explore_plan:
-            self.send_line(self._explore_plan.pop(0))
+            if self._sql_charting:
+                # Gated plan: hand ALL of it to the chart gate in one go. The
+                # gate already paces one move per room packet and holds during
+                # combat - drip-feeding one hop per tick only added ~0.4s of
+                # dead tick latency on top of every hop. _explore_stop drops
+                # anything still queued if the run is interrupted.
+                while self._explore_plan:
+                    self.send_line(self._explore_plan.pop(0))
+            else:
+                # Ungated travel leg (charting off): a small burst per tick
+                # instead of one hop per 0.4s - the server queues moves, and
+                # arrival is verified by vnum before anything charts or rates,
+                # so a burst can't cause a stale-position mischart.
+                for _ in range(self._EXPLORE_TRAVEL_BURST):
+                    if not self._explore_plan:
+                        break
+                    self.send_line(self._explore_plan.pop(0))
             self._explore_reschedule(0.4); return
         # plan drained -> phase logic (chartwalk adds bootstrap + return)
         if self._explore_phase == "bootstrap":
@@ -6269,6 +6410,7 @@ class MudClient:
                             self.changeling_scan_line(clean)
                         elif self.guild.lower() == "vikings":
                             self.viking_scan_line(clean)
+                            self._vtradeprices_scan_line(clean)
                             self._missionlist_scan_line(clean)
                             self._vnlist_scan_line(clean)
                         self.track_combat_line(clean)
@@ -7300,17 +7442,66 @@ class MudClient:
             self._vskills_finish()
 
     # ---- Viking mission-board read + best-pick advisor (Missionlist) ----
-    def cmd_missionlist(self, _arg=""):
-        """`Missionlist`: send `vtrade stock` to get a trustworthy warehouse
-        reading (the live WSTOCK/mip_trade_goods feed has been seen out of
-        sync with actual stock), then `vmission list` to read the global
+    def cmd_missionlist(self, arg=""):
+        """`Missionlist`: send `vtrade prices` to get current market
+        prices, then `vtrade stock` to get a trustworthy warehouse reading
+        (the live WSTOCK/mip_trade_goods feed has been seen out of sync
+        with actual stock), then `vmission list` to read the global
         mission board, then recommend which missions to accept for the
-        highest total daler without exceeding stock or the remaining daily
-        quota."""
+        highest total NET daler (reward minus the market value of the
+        goods delivered) without exceeding stock or the remaining daily
+        quota. `Missionlist top5` ignores the remaining quota (e.g. at
+        5/5) and recommends the best 5 anyway - for testing or planning
+        the next refresh."""
         if self.guild.lower() != "vikings":
             self.write_local("Missionlist is a Vikings guild command.",
                              "#cc9933")
             return
+        arg = arg.strip().lower()
+        if arg not in ("", "top5"):
+            self.write_local(f"[missionlist] unknown arg '{arg}' - only "
+                             "'top5' is recognized.", "#cc6666")
+            return
+        self._missionlist_top5 = arg == "top5"
+        self._start_vtradeprices(self._missionlist_read_stock,
+                                 "missionlist")
+
+    def _start_vtradeprices(self, next_step, tag):
+        """Send `vtrade prices` and arm its capture; `next_step` runs once
+        the readout has been parsed (see _vtradeprices_scan_line). Shared
+        first step of both Missionlist and VNlist (`tag` labels the status
+        line accordingly)."""
+        self._vtradeprices_capture = True
+        self._vtradeprices_lines = []
+        self._vtradeprices_next = next_step
+        self.send_line("vtrade prices")
+        self.write_local(f"[{tag}] reading market prices...", "#55aacc")
+
+    def _vtradeprices_scan_line(self, clean):
+        """While a `vtrade prices` capture is armed, accumulate the
+        readout lines and finalize on the first border line after at
+        least one price line (the table has no unique footer), or a
+        safety line cap. Lines are still displayed normally."""
+        if not self._vtradeprices_capture:
+            return
+        self._vtradeprices_lines.append(clean)
+        seen_prices = bool(viking.parse_vtrade_prices(
+            self._vtradeprices_lines))
+        done = (seen_prices
+                and not viking.VTRADE_PRICE_RE.match(clean)) \
+            or len(self._vtradeprices_lines) > 60
+        if not done:
+            return
+        self._vtrade_prices = viking.parse_vtrade_prices(
+            self._vtradeprices_lines)
+        self._vtradeprices_capture = False
+        self._vtradeprices_lines = []
+        next_step, self._vtradeprices_next = self._vtradeprices_next, None
+        if next_step:
+            next_step()
+
+    def _missionlist_read_stock(self):
+        """Step 2 of Missionlist: read the warehouse via `vtrade stock`."""
         self._vtradestock_capture = True
         self._vtradestock_lines = []
         self.send_line("vtrade stock")
@@ -7338,27 +7529,36 @@ class MudClient:
             self.write_local("[missionlist] no missions parsed (unexpected "
                              "format?).", "#cc9933")
             return
-        remaining = max(0, maxq - used)
+        if self._missionlist_top5:
+            remaining, left_txt = 5, "top5 override"
+        else:
+            remaining = max(0, maxq - used)
+            left_txt = f"{remaining} left"
         if remaining == 0:
             self._mission_picks = []
             self.update_info()
             self.write_local(
                 f"[missionlist] quota {used}/{maxq} - none left until "
-                "refresh.", "#cc9933")
+                "refresh (use `Missionlist top5` to see picks anyway).",
+                "#cc9933")
             return
+        for m in missions:
+            m["net"] = m["daler"] - viking.goods_value(
+                m["requirements"], self._vtrade_prices)
         stock = self._vtrade_stock
-        chosen, daler, rep = viking.best_mission_picks(
+        chosen, net, rep = viking.best_mission_picks(
             missions, stock, remaining)
-        self._mission_picks = sorted(chosen, key=lambda m: -m["daler"])
+        self._mission_picks = sorted(chosen, key=lambda m: -m["net"])
         self.update_info()
         if not chosen:
             self.write_local(
-                f"[missionlist] quota {used}/{maxq} ({remaining} left) - "
-                "no mission is fully covered by current stock.", "#cc9933")
+                f"[missionlist] quota {used}/{maxq} ({left_txt}) - "
+                "no mission is fully covered by current stock (or none "
+                "pays more than its goods are worth).", "#cc9933")
             return
         self.write_local(
-            f"[missionlist] quota {used}/{maxq} ({remaining} left) - best "
-            f"{len(chosen)}-mission pick: {daler} daler + {rep} rep "
+            f"[missionlist] quota {used}/{maxq} ({left_txt}) - best "
+            f"{len(chosen)}-mission pick: {net} net daler + {rep} rep "
             "- see the info pane.", "#66cc66")
 
     def _mission_fulfilled(self, mid):
@@ -7402,18 +7602,24 @@ class MudClient:
 
     # ---- Viking newbie-errand board read + best-pick advisor (VNlist) --
     def cmd_vnlist(self, arg):
-        """`VNlist [metric]`: send `vmission newbie` and read the newbie
-        errand board, then recommend the highest-`metric` errands up to
-        the remaining daily quota. `metric` is 'daler' (default) or one of
-        the trade goods newbie errands pay out in (see
-        viking.NEWBIE_METRICS) - unlike Missionlist's paid missions,
-        newbie errands cost no warehouse goods to accept, so there's
-        nothing to conflict over and no stock to read first."""
+        """`VNlist [metric]`: send `vtrade prices` then `vmission newbie`
+        and read the newbie errand board, then recommend the
+        highest-`metric` errands up to the remaining daily quota. `metric`
+        is 'daler' (default - the NET value: daler plus the market value
+        of the goods awarded) or one of the trade goods newbie errands pay
+        out in (see viking.NEWBIE_METRICS) - unlike Missionlist's paid
+        missions, newbie errands cost no warehouse goods to accept, so
+        there's nothing to conflict over and no stock to read first. Add
+        'top5' (e.g. `VNlist top5`, `VNlist iron top5`) to ignore the
+        remaining quota and recommend the best 5 anyway."""
         if self.guild.lower() != "vikings":
             self.write_local("VNlist is a Vikings guild command.",
                              "#cc9933")
             return
-        metric = (arg.strip().lower() or "daler")
+        words = arg.strip().lower().split()
+        top5 = "top5" in words
+        words = [w for w in words if w != "top5"]
+        metric = words[0] if words else "daler"
         if metric == "clear":
             self._newbie_picks = []
             self.update_info()
@@ -7423,9 +7629,15 @@ class MudClient:
         if metric not in viking.NEWBIE_METRICS:
             self.write_local(
                 f"[vnlist] unknown metric '{metric}' - one of "
-                f"{', '.join(viking.NEWBIE_METRICS)}.", "#cc6666")
+                f"{', '.join(viking.NEWBIE_METRICS)}, plus optional "
+                "'top5'.", "#cc6666")
             return
         self._vnlist_metric = metric
+        self._vnlist_top5 = top5
+        self._start_vtradeprices(self._vnlist_read_board, "vnlist")
+
+    def _vnlist_read_board(self):
+        """Step 2 of VNlist: read the newbie errand board."""
         self._vnlist_capture = True
         self._vnlist_lines = []
         self.send_line("vmission newbie")
@@ -7440,28 +7652,35 @@ class MudClient:
             self.write_local("[vnlist] no newbie errands parsed "
                              "(unexpected format?).", "#cc9933")
             return
-        remaining = max(0, maxq - used)
+        if self._vnlist_top5:
+            remaining, left_txt = 5, "top5 override"
+        else:
+            remaining = max(0, maxq - used)
+            left_txt = f"{remaining} left"
         if remaining == 0:
             self._newbie_picks = []
             self.update_info()
             self.write_local(
                 f"[vnlist] quota {used}/{maxq} - none left until "
-                "refresh.", "#cc9933")
+                "refresh (use `VNlist top5` to see picks anyway).",
+                "#cc9933")
             return
+        for m in missions:
+            m["net"] = m["daler"] + viking.goods_value(
+                m["goods"], self._vtrade_prices)
         metric = self._vnlist_metric
         chosen, total_metric, total_daler = viking.best_newbie_picks(
             missions, remaining, metric)
         self._newbie_picks = chosen
         self.update_info()
         if not chosen:
-            self.write_local(f"[vnlist] quota {used}/{maxq} ({remaining} "
-                             "left) - no newbie errands available.",
-                             "#cc9933")
+            self.write_local(f"[vnlist] quota {used}/{maxq} ({left_txt}) "
+                             "- no newbie errands available.", "#cc9933")
             return
-        metric_txt = (f"{total_metric} daler" if metric == "daler" else
+        metric_txt = (f"{total_metric} net daler" if metric == "daler" else
                       f"{total_metric} {metric} + {total_daler} daler")
         self.write_local(
-            f"[vnlist] quota {used}/{maxq} ({remaining} left) - best "
+            f"[vnlist] quota {used}/{maxq} ({left_txt}) - best "
             f"{len(chosen)}-errand pick by {metric}: {metric_txt} - see "
             "the info pane.", "#66cc66")
 
@@ -8518,9 +8737,11 @@ class MudClient:
         self.info.insert("end", "Missions\n", "track_hdr")
         for m in self._mission_picks:
             need = ", ".join(f"{q} {g}" for q, g in m["requirements"])
+            net = m.get("net", m["daler"])
             self.info.insert(
                 "end",
-                f"  [{m['id']}] {m['town']}: {need} -> {m['daler']}d\n")
+                f"  [{m['id']}] {m['town']}: {need} -> {m['daler']}d "
+                f"({net:+d} net)\n")
 
     def _render_newbie_missions(self):
         """Append a Newbie Errands section to the info pane: the VNlist
@@ -8536,10 +8757,12 @@ class MudClient:
             extra = ", ".join(f"{q} {g}" for q, g in m["goods"])
             if extra:
                 extra = ", " + extra
+            net = m.get("net", m["daler"])
             self.info.insert(
                 "end",
                 f"  [{m['id']}] {m['fetch_town']} -> {m['town']}: "
-                f"{m['daler']}d{extra}, {m['rep_min']}-{m['rep_max']}rep\n")
+                f"{m['daler']}d{extra} ({net}d net), "
+                f"{m['rep_min']}-{m['rep_max']}rep\n")
 
     def _merc_lines(self):
         """Mercenary status block for the info pane (see mip_mercenary)."""
@@ -9473,6 +9696,10 @@ class MudClient:
         except tk.TclError:
             pass
 
+    def _switch_character(self):
+        picker.spawn_picker()
+        self.on_close()
+
     def on_close(self):
         self.save_window_geometry()
         if self._maxes_dirty:
@@ -9579,16 +9806,20 @@ CLIENT COMMANDS
   Vskills                  (Viking: send 'vskills' and READ it (not swallow)
       to refresh the Stats tab's GXP pools + per-skill training costs. Daler
       and the 4 pools stream live over MIP; the skill list updates on demand.)
-  Missionlist               (Viking: send 'vmission list' and recommend
-      which missions to accept for the highest total daler without
-      exceeding current warehouse stock or your remaining daily quota.)
-  VNlist [metric] | clear    (Viking: send 'vmission newbie' and recommend
-      the highest-'metric' newbie errands up to your remaining daily
-      quota. metric is 'daler' (default) or one of timber/iron/furs/fish/
-      grain/mead/amber - newbie errands cost nothing to accept, so it's a
-      plain top-N pick, no stock to conflict over. `VNlist clear` wipes
-      the Newbie Errands section from the info pane without re-reading
-      the board.)
+  Missionlist [top5]        (Viking: send 'vtrade prices' + 'vmission
+      list' and recommend which missions to accept for the highest total
+      NET daler (reward minus the market value of the goods delivered)
+      without exceeding current warehouse stock or your remaining daily
+      quota. 'top5' ignores the quota and shows the best 5 anyway.)
+  VNlist [metric] [top5] | clear   (Viking: send 'vtrade prices' +
+      'vmission newbie' and recommend the highest-'metric' newbie errands
+      up to your remaining daily quota. metric is 'daler' (default - NET
+      value: daler + market value of the goods awarded) or one of timber/
+      iron/furs/fish/grain/mead/amber - newbie errands cost nothing to
+      accept, so it's a plain top-N pick, no stock to conflict over.
+      'top5' ignores the quota and shows the best 5 anyway. `VNlist
+      clear` wipes the Newbie Errands section from the info pane without
+      re-reading the board.)
   Scan [name] | #mobs | #mob <name>   (mob database: Scan/#mob <name>
       searches, no arg = count. Any character can look up; auto-filled from
       Din's 'vscan1' reports, keyed by name+area of the current room.)
