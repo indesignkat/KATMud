@@ -45,7 +45,10 @@ import sqlite3
 # v2: rooms.notes (free-text player notes, set via the `Mapnote` command).
 # v3: mobs table (vscan1 capture); identity = (name, area_name).
 # v4: landmarks are mud-wide - collapse any old player/guild rows to mud scope.
-SCHEMA_VERSION = 4
+# v5: idx_exits_to index - pathfinding's reverse-edge lookup (_usable_edges'
+#     WHERE to_vnum=?) was a full-table SCAN per expanded node, ~200ms per
+#     find_path/paths_from on a 4k-exit map, growing with the map.
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS areas (
@@ -116,6 +119,8 @@ CREATE TABLE IF NOT EXISTS mobs (
     scanned_by     TEXT,
     UNIQUE (name, area_name)
 );
+
+CREATE INDEX IF NOT EXISTS idx_exits_to ON exits(to_vnum);
 """
 
 # Every column a parsed vscan row may set (everything but the identity/
@@ -203,6 +208,8 @@ class MapDB:
                 "(SELECT MIN(rowid) FROM landmarks GROUP BY tag)")
             self.conn.execute(
                 "UPDATE landmarks SET scope='mud', scope_owner=NULL")
+        # v5 adds idx_exits_to only - CREATE INDEX IF NOT EXISTS in SCHEMA
+        # already created it on this open; just stamp the version below.
         if ver != SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
@@ -799,6 +806,15 @@ def _selftest():
         db = MapDB(path)
         assert os.path.exists(path), "db file not created"
         assert db._user_version() == SCHEMA_VERSION
+
+        # v5: the reverse-edge lookup must be indexed, not a table scan
+        assert "idx_exits_to" in {r["name"] for r in db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'")}
+        plan = db.conn.execute(
+            "EXPLAIN QUERY PLAN SELECT * FROM exits WHERE to_vnum=1 "
+            "AND return_command IS NOT NULL AND wait_seconds=0"
+        ).fetchone()[3]
+        assert "idx_exits_to" in plan, plan
 
         db.upsert_area(1, "Cliffs of Vrek", "thoreau")
         db.upsert_room(113129, "On a path to a farm", area_id=1)

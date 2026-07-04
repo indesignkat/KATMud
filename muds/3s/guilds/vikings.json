@@ -35,7 +35,8 @@
   ],
   "login_commands": [],
   "aliases": {
-    "sk": "Vskills"
+    "sk": "Vskills",
+    "af": "vmission accept %1;vmission fulfill %1"
   },
   "triggers": [],
   "gags": [],

@@ -4695,6 +4695,9 @@ class MudClient:
         self._chaossea_engage_at = time.time()
         self._chaossea_engage_whiffs = 0
         kw = self._chaossea_mob_keyword(idx)
+        if self.setting("chaossea_tick_debug"):
+            self.write_local(f"[cs-kill] engage idx={idx} "
+                             f"carrying={carrying}", "#888888")
         self.send_line(f"kill {kw}")
         self._chaossea_reschedule(self._hunt_settle_s())
 
@@ -4741,14 +4744,21 @@ class MudClient:
                 self._chaossea_exits_unknown_retry()
                 return
             self._chaossea_room_ready = True
-            self._chaossea_room_mobs = len(self._chaossea_mob_lines)
             # 'out' is excluded here too - see _chaossea_pick_move - so a
             # room bordering the zone exit doesn't look like it always has
             # something left to explore.
             self._chaossea_room_exits[self._chaossea_cur] = [
                 d for d in self.exits if d != "out"]
             self._chaossea_render_map()
-            self._chaossea_reschedule(0)
+            # Don't snapshot room_mobs here: a glance's reply prints its
+            # lone DDD BEFORE its room text (confirmed live - logs/
+            # normal-20260703.log:35166-35170), so a count taken at the
+            # DDD misses every mob a glance reveals - that's the start-
+            # room mob-miss. Let the marker scan keep collecting for one
+            # settle beat (waiting_room stays True until the tick runs);
+            # the tick's fall-through takes the count.
+            self._chaossea_reschedule(
+                self.setting("chaossea_ready_settle_ms", 500) / 1000.0)
 
     def _chaossea_exits_unknown_retry(self):
         """Re-poke with 'look' and wait for a fresh response instead of
@@ -4776,6 +4786,13 @@ class MudClient:
     def _chaossea_scan_markers(self, spans, clean):
         ital, under = self._line_markers(spans)
         if ital:
+            if clean.lstrip().lower().startswith("a ritual scene depicting"):
+                # A Blood Eagle rite's leftover ("A ritual scene depicting
+                # a <mob> {chaotic}, spread by the Blood Eagle.") renders
+                # in the mob-line slot of every room a corpse was rited in
+                # (logs/normal-20260703.log:35108) - scenery, not a target,
+                # and counting one costs 5 whiffed `kill mutant`s.
+                return
             self._chaossea_room_mob = True
             self._chaossea_mob_lines.append(clean)
         elif under and not self._line_is_party(clean):
@@ -4824,6 +4841,10 @@ class MudClient:
                                                # nothing needed on any of them
             self._chaossea_engage_at = time.time()
             self._chaossea_engage_whiffs = 0
+            if self.setting("chaossea_tick_debug"):
+                self.write_local(
+                    f"[cs-kill] blocked-retry pre_move_mobs="
+                    f"{self._chaossea_pre_move_mobs}", "#888888")
             self.send_line("kill mutant")
             self._chaossea_reschedule(self._hunt_settle_s())
             return
@@ -4899,6 +4920,10 @@ class MudClient:
                 self._chaossea_engage_whiffs = 0
                 self._chaossea_next_examine(); return
             kw = self._chaossea_mob_keyword(self._chaossea_mob_idx)
+            if self.setting("chaossea_tick_debug"):
+                self.write_local(
+                    f"[cs-kill] whiff retry "
+                    f"{self._chaossea_engage_whiffs}/{cap} kw={kw}", "#888888")
             self.send_line(f"kill {kw}")
             self._chaossea_engage_at = time.time()
             self._chaossea_reschedule(0.4); return
@@ -4910,10 +4935,28 @@ class MudClient:
                 # 'look' often returns a BAD packet without exits, leaving the
                 # bot stuck indefinitely - the configured refresh command (glance)
                 # reliably produces a DDD with exits.
+                #
+                # Also settle any fast-travel burst debt before poking: the
+                # burst assumes one DDD per step, but this zone repaints only
+                # the FINAL room of a wire-speed sequence, and even that
+                # arrives late (confirmed live - logs/normal-20260703.log:
+                # 35091-35289: 7 moves produced 7 room texts and ZERO DDDs;
+                # the leftover skip debt then ate one recovery glance's reply
+                # per unit, six glances 2.5s apart). Whatever DDD lands after
+                # this poke is the current room's truth, so drop the debt -
+                # and drop the mob lines those sprinted-through rooms' texts
+                # piled up (no DDD ever arrived to clear them), which would
+                # otherwise all count as live mutants standing here.
+                self._chaossea_skip_ddds = 0
+                self._chaossea_room_mob = self._chaossea_room_player = False
+                self._chaossea_mob_lines = []
                 self.send_line(self.setting("bot_refresh_command", "glance"))
                 self._chaossea_room_entered_at = time.time()
             self._chaossea_reschedule(0.3); return
-        self._chaossea_waiting_room = False
+        if self._chaossea_waiting_room:
+            self._chaossea_waiting_room = False
+            # the deferred room_mobs snapshot (see _chaossea_room_displayed)
+            self._chaossea_room_mobs = len(self._chaossea_mob_lines)
         if self.setting("chaossea_tick_debug"):
             self.write_local(
                 f"[cs-tick] pre={self._chaossea_pre_move_room} "
@@ -5187,8 +5230,8 @@ class MudClient:
             else:
                 avail = ", ".join(self._run_available()) or "(none)"
                 self.write_local(
-                    f"Run <bot> [loop] [<step>] | Run off. Available: "
-                    f"{avail}", "#cc9933")
+                    f"Run <bot> [loop] [<step>] | Run resume | Run off. "
+                    f"Available: {avail}", "#cc9933")
             return
         a0 = bits[0].lower()
         if a0 in ("off", "stop", "halt"):
@@ -5200,6 +5243,15 @@ class MudClient:
         if self._run_on:
             self.write_local(f"[run] '{self._run_name}' already running. "
                              "Run off first.", "#cc9933")
+            return
+        if a0 == "resume":
+            # Restart the last bot from the in-memory step index (survives
+            # any stop - deadman, manual, disconnect - until a new run
+            # starts or the client closes).
+            if not self._run_name:
+                self.write_local("[run] nothing to resume.", "#cc9933")
+                return
+            self._run_start(self._run_name, self._run_loop, self._run_idx)
             return
         loop = False
         start_idx = 0
@@ -5339,8 +5391,9 @@ class MudClient:
             self._run_precheck_job = None
         self._run_precheck = None
         secs = max(1, int(time.time() - self._run_started))
-        self.write_local(f"[run] {why or 'off'} ({self._run_kills} kills in "
-                         f"{secs}s).", "#aa88cc")
+        self.write_local(f"[run] {why or 'off'} (step {self._run_idx}/"
+                         f"{len(self._run_path)}, {self._run_kills} kills in "
+                         f"{secs}s). Run resume to continue.", "#aa88cc")
 
     def _run_reschedule(self, secs):
         if self._run_job:

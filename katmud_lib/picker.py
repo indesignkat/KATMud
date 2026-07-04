@@ -20,31 +20,35 @@ FIELD_BG = "#101018"
 SEL_BG = "#334466"
 
 
-def _spawn_detached(arg):
-    """Detached pythonw process running katmud.pyw <arg> - no console,
+def _spawn_detached(arg=None):
+    """Detached pythonw process running katmud.pyw [arg] - no console,
     not a child of this process (so it outlives the picker, which
     exits right after spawning). Shared by spawn_client (arg = a
-    profile id) and ensure_hub_running (arg = "--hub")."""
+    profile id), ensure_hub_running (arg = "--hub"), and spawn_picker
+    (no arg)."""
     entry = os.path.join(paths.BASE, "katmud.pyw")
     exe = sys.executable
+    cmd = [exe, entry] + ([arg] if arg is not None else [])
     if sys.platform == "win32":
         # prefer pythonw so the child has no console either
         pythonw = os.path.join(os.path.dirname(exe), "pythonw.exe")
         if os.path.exists(pythonw):
-            exe = pythonw
+            cmd[0] = pythonw
         flags = (subprocess.DETACHED_PROCESS
                  | subprocess.CREATE_NEW_PROCESS_GROUP)
-        subprocess.Popen([exe, entry, arg],
-                         creationflags=flags, close_fds=True,
+        subprocess.Popen(cmd, creationflags=flags, close_fds=True,
                          cwd=paths.BASE)
     else:
-        subprocess.Popen([exe, entry, arg],
-                         start_new_session=True, close_fds=True,
+        subprocess.Popen(cmd, start_new_session=True, close_fds=True,
                          cwd=paths.BASE)
 
 
 def spawn_client(profile_id):
     _spawn_detached(profile_id)
+
+
+def spawn_picker():
+    _spawn_detached()
 
 
 def ensure_hub_running():
