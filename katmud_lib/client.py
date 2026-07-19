@@ -380,6 +380,10 @@ class MudClient:
         self._chaossea_job = None
         self._chaossea_map = {}         # fake_vnum -> {direction: fake_vnum}
         self._chaossea_room_exits = {}  # fake_vnum -> live exits seen there
+        self._chaossea_rooms_checked = set()  # fake vnums whose mutants were
+                                        # all examined/killed once - sea mobs
+                                        # neither respawn nor wander, so a
+                                        # re-entry never re-examines them
                                         # (for BFS frontier-seeking)
         self._chaossea_cur = "f00001"
         self._chaossea_next_id = 1
@@ -390,6 +394,8 @@ class MudClient:
         self._chaossea_mob_idx = 0      # which ordinal (1-based) we're on
         self._chaossea_examine_buf = []
         self._chaossea_examine_pending = False
+        self._chaossea_examine_sent_at = 0.0   # when the examine was sent
+        self._chaossea_examine_last_line = 0.0  # last reply line seen
         self._chaossea_waiting_room = False
         self._chaossea_room_ready = False
         self._chaossea_room_mob = False
@@ -1388,7 +1394,7 @@ class MudClient:
         self.write_local(
             f"[blur: kickoff at {bp}% reset ({bm} charges to spend)]",
             "#cc66ff")
-        self.send_line(self.setting("blur_command", "blur"))
+        self.send_line(self.setting("blur_command", "blur"), gated=False)
 
     # ------------------------------------------------ networking
     def connect(self):
@@ -4511,6 +4517,9 @@ class MudClient:
         (has_charm / has_cube - real inventory, survives a map wipe)."""
         self._chaossea_map = {}
         self._chaossea_room_exits = {}
+        # fake ids get reallocated after a wipe, so a stale checked set
+        # would falsely mark brand-new rooms as already examined
+        self._chaossea_rooms_checked = set()
         self._chaossea_cur = "f00001"
         self._chaossea_next_id = 1
         self._chaossea_last_dir = None
@@ -4654,7 +4663,13 @@ class MudClient:
             return
         self._chaossea_examine_buf = []
         self._chaossea_examine_pending = True
+        self._chaossea_examine_sent_at = time.time()
+        self._chaossea_examine_last_line = 0.0
         kw = self._chaossea_mob_keyword(self._chaossea_mob_idx)
+        if self.setting("chaossea_tick_debug"):
+            self.write_local(
+                f"[cs-exam] send idx={self._chaossea_mob_idx}/"
+                f"{self._chaossea_room_mobs} kw={kw}", "#888888")
         self.send_line(f"examine {kw}")
         self._chaossea_reschedule(self._bot_safety_s())
 
@@ -4672,16 +4687,29 @@ class MudClient:
     def _chaossea_examine_scan_line(self, clean):
         if self._chaossea_examine_pending:
             self._chaossea_examine_buf.append(clean)
+            self._chaossea_examine_last_line = time.time()
+            if self.setting("chaossea_tick_debug"):
+                self.write_local(f"[cs-exam] +line: {clean}", "#888888")
 
-    def _chaossea_finish_examine(self):
-        """The prompt after an `examine` landed - decide what to do with
+    def _chaossea_finish_examine(self, via="prompt"):
+        """The reply to an `examine` landed - decide what to do with
         this mutant from the accumulated text, then either attack it or
-        move on to the next one in the room."""
+        move on to the next one in the room. `via` says what decided the
+        reply was complete: "prompt" (a GA-driven prompt event - never
+        happens on 3s, which sends no GA), "settle" (reply lines stopped
+        arriving), or "timeout" (nothing arrived at all)."""
         self._chaossea_examine_pending = False
+        if self.setting("chaossea_tick_debug"):
+            self.write_local(
+                f"[cs-exam] finish via={via} "
+                f"lines={len(self._chaossea_examine_buf)}", "#888888")
         text = " ".join(self._chaossea_examine_buf).lower()
         want = self._chaossea_wants(self._chaossea_has_charm,
                                     self._chaossea_has_cube)
         carries = [item for item in want if item in text]
+        if self.setting("chaossea_tick_debug"):
+            self.write_local(f"[cs-exam] want={want} carries={carries}",
+                             "#888888")
         if carries:
             self._chaossea_engage_mob(self._chaossea_mob_idx, carries)
             return
@@ -4799,11 +4827,19 @@ class MudClient:
             self._chaossea_room_player = True
 
     def _chaossea_after_kill(self):
-        """A Chaossea-initiated fight just cleared (in_combat went True then
-        False while self._chaossea_pending_loot was set). In fight mode,
-        ignore whatever it carried entirely and move on to the next mutant.
-        Otherwise loot, update the goal state, then resume the examine loop
-        for any remaining mutants in this room."""
+        """A fight just cleared. If Chaossea initiated it, pending_loot is
+        set: in fight mode, ignore whatever it carried entirely and move on
+        to the next mutant; otherwise loot, update the goal state, then
+        resume the examine loop for any remaining mutants in this room.
+        pending_loot None means the fight was never bot-engaged (an aggro
+        mutant, and typically the merc/warband lands the blow since the
+        player never targeted it) - whatever room state was pending when
+        it broke out is stale now (the dead mutant's line is still in
+        _chaossea_mob_lines, ordinals shifted), so rescan from scratch."""
+        if self._chaossea_pending_loot is None:
+            self._chaossea_enter_room()
+            self.send_line(self.setting("bot_refresh_command", "glance"))
+            return
         if self._chaossea_fight_mode:
             self._chaossea_pending_loot = None
             self._chaossea_next_kill()
@@ -4890,9 +4926,15 @@ class MudClient:
             self._chaossea_reschedule(1.0); return
         if self._chaossea_was_fighting:
             self._chaossea_was_fighting = False
-            if self._chaossea_pending_loot is not None:
-                self._chaossea_post_kill_wait = True
-                self._arm_post_kill_resume()   # guild vrest/revalrie hold,
+            # Arm the gate for EVERY fight, not just bot-engaged ones
+            # (pending_loot set): an aggro mutant's fight ends the same
+            # way - killing-blow line, corpse cascade, vrest - and
+            # skipping the gate here let the tick fall through to the
+            # room's still-pending deferred count, which engaged the
+            # dead mutant's stale room line for 5 whiffed `kill mutant`s
+            # (confirmed live - logs/normal-20260704.log:420-627).
+            self._chaossea_post_kill_wait = True
+            self._arm_post_kill_resume()       # guild vrest/revalrie hold,
                                                # if the guild config sets one
             self._chaossea_reschedule(0.3); return
         if self._chaossea_post_kill_wait:
@@ -4974,18 +5016,44 @@ class MudClient:
             self.send_line("retreat from the sea")
             self._chaossea_stop("got both - retreated"); return
         if self._chaossea_examine_pending:
+            # The prompt-driven _chaossea_finish_examine NEVER fires on 3s:
+            # protocol.py only emits ("prompt", ...) on telnet GA, and 3s
+            # sends no GA - so waiting here alone hung forever on every
+            # examine. Finish from the tick instead: "settle" once reply
+            # lines stop arriving, or "timeout" if the whole safety window
+            # passes (covers a whiffed keyword's reply too - it's a line,
+            # so it lands in the buffer and settles).
+            now = time.time()
+            last = max(self._chaossea_examine_sent_at,
+                       self._chaossea_examine_last_line)
+            settle = self.setting("chaossea_examine_settle_ms", 800) / 1000.0
+            if (self._chaossea_examine_buf and now - last >= settle) \
+                    or now - self._chaossea_examine_sent_at >= self._bot_safety_s():
+                self._chaossea_finish_examine(
+                    "settle" if self._chaossea_examine_buf else "timeout")
+                return
             self._chaossea_reschedule(0.3); return   # waiting on an examine
         if not self._chaossea_room_done:
-            if self._chaossea_mob_idx == 0 and self._chaossea_room_mobs:
+            if self._chaossea_cur in self._chaossea_rooms_checked:
+                # been here before, every mutant already examined/killed -
+                # sea mobs neither respawn nor wander, so re-examining a
+                # backtracked room only wastes time
+                if self.setting("chaossea_tick_debug"):
+                    self.write_local(
+                        f"[cs-tick] {self._chaossea_cur} already checked "
+                        f"- skipping examines", "#888888")
+                self._chaossea_room_done = True
+            elif self._chaossea_mob_idx == 0 and self._chaossea_room_mobs:
                 if self._chaossea_fight_mode:
                     self._chaossea_next_kill(); return
                 self._chaossea_next_examine(); return
-            if self._chaossea_room_mobs == 0:
+            elif self._chaossea_room_mobs == 0:
                 self._chaossea_room_done = True
             else:
                 self._chaossea_reschedule(0.3); return
         # room fully checked (or empty) and nothing to fight here - move on
         self._chaossea_room_done = False
+        self._chaossea_rooms_checked.add(self._chaossea_cur)
         path = self._chaossea_try_fast_backtrack()
         if path:
             # Dead end in fight mode: pre-advance the temp-map through every
@@ -5090,12 +5158,13 @@ class MudClient:
         return None
 
     def _chaossea_try_fast_backtrack(self):
-        """In fight mode only: if the current room is a dead end (all exits
-        already mapped, no 'd'), return the full BFS path to the nearest
-        frontier so the caller can speedwalk there in one burst. Returns None
-        to fall through to normal single-step pick_move."""
-        if not self._chaossea_fight_mode:
-            return None
+        """If the current room is a dead end (all exits already mapped, no
+        'd'), return the full BFS path to the nearest frontier so the caller
+        can speedwalk there in one burst. Returns None to fall through to
+        normal single-step pick_move. Was fight-mode-only, but the checked-
+        rooms set now guarantees every room on a backtrack path has already
+        had its mutants examined, so item mode can burst through them too
+        instead of stopping to re-examine one room at a time."""
         exits_no_out = [d for d in (self.exits or []) if d != "out"]
         if "d" in exits_no_out:
             return None
@@ -5179,14 +5248,17 @@ class MudClient:
                 else:
                     occupied[coord] = nxt
                 queue.append(nxt)
-        cur_z = coords.get(self._chaossea_cur, (0, 0, 0))[2]
+        # the pane draws payload (0,0) at canvas center, so translate
+        # everything relative to the current room - anchoring at f00001
+        # let 'here' drift off-screen as the walk got further from start
+        cur_x, cur_y, cur_z = coords.get(self._chaossea_cur, (0, 0, 0))
         payload = {}
         for room, (x, y, z) in coords.items():
             if z != cur_z:
                 continue
             known = self._chaossea_map.get(room, {})
             exits = self._chaossea_room_exits.get(room, [])
-            payload[(x, y)] = {
+            payload[(x - cur_x, y - cur_y)] = {
                 "rid": room, "exits": exits,
                 "stubs": [d for d in exits if d not in known],
                 "here": room == self._chaossea_cur,
@@ -6895,6 +6967,17 @@ class MudClient:
         upd = viking.parse_bbe(data)
         if not upd:
             return
+        if "TGOODS" in upd:
+            # TGOODS outgrew one packet (2026-07 trade expansion) and
+            # arrives in pieces; merge by hold id, not last-chunk-wins.
+            upd["TGOODS"] = viking.merge_tgoods(
+                self.viking_state.get("TGOODS", ""), upd["TGOODS"])
+        if "VMAPL" in upd:
+            # VMAPL also spans several packets (6 chunks seen 2026-07-17,
+            # only the tail's mentor_jarl survived); merge by POI
+            # identity, not last-chunk-wins.
+            upd["VMAPL"] = viking.merge_vmapl(
+                self.viking_state.get("VMAPL", ""), upd["VMAPL"])
         self.viking_state.update(upd)
         if "VMAPH" in upd:
             self._viking_pos_fire()
@@ -7000,10 +7083,6 @@ class MudClient:
         if cb:
             cb()
 
-    def viking_marks(self):
-        """User's custom coordinate landmarks: {name: [x, y]}."""
-        return dict(self.setting("viking_landmarks", {}) or {})
-
     def viking_walk_to(self, gx, gy, on_done=None):
         """Pathfind from the current map position to cell (gx, gy) over
         the MEE/MES graph and send the n/s/e/w moves. Used by both
@@ -7043,12 +7122,14 @@ class MudClient:
         self._walk_step()
 
     def viking_go(self, name, on_done=None):
-        """Resolve a name against VMAPL POIs + custom marks and walk
-        there. Returns True if it handled the request (a matching landmark
-        existed); on_done fires on arrival."""
+        """Resolve a name against the live VMAPL POIs and walk there.
+        Returns True if it handled the request (a matching landmark
+        existed); on_done fires on arrival. Requires mip_map on - with
+        no VMAPL in the state this returns False and Go falls through
+        to the room-map walker."""
         if self.guild.lower() != "vikings":
             return False
-        marks = viking.map_landmarks(self.viking_state, self.viking_marks())
+        marks = viking.map_landmarks(self.viking_state)
         if not marks:
             return False
         key = name.lower()
@@ -7062,22 +7143,10 @@ class MudClient:
         self.viking_walk_to(hit[0], hit[1], on_done=on_done)
         return True
 
-    def add_viking_mark(self, name):
-        graph = viking.build_graph(self.viking_state)
-        if not graph or graph[4][0] is None:
-            self.write_local("[viking nav] position unknown - can't "
-                             "mark here.", "#cc6666")
-            return
-        x, y = graph[4]
-        marks = self.viking_marks()
-        marks[name.lower()] = [x, y]
-        self.set_setting("viking_landmarks", marks)
-        self.write_local(f"[viking mark '{name}' = ({x},{y})]", "#66cc66")
-
     def cmd_vn(self, arg):
         """`VN <id> <start> <destination>` - run one Viking newbie fetch
         errand end to end. <start>/<destination> are guild-map landmarks
-        (the lineage cities saved via vmark / viking_landmarks). Sequence:
+        (the lineage-city POIs from the live VMAPL feed). Sequence:
 
             leave; vmission newbie accept <id>
             Go <start>; enter; vmission newbie fetch; leave
@@ -7197,7 +7266,13 @@ class MudClient:
 
     def cmd_untrack(self, arg):
         name = arg.strip().lower()
-        if name in self.tracked:
+        if name == "all" and "all" not in self.tracked:
+            n = len(self.tracked)
+            self.tracked.clear()
+            self._save_tracked()
+            self.write_local(f"[untracked all {n} items]", "#aa88cc")
+            self.update_info()
+        elif name in self.tracked:
             del self.tracked[name]
             self._save_tracked()
             self.write_local(f"[untracked {name}]", "#aa88cc")
@@ -7649,7 +7724,10 @@ class MudClient:
                 self._missionlist_lines.append(clean)
             return
         self._missionlist_lines.append(clean)
-        if "Quota:" in clean or len(self._missionlist_lines) > 200:
+        # Cap sized for the post-trade-expansion board (~40 missions x ~7
+        # lines observed 2026-07-09); the old 200 cut the capture off
+        # before the Quota: footer.
+        if "Quota:" in clean or len(self._missionlist_lines) > 600:
             self._missionlist_saw_board = False
             self._missionlist_finish()
 
@@ -8434,6 +8512,12 @@ class MudClient:
         # which a reaction isn't. (A reaction that happens to move us, e.g.
         # flee, may leave one edge uncharted; following mode re-pins off the
         # next DDD, and an emergency flee beats a stalled heal.)
+        # While Explore/Agent drives, MANUAL input takes the wheel: it must
+        # not queue behind the walker's whole plan (which _explore_stop would
+        # also drop). The typed command sends NOW, ungated; position re-pins
+        # off the next room packet and the audit pass catches a mischart.
+        if manual and (self._explore_on or self._agent_on):
+            gated = False
         if gated and self.map_backend == "sqlite" and self._sql_charting:
             self._sql_chart_dbg(f"buffered '{cmd.strip()}' "
                                 f"(queue now {len(self._sql_chart_buf) + 1}, "
@@ -8521,6 +8605,14 @@ class MudClient:
                 if self._maxes_dirty:
                     self.persist_seen_max()
                 self._fire_corpse(mob)
+                # A killing blow from ANYONE (merc, hirdmadr, player)
+                # ends the fight a Chaossea engage started - mark it
+                # fought so the tick takes the kill-landed path even if
+                # the kill landed before in_combat ever registered
+                # (otherwise the whiff loop keeps poking the corpse).
+                if self._chaossea_on and \
+                        self._chaossea_pending_loot is not None:
+                    self._chaossea_was_fighting = True
                 break
 
     # ---- corpse (on-kill loot) handling --------------------------------
@@ -9421,15 +9513,8 @@ class MudClient:
                 pass            # handled by guild-map coordinate nav
             else:
                 self.start_go(arg.strip())
-        elif name == "vmark":
-            if arg.strip():
-                self.add_viking_mark(arg.strip())
-            else:
-                self.write_local("Usage: #vmark <name>  (marks current "
-                                 "guild-map cell)", "#cc6666")
         elif name == "vmarks":
-            marks = viking.map_landmarks(self.viking_state,
-                                         self.viking_marks())
+            marks = viking.map_landmarks(self.viking_state)
             if not marks:
                 self.write_local("No guild-map landmarks "
                                  "(POIs need mip_map on).")
@@ -9781,7 +9866,7 @@ CLIENT COMMANDS
       (#markers: report room mob(italic)/player(underline) marker lines -
       needs 'aset look_monster italics' + 'aset look_player underline')
   #viking                         (Vikings: open the status window)
-  #vmark <name> | #vmarks         (Vikings: guild-map coordinate
+  #vmarks                         (Vikings: guild-map coordinate
       landmarks; #go <name> walks there, or click the Map tab)
   VN <id> <start> <dest>          (Vikings: run a newbie fetch errand -
       accept <id>, walk to <start>, fetch, walk to <dest>, submit)

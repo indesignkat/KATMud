@@ -244,18 +244,31 @@ class MipExtractor:
                 self.buffer = rest
                 break
             pin = rest[3:8]
-            length_s = rest[8:11]
-            if not (pin.isdigit() and length_s.isdigit()):
+            # The length field is at least 3 digits but grows for big
+            # payloads (a >=1000-char Viking STAFF packet sends 4 digits;
+            # a fixed [8:11] read shifted the tag and leaked the tail as
+            # plain text - logs/mip_20260712_092341.log line 25). Scan the
+            # whole digit run; the 3-letter tag ends it.
+            end = 8
+            while end < len(rest) and rest[end].isdigit():
+                end += 1
+            if end == len(rest):
+                self.buffer = rest       # digit run may continue next feed
+                break
+            length_s = rest[8:end]
+            # 3-5 digits: <3 is not a MIP header, >5 (a 100k+ packet)
+            # is garbage that would hold the buffer forever.
+            if not (pin.isdigit() and 3 <= len(length_s) <= 5):
                 out.append(self.HEADER)
                 self.buffer = rest[3:]
                 continue
             length = int(length_s)
-            total = 11 + length
+            total = end + length
             if len(rest) < total:
                 self.buffer = rest
                 break
-            tag = rest[11:14]
-            data = rest[14:total]
+            tag = rest[end:end + 3]
+            data = rest[end + 3:total]
             self.buffer = rest[total:]
             if pin == self.pin:
                 packets.append((tag, data.rstrip("\r\n")))

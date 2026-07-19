@@ -13,7 +13,8 @@ CARTS=''). Long feeds (esp. mip_city) arrive CHUNKED across several
 consecutive BBE packets, each split on a key boundary, so the client
 MERGES every packet's keys into one running state dict (parse_bbe gives
 just the keys present in one packet; never assume a packet is complete).
-mip_trade_goods (the TGOODS key) does arrive whole in its own packet.
+Since the 2026-07 trade expansion even TGOODS arrives in pieces - the
+client merges its chunks by hold id (see merge_tgoods).
 """
 
 import itertools
@@ -47,28 +48,49 @@ def parse_bbe(data):
 # TGOODS good-letter -> name, and hold-id -> display name. Both orderings
 # are fixed by the MUD (confirmed against the STANDINGS/VREP keys and the
 # reference client's Goods screenshot); ids 11-13 keep the same style.
+# The 2026-07-09 trade expansion added ore/salted_fish/bread/fine_furs/
+# tools/gemstones; their letters follow the TGOODS packet order, which
+# matches the `vtrade prices` table order (t,o,i,f,h,g,m,a,r,s,k,b,e,l,j).
+# Multi-word goods use the mission board's underscore form as the
+# canonical name ('salted_fish'), matching the vtrade parsers below.
 GOOD_NAMES = {
     "f": "furs", "h": "fish", "m": "mead", "a": "amber",
     "r": "runestones", "s": "spoils", "t": "timber", "i": "iron",
-    "g": "grain",
+    "g": "grain", "o": "ore", "k": "salted_fish", "b": "bread",
+    "e": "fine_furs", "l": "tools", "j": "gemstones",
 }
+# Goods added in the 2026-07-17 trade expansion, seen in `vtrade prices`
+# and on the mission board. Their TGOODS letters haven't been captured
+# yet, so they live here rather than in GOOD_NAMES; amber conversely
+# dropped off the price table but still appears in missions, so it stays
+# in GOOD_NAMES (a good with no market price counts 0 in goods_value).
+EXTRA_GOODS = ("sunstone", "honey", "weapons", "armour", "finery")
+# Hold id -> CITY name (user preference 2026-07-11: city names, not
+# lineage 'X Hold' names - e.g. lineage Eiriksson's city is Eiriksby).
 HOLD_NAMES = {
-    0: "Midgard", 1: "Lodbrok's Hold", 2: "Eiriksson Hold",
-    3: "Ui Imair Hold", 4: "Rurikid Hold", 5: "Harfagre Hold",
-    6: "Yngling Hold", 7: "Skallagrim Hold", 8: "Stenkil Hold",
-    9: "Sverker Hold", 10: "Eric's Hold", 11: "Munso Hold",
-    12: "Skjoldung Hold", 13: "Sigurdsson Hold",
+    0: "Midgard", 1: "Lodbrok", 2: "Eiriksby",
+    3: "Imair", 4: "Holmgard", 5: "Hafrfjord",
+    6: "Uppsala", 7: "Borgarfjord", 8: "Vestergotland",
+    9: "Sverkersby", 10: "Ericsgard", 11: "Birka",
+    12: "Lejre", 13: "Nidaros",
 }
 
 
 def parse_tgoods(value):
     """TGOODS payload ->
-        [(hold_id, [(good, level, supply, demand), ...]), ...]
+        [(hold_id, [(good, level, supply, demand, buy, sell), ...]), ...]
     in the MUD's order (which the reference UI preserves left-to-right,
     top-to-bottom). 'level' is the demand pressure: +3..-3, where + means
     high demand / good to sell and - means oversupply. Neutral (0) goods
-    are omitted by the MUD. All parsing is defensive: a malformed hold or
-    good entry is skipped, never raised."""
+    are included by the MUD (since the 2026-07 doc) so every price can
+    be shown. All parsing is defensive: a malformed hold or good entry
+    is skipped, never raised.
+
+    The 2026-07-09 trade expansion appended two fields per good - the
+    hold's local buy/sell prices (e.g. 'k:1:0:170:29:30': buy is what
+    the town charges you, sell is what it pays you, both already
+    adjusted for the Trading Post tier). buy/sell are None on the old
+    4-field form."""
     holds = []
     for chunk in value.split("|"):
         if "=" not in chunk:
@@ -81,16 +103,64 @@ def parse_tgoods(value):
         goods = []
         for entry in entries.split(";"):
             parts = entry.split(":")
-            if len(parts) != 4:
+            if len(parts) not in (4, 6):
                 continue
-            letter, lvl_s, sup_s, dem_s = parts
+            letter, lvl_s, sup_s, dem_s = parts[:4]
             try:
+                buy = int(parts[4]) if len(parts) == 6 else None
+                sell = int(parts[5]) if len(parts) == 6 else None
                 goods.append((GOOD_NAMES.get(letter, letter),
-                              int(lvl_s), int(sup_s), int(dem_s)))
+                              int(lvl_s), int(sup_s), int(dem_s),
+                              buy, sell))
             except ValueError:
                 continue
         holds.append((hid, goods))
     return holds
+
+
+def merge_tgoods(old, new):
+    """Merge a TGOODS chunk into the previous TGOODS value by hold id.
+
+    The 2026-07-09 trade expansion (15 goods x 6 fields x 14 holds) grew
+    the payload past one packet, so TGOODS now arrives in pieces and the
+    old last-chunk-wins state merge left only the tail holds (seen live
+    2026-07-11: only Skjoldung/Sigurdsson rendered on the Goods tab).
+    Holds in `new` replace same-id holds in `old`; output is ordered by
+    hold id (= the MUD's 0-13 order). Assumes chunks split on hold
+    boundaries - if holds still go missing live, get a #mipraw capture
+    to check for mid-hold splits."""
+    merged = {}
+    for value in (old, new):
+        for c in value.split("|"):
+            if "=" not in c:
+                continue
+            hid = c.split("=", 1)[0].strip()
+            if hid.isdigit():
+                merged[int(hid)] = c
+    return "|".join(merged[h] for h in sorted(merged))
+
+
+def merge_vmapl(old, new):
+    """Merge a VMAPL chunk into the previous VMAPL value by POI identity.
+
+    The full POI list (capital + 13 lineage cities + ~40 player villages
+    + seer/blot/ruins/farm landmarks + mentors) spans SIX packets (wire
+    capture 2026-07-17: mip_20260717_082858.log), so the old
+    last-chunk-wins merge kept only the tail - a lone mentor_jarl, which
+    broke `Go <city>` and left the Map tab POI list nearly empty.
+    Entries merge by (type, name). A chunk carrying the capital entry
+    starts a fresh push (both captured pushes lead with it), dropping
+    POIs that no longer exist - player villages come and go. Order is
+    preserved (capital/lineage first, the MUD's push order)."""
+    new_entries = [(e.split("|"), e) for e in new.split(";") if e]
+    if any(f[0] == "capital" for f, _e in new_entries if len(f) >= 4):
+        old = ""
+    merged = {}
+    for f, entry in [(e.split("|"), e) for e in old.split(";") if e] \
+            + new_entries:
+        if len(f) >= 4:
+            merged[(f[0], f[1])] = entry
+    return ";".join(merged.values())
 
 
 # --- mip_city decoders (City tab) -------------------------------------
@@ -115,17 +185,22 @@ def field(rec, i, default="?"):
 
 
 def parse_wstock(value):
-    """WSTOCK 'good|amount|freshness;...' -> {good: [(amount, fresh%),..]}.
-    A good can hold several batches at different freshness."""
+    """WSTOCK 'good|amount|freshness[|grade];...' ->
+    {good: [(amount, fresh%, grade), ...]}. A good can hold several
+    batches at different freshness. Per the 2026-07 guild help doc,
+    perishables and graded goods (mead, refined goods, iron) append a
+    4th grade-label field; durable goods have none (grade '')."""
     out = {}
     for f in split_entries(value):
-        if len(f) != 3:
+        if len(f) not in (3, 4):
             continue
-        good, amt, fresh = f
+        good, amt, fresh = f[0], f[1], f[2]
+        grade = f[3] if len(f) == 4 else ""
         try:
-            out.setdefault(good, []).append((int(amt), int(fresh)))
+            batch = (int(amt), int(fresh), grade)
         except ValueError:
             continue
+        out.setdefault(good, []).append(batch)
     return out
 
 
@@ -176,12 +251,15 @@ def parse_construction(value):
 BUILD_KEYS = ("BUILDS", "BUILDINGS", "MONUMENTS", "SPROJ")
 
 
+# Warehouse capacity per tier (GAME FACT from the user, 2026-07-11).
+WAREHOUSE_CAPS = {1: 400, 2: 1000, 3: 1750, 4: 3000, 5: 5250}
+
+
 def warehouse_cap(state):
-    """Inferred: warehouse capacity = building tier x 250 (T2 -> 500,
-    which matches the reference screenshot). Returns None if unknown."""
+    """Warehouse capacity from the tier table. Returns None if unknown."""
     for name, tier in parse_buildings(state.get("BUILDINGS", "")):
         if name == "warehouse":
-            return tier * 250
+            return WAREHOUSE_CAPS.get(tier)
     return None
 
 
@@ -193,13 +271,114 @@ def stock_totals(state):
     key as zero rather than as 'unknown'."""
     totals = {}
     for good, batches in parse_wstock(state.get("WSTOCK", "")).items():
-        totals[good] = sum(amt for amt, _fresh in batches)
+        totals[good] = sum(amt for amt, _fresh, _grade in batches)
     return totals
 
 
+# THRALLS field order (GAME FACT from the user, 2026-07-11): counts of
+# thralls assigned per building, zipped positionally.
+THRALL_BUILDINGS = ("Thrall Pen", "Longhouse", "Warehouse", "Farm",
+                    "Brewery", "Tannery", "Fishery", "Lumber Yard",
+                    "Mine", "Smithy", "Watchtower", "Palisade",
+                    "Salting House", "Bakehouse", "Furrier's Lodge",
+                    "Smelter")
+
+
+def parse_thralls(value):
+    """THRALLS 'n|n|...' -> [(building, count), ...] in
+    THRALL_BUILDINGS order."""
+    out = []
+    for name, tok in zip(THRALL_BUILDINGS, value.split("|")):
+        try:
+            out.append((name, int(tok)))
+        except ValueError:
+            continue
+    return out
+
+
+def parse_thrall_follower(value):
+    """THRALL_FOLLOWER 'lvl|name|xp|next_lvl_xp|carried|capacity|status'
+    -> dict, or None when empty (GAME FACT from the user, 2026-07-11:
+    e.g. '16|Zed|10170|107216|0|6|following' = the personal thrall Zed,
+    level 16, 10,170/107,216 xp, carrying 0 of 6 items, following)."""
+    f = value.split("|")
+    if len(f) < 2 or not f[1]:
+        return None
+    return {"level": f[0], "name": f[1], "xp": field(f, 2, ""),
+            "next_xp": field(f, 3, ""), "carried": field(f, 4, ""),
+            "cap": field(f, 5, ""), "status": field(f, 6, "")}
+
+
+def parse_cellar(value):
+    """CELLAR 'stock|cap|tier;qty|pct;qty|pct;...' -> {stock, cap, tier,
+    brackets: [(qty, pct), ...]}, or None when empty / no mead cellar
+    built (the MUD sends '0|0|0'). Doc-driven (2026-07), unvalidated
+    against a live capture."""
+    ents = split_entries(value)
+    if not ents:
+        return None
+    try:
+        stock, cap, tier = (int(field(ents[0], i, "0")) for i in range(3))
+    except ValueError:
+        return None
+    if not (stock or cap or tier):
+        return None
+    brackets = []
+    for f in ents[1:]:
+        if len(f) < 2:
+            continue
+        try:
+            brackets.append((int(f[0]), int(f[1])))
+        except ValueError:
+            continue
+    return {"stock": stock, "cap": cap, "tier": tier,
+            "brackets": brackets}
+
+
+def parse_refinery(value):
+    """REFINERY 'bldg:tier:stock:cap:grade,qty,pct;grade,qty,pct|...' ->
+    [{bldg, tier, stock, cap, grades: [(grade, qty, pct), ...]}, ...].
+    One pipe-separated entry per built refinery (Smelter/Smithy/Salting
+    House/Bakehouse/Furriers Lodge); grades run low to high (curing
+    grades). Doc-driven (2026-07), unvalidated against a live capture."""
+    out = []
+    for entry in value.split("|"):
+        parts = entry.split(":", 4)
+        if len(parts) < 4 or not parts[0]:
+            continue
+        try:
+            rec = {"bldg": parts[0], "tier": int(parts[1]),
+                   "stock": int(parts[2]), "cap": int(parts[3]),
+                   "grades": []}
+        except ValueError:
+            continue
+        if len(parts) > 4:
+            for g in parts[4].split(";"):
+                gf = g.split(",")
+                if len(gf) != 3:
+                    continue
+                try:
+                    rec["grades"].append((gf[0], int(gf[1]), int(gf[2])))
+                except ValueError:
+                    continue
+        out.append(rec)
+    return out
+
+
+# Good names in the vtrade readouts can be multi-word ('Salted Fish',
+# 'Fine Furs'); spaces normalize to the underscore form via _canon_good.
+# Grade sub-lines under a 'units total' stock line ('56 units seax-grade')
+# start with the number, not a name, so they can't spuriously match.
 _VTRADE_STOCK_RE = re.compile(
-    r"^-~\*\s+([A-Za-z]+)\s+([\d,]+)\s+units\b", re.IGNORECASE)
-_GOOD_SET = set(GOOD_NAMES.values())
+    r"^-~\*\s+([A-Za-z]+(?: [A-Za-z]+)*)\s+([\d,]+)\s+units\b",
+    re.IGNORECASE)
+_GOOD_SET = set(GOOD_NAMES.values()) | set(EXTRA_GOODS)
+
+
+def _canon_good(name):
+    """A displayed good name -> the canonical underscore form used
+    everywhere else ('Salted Fish' -> 'salted_fish')."""
+    return name.lower().replace(" ", "_")
 
 
 def parse_vtrade_stock(lines):
@@ -217,7 +396,7 @@ def parse_vtrade_stock(lines):
         m = _VTRADE_STOCK_RE.match(line)
         if not m:
             continue
-        good = m.group(1).lower()
+        good = _canon_good(m.group(1))
         if good not in _GOOD_SET:
             continue
         try:
@@ -228,7 +407,8 @@ def parse_vtrade_stock(lines):
 
 
 VTRADE_PRICE_RE = re.compile(
-    r"^-~\*\s+([A-Za-z]+)\s+([\d,]+)\s+daler\b", re.IGNORECASE)
+    r"^-~\*\s+([A-Za-z]+(?: [A-Za-z]+)*)\s+([\d,]+)\s+daler\b",
+    re.IGNORECASE)
 
 
 def parse_vtrade_prices(lines):
@@ -240,7 +420,7 @@ def parse_vtrade_prices(lines):
         m = VTRADE_PRICE_RE.match(line)
         if not m:
             continue
-        good = m.group(1).lower()
+        good = _canon_good(m.group(1))
         if good not in _GOOD_SET:
             continue
         try:
@@ -272,18 +452,25 @@ def goods_value(goods, prices):
 # Reward:/Quota: lines; the border characters ('-', '~', '*') can't
 # spuriously match either pattern, so this works directly on the joined
 # raw lines without stripping decoration first.
-_MISSION_ID_RE = re.compile(r"\[(\d{3,6})\]")
+# The 2026-07 board pads the id inside the brackets ('[27137 ]').
+_MISSION_ID_RE = re.compile(r"\[\s*(\d{3,6})\s*\]")
+# Longest-first so overlapping names ('fine_furs' vs 'furs', 'salted_fish'
+# vs 'fish') always match whole. The board displays multi-word goods with
+# spaces ('Fine Furs') while the canonical form uses underscores, so each
+# underscore matches either; _canon_good folds matches back to canonical.
+_GOOD_ALT = "|".join(g.replace("_", "[ _]")
+                     for g in sorted(_GOOD_SET, key=len, reverse=True))
 _MISSION_GOOD_RE = re.compile(
-    r"(\d+)\s+(" + "|".join(GOOD_NAMES.values()) + r")\b", re.IGNORECASE)
+    r"(\d+)\s+(" + _GOOD_ALT + r")\b", re.IGNORECASE)
 # Matches the 'Need: stock/required good' line added in newer vmission output.
 # Format: 'Need: 52/13 grain, 8/5 timber' -> captures (13, 'grain'), (5, 'timber').
 # Prefer this over prose-matching when present to avoid double-counting goods
 # that also appear in the description text.
 _MISSION_NEED_RE = re.compile(
-    r"\d+/(\d+)\s+(" + "|".join(GOOD_NAMES.values()) + r")\b", re.IGNORECASE)
+    r"\d+/(\d+)\s+(" + _GOOD_ALT + r")\b", re.IGNORECASE)
 _MISSION_REWARD_RE = re.compile(
     r"Reward:\s*(\d+)\s*rep\s*\+\s*([\d,]+)\s*daler", re.IGNORECASE)
-_MISSION_TOWN_RE = re.compile(r"\[\d+\]\s*([A-Za-z'\s]+?)\s*[:(]")
+_MISSION_TOWN_RE = re.compile(r"\[\s*\d+\s*\]\s*([A-Za-z'\s]+?)\s*[:(]")
 _MISSION_QUOTA_RE = re.compile(r"Quota:\s*(\d+)\s*/\s*(\d+)")
 
 
@@ -299,10 +486,10 @@ def parse_mission_board(lines):
     for i, (pos, mid) in enumerate(ids):
         end = ids[i + 1][0] if i + 1 < len(ids) else len(text)
         chunk = text[pos:end]
-        reqs = [(int(q), g.lower())
+        reqs = [(int(q), _canon_good(g))
                 for q, g in _MISSION_NEED_RE.findall(chunk)]
         if not reqs:
-            reqs = [(int(q), g.lower())
+            reqs = [(int(q), _canon_good(g))
                     for q, g in _MISSION_GOOD_RE.findall(chunk)]
         rm = _MISSION_REWARD_RE.search(chunk)
         if not rm or not reqs:
@@ -427,7 +614,7 @@ def parse_newbie_board(lines):
         dm = _NEWBIE_DALER_RE.search(chunk)
         if not dm:
             continue
-        goods = [(int(q), g.lower())
+        goods = [(int(q), _canon_good(g))
                  for q, g in _MISSION_GOOD_RE.findall(chunk)]
         rm = _NEWBIE_REP_RE.search(chunk)
         tm = _MISSION_TOWN_RE.search(chunk)
@@ -522,13 +709,146 @@ def fresh_bar(pct, width=12):
     return "█" * fill + "░" * (width - fill)
 
 
-CITY_KEYS = ("DALER", "GOD_POWER", "SHIPS", "CARTS", "MARKET",
-             "INCOMING", "WSTOCK", "BUILDINGS", "MONUMENTS")
+CITY_KEYS = ("DALER", "GOD_POWER", "WSTOCK", "CELLAR", "REFINERY",
+             "PRODUCTION", "BUILDINGS", "MONUMENTS", "THRALLS", "BLOT")
 
+# Carts/market moved off the City tab to the Trade tab in the 2026-07
+# feed expansion (ROUTES/RBUILD gave trade its own tab's worth of data).
+TRADE_KEYS = ("CARTS", "CIDLE", "MARKET", "INCOMING", "ROUTES", "RBUILD",
+              "SUPG", "CUPG")
+
+RAIDS_KEYS = ("SHIPS", "RAIDLOG", "RTARGETS")
+
+# SHPLOTS/SCIVICS/SCONSUME/PATROL/STAFF/BDMG are named in the 2026-07
+# guild help doc with no field format; shown raw until captured.
 PEOPLE_KEYS = ("SETTLERS", "SETTLERX", "HIRD", "VARANG", "RAID",
-               "MISSIONS", "ERRAND", "GARRISON", "SACTIONS")
+               "MISSIONS", "ERRAND", "GARRISON", "SACTIONS", "SHPLOTS",
+               "SCIVICS", "SCONSUME", "PATROL", "STAFF", "BDMG",
+               "THRALL_FOLLOWER")
 
 FARM_KEYS = ("FARM",)
+
+
+# --- Trade tab decoders (CARTS/CIDLE/ROUTES/RBUILD) --------------------
+def parse_carts(value):
+    """CARTS -> list of cart dicts. 2026-07 doc field order:
+    mode|good|village|secs|amt|half_in|quality|cart_id|tier|dur|cap|
+    escort|legs. legs (route carts only) is the multi-stop plan joined
+    with '!', and its per-leg fields REUSE '|' (mode|good|amt|village),
+    so the first 12 pipe fields are fixed and everything after belongs
+    to legs."""
+    out = []
+    for entry in value.split(";"):
+        if not entry:
+            continue
+        p = entry.split("|")
+        if len(p) < 8:
+            continue
+        cart = {"mode": p[0], "good": p[1], "village": p[2],
+                "secs": field(p, 3, ""), "amt": field(p, 4, ""),
+                "half_in": field(p, 5, ""), "quality": field(p, 6, ""),
+                "cart_id": field(p, 7, "?"), "tier": field(p, 8, "?"),
+                "dur": field(p, 9, "?"), "cap": field(p, 10, "?"),
+                "escort": field(p, 11, "0"), "legs": []}
+        for leg in "|".join(p[12:]).split("!"):
+            lf = leg.split("|")
+            if len(lf) >= 4:
+                cart["legs"].append((lf[0], lf[1], lf[2], lf[3]))
+        out.append(cart)
+    return out
+
+
+def parse_routes(value):
+    """ROUTES 'vid|vname|road_tier|fort_tier|road_maint|fort_maint;...'
+    -> per-village route infrastructure dicts (tiers 0-5, maint 0-100)."""
+    out = []
+    for f in split_entries(value):
+        if len(f) < 6:
+            continue
+        try:
+            out.append({"vid": int(f[0]), "name": f[1],
+                        "road": int(f[2]), "fort": int(f[3]),
+                        "road_maint": int(f[4]), "fort_maint": int(f[5])})
+        except ValueError:
+            continue
+    return out
+
+
+def parse_rbuild(value):
+    """RBUILD 'vid|vname|kind|tier|mats_total|mats_done|secs_left|
+    total_secs|mat_detail;...' -> roads/forts under construction.
+    secs_left: -1=awaiting materials, 0=finalizing, >0=remaining;
+    mat_detail reuses the BUILDS 'good:done/need,...' form."""
+    out = []
+    for f in split_entries(value):
+        if len(f) < 8:
+            continue
+        try:
+            out.append({"vid": f[0], "name": f[1], "kind": f[2],
+                        "tier": f[3], "mats_total": int(f[4]),
+                        "mats_done": int(f[5]), "secs_left": int(f[6]),
+                        "total_secs": int(f[7]),
+                        "mats": parse_build_res(field(f, 8, ""))})
+        except ValueError:
+            continue
+    return out
+
+
+# --- Raids tab decoders (SHIPS/RAIDLOG/RTARGETS) -----------------------
+def parse_ships(value):
+    """SHIPS -> list of ship dicts. 2026-07 doc field order (replaces the
+    earlier best-effort guess that had load/cap at positions 5/6 - those
+    are actually ship id and crew):
+    name|tier|state|target|secs|sid|crew|convoy|convoy_size|convoy_bonus|
+    saga_title|saga_raids|held. held=1 means kept back from raid all /
+    auto-raid (e.g. a ship reserved for voyages)."""
+    out = []
+    for f in split_entries(value):
+        if len(f) < 3:
+            continue
+        out.append({"name": f[0], "tier": field(f, 1, "?"),
+                    "state": f[2], "target": field(f, 3, ""),
+                    "secs": field(f, 4, ""), "sid": field(f, 5, ""),
+                    "crew": field(f, 6, ""), "convoy": field(f, 7, "0"),
+                    "convoy_size": field(f, 8, ""),
+                    "convoy_bonus": field(f, 9, ""),
+                    "saga_title": field(f, 10, ""),
+                    "saga_raids": field(f, 11, ""),
+                    "held": field(f, 12, "0")})
+    return out
+
+
+def parse_raidlog(value):
+    """RAIDLOG 'ship|target|daler|thralls|lost|goods;...' -> recent raids,
+    oldest first (up to 15). goods is 'good:qty,good:qty' (same form as
+    BUILDINGS, so parse_buildings decodes it); empty on a loss."""
+    out = []
+    for f in split_entries(value):
+        if len(f) < 5:
+            continue
+        try:
+            out.append({"ship": f[0], "target": f[1], "daler": int(f[2]),
+                        "thralls": int(f[3]), "lost": f[4] == "1",
+                        "goods": parse_buildings(field(f, 5, ""))})
+        except ValueError:
+            continue
+    return out
+
+
+def parse_rtargets(value):
+    """RTARGETS 'lineage|historical' -> (lineage, historical), each a
+    list of (target_name, good1, good2). Static raid-target data."""
+    groups = value.split("|")
+
+    def grp(s):
+        out = []
+        for e in s.split(";"):
+            p = e.split(":")
+            if len(p) >= 3 and p[0]:
+                out.append((p[0], p[1], p[2]))
+        return out
+
+    return grp(field(groups, 0, "")), grp(field(groups, 1, ""))
 
 
 def parse_farm(value):
@@ -651,6 +971,83 @@ def parse_sactions(value):
     return out
 
 
+# --- People-tab settler/personnel packets, field meanings supplied by
+# the user 2026-07-11 (GAME FACTs, not from the guild help doc) ---------
+def parse_patrol(value):
+    """PATROL 'count|secs' -> (hirdmadr on patrol, seconds until their
+    patrol shift ends), or None if unparseable."""
+    f = value.split("|")
+    try:
+        return int(f[0]), int(field(f, 1, "0"))
+    except (ValueError, IndexError):
+        return None
+
+
+def parse_semi_pairs(value):
+    """'name:val;name:val;...' -> [(name, int), ...]. Covers SCIVICS
+    (civic building -> tier) and SCONSUME (upkeep good -> amount)."""
+    out = []
+    for pair in value.split(";"):
+        if ":" not in pair:
+            continue
+        name, num = pair.rsplit(":", 1)
+        try:
+            out.append((name, int(num)))
+        except ValueError:
+            continue
+    return out
+
+
+def parse_shplots(value):
+    """SHPLOTS 'n|n|n|n' -> [(tier, count), ...] housing plot counts for
+    T1..T4 (e.g. '3|1|0|0' = three T1 plots and one T2)."""
+    out = []
+    for i, tok in enumerate(value.split("|")):
+        try:
+            out.append((i + 1, int(tok)))
+        except ValueError:
+            continue
+    return out
+
+
+# STAFF stat order per the user: combat, trade, craft, sea, wild, land,
+# charm.
+STAFF_STATS = ("combat", "trade", "craft", "sea", "wild", "land", "charm")
+
+# STAFF loyalty scale, 1-5 (GAME FACT from the user, 2026-07-11).
+STAFF_LOYALTY = {5: "Devoted", 4: "Loyal", 3: "Steady", 2: "Uneasy",
+                 1: "Shaken"}
+
+
+def parse_staff(value):
+    """STAFF 'name|assigned|specialty|c,t,c,s,w,l,ch|trait|loyalty|age|
+    ?;...' -> vroster dicts. trait '0' means none ('Taskmaster' etc
+    otherwise); loyalty is 1-5 (see STAFF_LOYALTY), 'veteran' at index 6
+    is the age band. Index 7 (seen 0) is still UNIDENTIFIED, kept raw."""
+    out = []
+    for f in split_entries(value):
+        if len(f) < 4:
+            continue
+        stats = []
+        for name, tok in zip(STAFF_STATS, f[3].split(",")):
+            try:
+                stats.append((name, int(tok)))
+            except ValueError:
+                continue
+        trait = field(f, 4, "0")
+        try:
+            loyalty = int(field(f, 5, ""))
+        except ValueError:
+            loyalty = None
+        out.append({"name": f[0], "assigned": f[1], "specialty": f[2],
+                    "stats": stats,
+                    "trait": "" if trait == "0" else trait,
+                    "loyalty": loyalty,
+                    "age": field(f, 6, ""),
+                    "unknown2": field(f, 7, "")})
+    return out
+
+
 def stat_band(pct):
     if pct < 34:
         return "stat_lo"
@@ -662,16 +1059,16 @@ def stat_band(pct):
 # ======================================================================
 # Status window
 # ======================================================================
-# Tab layout mirrors the reference client (two rows of five). Only Goods
-# is wired up so far; the rest name the feed that will power them, so the
-# window doubles as the roadmap for the remaining Viking MIP work.
-TABS = [["Stats", "City", "Farm", "Builds", "People"],
-        ["Goods", "Map", "Bonds", "Ranks", "Sea"]]
+# Tab layout: the reference client's two rows of five, plus the Trade
+# and Raids tabs added for the 2026-07 feed expansion (carts/routes and
+# the raid log outgrew the City tab).
+TABS = [["Stats", "City", "Trade", "Farm", "Builds", "People"],
+        ["Goods", "Map", "Bonds", "Ranks", "Raids", "Sea"]]
 TAB_FEED = {
-    "Stats": "mip_extra", "City": "mip_city", "Farm": "mip_city",
-    "Builds": "mip_city", "People": "mip_city",
+    "Stats": "mip_extra", "City": "mip_city", "Trade": "mip_city",
+    "Farm": "mip_city", "Builds": "mip_city", "People": "mip_city",
     "Goods": "mip_trade_goods", "Map": "mip_map", "Bonds": "mip_city",
-    "Ranks": "mip_city", "Sea": "mip_voyage",
+    "Ranks": "mip_city", "Raids": "mip_city", "Sea": "mip_voyage",
 }
 
 LEVEL_SYM = {3: "+++", 2: "++", 1: "+", 0: "",
@@ -682,6 +1079,8 @@ GOOD_COLOR = {
     "furs": "#d2a679", "fish": "#6bb5c9", "mead": "#d98c8c",
     "amber": "#e0a82e", "runestones": "#9aa3ad", "spoils": "#c79154",
     "timber": "#a8895f", "iron": "#9fb2c2", "grain": "#c9c45f",
+    "ore": "#8a7f76", "salted_fish": "#4f93a8", "bread": "#d6b26b",
+    "fine_furs": "#e8c9a0", "tools": "#b0b8a0", "gemstones": "#c76bd6",
 }
 
 BG = "#0c0c12"
@@ -708,10 +1107,17 @@ TERRAIN_COLORS = {
 }
 FEATURE_COLOR = "#555560"      # unknown / special symbols (flagged)
 
+# Types per the 2026-07-17 VMAPL wire capture: capital, lineage, player
+# (player-owned villages, 5th field = owner), seer/blot/ruins/farm
+# landmarks, and the three mentors.
 POI_LABEL = {"capital": "Cap", "lineage": "Lin", "settlement": "Set",
-             "mentor_jarl": "Jarl"}
+             "player": "Vill", "seer": "Seer", "blot": "Blot",
+             "ruins": "Ruin", "farm": "Farm", "mentor_ber": "Ber",
+             "mentor_see": "See", "mentor_jarl": "Jarl"}
 POI_COLOR = {"capital": "#e8902e", "lineage": "#d8704a",
-             "settlement": "#e0d040", "mentor_jarl": "#c065c0"}
+             "settlement": "#e0d040", "player": "#e0d040",
+             "mentor_ber": "#c065c0", "mentor_see": "#c065c0",
+             "mentor_jarl": "#c065c0"}
 DEFAULT_POI_COLOR = "#dddddd"
 PLAYER_COLOR = "#ffffff"
 
@@ -818,17 +1224,13 @@ def pathfind(cols, rows, mee, mes, start, goal):
     return moves
 
 
-def map_landmarks(state, custom=None):
-    """name(lowercased) -> (x, y, label). POIs from VMAPL plus the user's
-    custom marks (custom: {name: [x, y]})."""
+def map_landmarks(state):
+    """name(lowercased) -> (x, y, label), the POIs from the live VMAPL
+    feed. Settlements move, so this is always read fresh off the wire
+    rather than cached or overridden by saved marks."""
     out = {}
     for t, name, x, y in parse_vmapl(state.get("VMAPL", "")):
         out[name.lower()] = (x, y, POI_LABEL.get(t, t))
-    for name, xy in (custom or {}).items():
-        try:
-            out[name.lower()] = (int(xy[0]), int(xy[1]), "mark")
-        except (ValueError, IndexError, TypeError):
-            continue
     return out
 
 
@@ -856,7 +1258,8 @@ POOL_MIP = {"Visindi": "VIS", "Kappi": "KAP", "Soemd": "SOE", "Audr": "AUD"}
 #   <Name> ..... [ L ( saga )]  [ daler ]  -> a skill (a leading '+' = child)
 # plus the top "Daler: <n>" total. See client.cmd_vskills / viking_scan_line.
 _VSK_SKILL_RE = re.compile(
-    r"(\+\s*)?([A-Za-z]+)\s*\.{2,}\s*\[\s*(\d+)\s*\(\s*([\d,]+)\s*\)\]"
+    r"(\+\s*)?([A-Za-z]+(?: [A-Za-z]+)*)\s*\.{2,}\s*"
+    r"\[\s*(\d+)\s*\(\s*([\d,]+|max)\s*\)\]"
     r"\s*(?:\[\s*([\d,]+)\s*\])?")
 _VSK_TREE_RE = re.compile(r"^Vegr\s+(\w+)")
 _VSK_POOL_RE = re.compile(r"^([A-Z][a-z]+):\s*([\d,]+)\s*points")
@@ -871,9 +1274,11 @@ def _vsk_num(s):
 def parse_vskills(lines):
     """Parse a captured `vskills` readout into ordered trees. Returns
     {"daler": int, "trees": [{"name", "pool", "points", "skills":
-    [{"name", "level", "saga", "daler", "child"}]}]}. Decorative borders and
-    separators are ignored; partial/garbled lines that don't match are
-    skipped, so it's safe to feed the raw capture."""
+    [{"name", "level", "saga", "daler", "child"}]}]}. saga is None for a
+    maxed skill ('[20 (   max)]'); skill names can be multi-word
+    ('Hrodrs Orka'). Decorative borders and separators are ignored;
+    partial/garbled lines that don't match are skipped, so it's safe to
+    feed the raw capture."""
     daler = 0
     trees = []
     cur = None
@@ -884,9 +1289,11 @@ def parse_vskills(lines):
             continue
         m = _VSK_SKILL_RE.search(s)
         if m and cur is not None:
+            saga = (None if m.group(4) == "max"
+                    else _vsk_num(m.group(4)))
             cur["skills"].append({
                 "name": m.group(2), "level": int(m.group(3)),
-                "saga": _vsk_num(m.group(4)), "daler": _vsk_num(m.group(5)),
+                "saga": saga, "daler": _vsk_num(m.group(5)),
                 "child": bool(m.group(1))})
             continue
         mt = _VSK_TREE_RE.match(s)
@@ -917,16 +1324,28 @@ STANDING_COLOR = {
 # screenshot (supporting docs/viking guild sea tab.png). The active voyage
 # rides in VOYAGE (a pipe record), its sea map in VCR00..VCR15 rows under a
 # VCHH header (w|h|mode), the planned route in VQPATH, the event log in
-# VSAGA/VMEM. The fleet roster (LONGSHIP/SHIPS) already shows on the City
-# tab, so the Sea tab focuses on the active voyage and its chart.
-VOYAGE_KEYS = ("VOYAGE", "VCHH", "VQPATH", "VSAGA", "VMEM", "LONGSHIP")
+# VSAGA/VMEM. The raid fleet roster (SHIPS) shows on the Raids tab, so
+# the Sea tab focuses on the active voyage, its chart, and its spoils.
+VOYAGE_KEYS = ("VOYAGE", "VCHH", "VQPATH", "VSAGA", "VMEM", "LONGSHIP",
+               "VOYAGE_WAIT", "VRESOLVE", "VBOONS", "VSPOILS", "VGOODS",
+               "VAIDS", "VRUNES", "VRELICS", "VCURIOS")
+
+# The five secured-spoils list keys, all 'name|count;...' records.
+SPOILS_KEYS = (("Goods", "VGOODS"), ("Aids", "VAIDS"),
+               ("Runestones", "VRUNES"), ("Relics", "VRELICS"),
+               ("Curiosities", "VCURIOS"))
 
 
 def parse_voyage(value):
-    """VOYAGE pipe-record -> labelled dict. The confident fields are locked
-    against the reference screenshot; STRESS/RENOWN/PRESSURE/WEATHER indices
-    are PROVISIONAL (inferred from which fields moved between two captures)
-    and to be confirmed against more voyages."""
+    """VOYAGE pipe-record -> labelled dict, per the 2026-07 guild help
+    doc's authoritative field order (which corrected the earlier
+    provisional indices: 16 is steps_sailed not renown, 21 is
+    paused_type, weather/renown sit at 22/23):
+    state|ship_id|ship_name|contract_name|contract_type|danger|x|y|width|
+    height|hull|morale|supplies|hull_stress|crew_alive|crew_max|
+    steps_sailed|next_move_in|threat_name|threat_level|threat_pressure|
+    paused_type|weather|ship_renown|captain_style|ship_identity|
+    crew_traits|ship_traits"""
     f = value.split("|")
     g = lambda i: f[i].strip() if 0 <= i < len(f) else ""
     return {
@@ -935,11 +1354,45 @@ def parse_voyage(value):
         "grid_w": g(8), "grid_h": g(9),
         "hull": g(10), "morale": g(11), "supplies": g(12),
         "stress": g(13), "crew": g(14), "crew_max": g(15),
-        "renown": g(16), "next": g(17),
+        "steps": g(16), "next": g(17),
         "threat": g(18), "threat_lvl": g(19), "pressure": g(20),
-        "weather": g(21), "captain": g(24), "identity": g(25),
+        "paused": g(21), "weather": g(22), "renown": g(23),
+        "captain": g(24), "identity": g(25),
         "crew_desc": g(26), "traits": g(27),
     }
+
+
+def parse_longship(value):
+    """LONGSHIP 'sid|name|tier|state|target|return_in_secs|crew|
+    hired_crew|safe|voyage_rep|voyage_identity|captain_style|crew_traits|
+    ship_traits;...' -> voyage-side fleet dicts (2026-07 doc)."""
+    out = []
+    for f in split_entries(value):
+        if len(f) < 4:
+            continue
+        out.append({"sid": f[0], "name": f[1], "tier": f[2],
+                    "state": f[3], "target": field(f, 4, ""),
+                    "return_in": field(f, 5, ""), "crew": field(f, 6, ""),
+                    "hired": field(f, 7, ""), "safe": field(f, 8, ""),
+                    "rep": field(f, 9, ""), "identity": field(f, 10, ""),
+                    "captain": field(f, 11, ""),
+                    "crew_traits": field(f, 12, ""),
+                    "ship_traits": field(f, 13, "")})
+    return out
+
+
+def parse_counts(value):
+    """'name|count;...' (the VGOODS/VAIDS/VRUNES/VRELICS/VCURIOS spoils
+    lists) -> [(name, count), ...]."""
+    out = []
+    for f in split_entries(value):
+        if len(f) < 2:
+            continue
+        try:
+            out.append((f[0], int(f[1])))
+        except ValueError:
+            continue
+    return out
 
 
 def parse_vchh(value):
@@ -959,9 +1412,22 @@ def voyage_chart(state, height=16):
 
 
 def parse_vqpath(value):
-    """VQPATH 'c,r,c,r,...' -> [(col, row), ...] waypoints (queued route)."""
-    nums = [n for n in value.split(",")
-            if n.strip().lstrip("-").isdigit()]
+    """VQPATH -> [(col, row), ...] waypoints (queued route). Two wire
+    forms are accepted: the 2026-07 doc's cell labels ('A01,B02' - row
+    letter + 1-based column, matching cell_label) and the earlier flat
+    'c,r,c,r' number pairs."""
+    toks = [t.strip() for t in value.split(",") if t.strip()]
+    labels = []
+    for t in toks:
+        m = re.fullmatch(r"([A-Za-z])(\d+)", t)
+        if not m:
+            labels = None
+            break
+        labels.append((int(m.group(2)) - 1,
+                       ord(m.group(1).upper()) - ord("A")))
+    if labels is not None:
+        return labels
+    nums = [n for n in toks if n.lstrip("-").isdigit()]
     return [(int(nums[i]), int(nums[i + 1]))
             for i in range(0, len(nums) - 1, 2)]
 
@@ -1097,6 +1563,39 @@ def parse_vrep(value):
     return out
 
 
+# Bond level -> tier name (GAME FACT from the user, 2026-07-11).
+BOND_LEVELS = {1: "Comrades", 2: "Shield-Brothers", 3: "Blood-Sworn",
+               4: "Oathbound"}
+
+
+def parse_bonds(value):
+    """BONDS 'id1|id2|points|level;...' -> [(id1, id2, points, level)].
+    A bond pairs two hirdmadr of the personal guard by their HIRD ids;
+    points is a hidden progress value, level the resulting bond level
+    (e.g. '3|4|194235|1' = hird #3 and #4 at 194,235 points = a level 1
+    bond - GAME FACT from the user, 2026-07-11)."""
+    out = []
+    for f in split_entries(value):
+        if len(f) < 4:
+            continue
+        try:
+            out.append((f[0].strip(), f[1].strip(),
+                        int(f[2]), int(f[3])))
+        except ValueError:
+            continue
+    return out
+
+
+def hird_names(state):
+    """HIRD id -> name map (HIRD field 0 = id, field 1 = name), for
+    resolving the BONDS pair ids to hirdmadr names."""
+    out = {}
+    for f in split_entries(state.get("HIRD", "")):
+        if len(f) >= 2:
+            out[f[0].strip()] = f[1]
+    return out
+
+
 def parse_standings(value):
     """STANDINGS 'id|name|value|label|flag;...' (flag=1 = home lineage)."""
     out = []
@@ -1196,6 +1695,8 @@ class VikingStatus(tk.Toplevel):
         self.current = None
         self.goods_txt = None
         self.city_txt = None
+        self.trade_txt = None
+        self.raids_txt = None
         self.people_txt = None
         self.map_canvas = None
         self.map_poi = None
@@ -1236,6 +1737,10 @@ class VikingStatus(tk.Toplevel):
                     self._build_goods(frame)
                 elif name == "City":
                     self._build_city(frame)
+                elif name == "Trade":
+                    self._build_trade(frame)
+                elif name == "Raids":
+                    self._build_raids(frame)
                 elif name == "People":
                     self._build_people(frame)
                 elif name == "Map":
@@ -1275,15 +1780,48 @@ class VikingStatus(tk.Toplevel):
         return txt
 
     def _build_goods(self, frame):
+        # Filter bar: a button per good -> best-places-to-buy/sell view
+        # for that good; All resets to the per-city market view.
+        self.goods_filter = None
+        self.goods_btns = {}
+        bar = tk.Frame(frame, bg=BG)
+        bar.pack(side="top", fill="x")
+        names = ["all"] + list(GOOD_COLOR)
+        for row in (names[:8], names[8:]):
+            rf = tk.Frame(bar, bg=BG)
+            rf.pack(fill="x")
+            for name in row:
+                btn = tk.Label(rf, text=pretty_name(name), bg=TAB_BG,
+                               fg=GOOD_COLOR.get(name, TAB_FG),
+                               font=self.mono, padx=4, pady=1,
+                               cursor="hand2")
+                btn.pack(side="left", fill="x", expand=True,
+                         padx=1, pady=1)
+                btn.bind("<Button-1>",
+                         lambda _e, n=name: self._set_goods_filter(n))
+                self.goods_btns[name] = btn
+        self.goods_btns["all"].configure(bg=TAB_BG_ON)
+
         txt = self._scrolled_text(frame)
         txt.tag_configure("hold", foreground="#cdb87a",
                           font=self.mono_bold)
+        txt.tag_configure("sec", foreground="#d79030",
+                          font=self.mono_bold)
+        txt.tag_configure("val", foreground="#cccccc")
         txt.tag_configure("cycle", foreground="#6fb6d6")
         for good, col in GOOD_COLOR.items():
             txt.tag_configure("good_" + good, foreground=col)
         for lvl, col in LEVEL_COLOR.items():
             txt.tag_configure("lvl%d" % lvl, foreground=col)
         self.goods_txt = txt
+
+    def _set_goods_filter(self, name):
+        self.goods_filter = None if name == "all" else name
+        active = name if name in self.goods_btns else "all"
+        for n, btn in self.goods_btns.items():
+            btn.configure(bg=TAB_BG_ON if n == active else TAB_BG)
+        self._render_goods(self.state_data.get("TGOODS", ""),
+                           self.state_data.get("DCYCLE", ""))
 
     def _build_city(self, frame):
         txt = self._scrolled_text(frame)
@@ -1297,6 +1835,33 @@ class VikingStatus(tk.Toplevel):
         for i, (_lo, _label, col) in enumerate(FRESH_BANDS):
             txt.tag_configure("fr%d" % i, foreground=col)
         self.city_txt = txt
+
+    def _build_trade(self, frame):
+        txt = self._scrolled_text(frame)
+        txt.tag_configure("sec", foreground="#d79030",
+                          font=self.mono_bold)
+        txt.tag_configure("val", foreground="#cccccc")
+        txt.tag_configure("cyan", foreground="#6fb6d6")
+        txt.tag_configure("res_ok", foreground="#46c246")
+        txt.tag_configure("res_no", foreground="#d65151")
+        txt.tag_configure("stat_lo", foreground="#d65151")
+        txt.tag_configure("stat_mid", foreground="#e0b94a")
+        txt.tag_configure("stat_hi", foreground="#46c246")
+        for good, col in GOOD_COLOR.items():
+            txt.tag_configure("good_" + good, foreground=col)
+        self.trade_txt = txt
+
+    def _build_raids(self, frame):
+        txt = self._scrolled_text(frame)
+        txt.tag_configure("sec", foreground="#d79030",
+                          font=self.mono_bold)
+        txt.tag_configure("val", foreground="#cccccc")
+        txt.tag_configure("cyan", foreground="#6fb6d6")
+        txt.tag_configure("gold", foreground="#e0b94a")
+        txt.tag_configure("res_no", foreground="#d65151")
+        for good, col in GOOD_COLOR.items():
+            txt.tag_configure("good_" + good, foreground=col)
+        self.raids_txt = txt
 
     def _build_people(self, frame):
         txt = self._scrolled_text(frame)
@@ -1369,6 +1934,7 @@ class VikingStatus(tk.Toplevel):
                           font=self.mono_bold)
         txt.tag_configure("val", foreground="#cccccc")
         txt.tag_configure("gold", foreground="#e0b94a")
+        txt.tag_configure("cyan", foreground="#6fb6d6")
         for label, color in STANDING_COLOR.items():
             txt.tag_configure("st_" + label, foreground=color)
         self.bonds_txt = txt
@@ -1455,6 +2021,7 @@ class VikingStatus(tk.Toplevel):
             txt.insert("end", "  Put a longship to sea, and enable "
                               "'vtoggle mip_voyage' to feed this tab.\n",
                        "dim")
+            self._sea_fleet(txt, st)
             txt.configure(state="disabled")
             return
 
@@ -1485,7 +2052,18 @@ class VikingStatus(tk.Toplevel):
              ("Supplies", _pct(v["supplies"])),
              ("Weather", v["weather"] or "Calm"),
              ("Next", fmt_secs(v["next"]) if v["next"] else "-"),
-             ("Pressure", v["pressure"]), ("Captain", v["captain"])])
+             ("Pressure", v["pressure"]), ("Captain", v["captain"]),
+             ("Steps", v["steps"])])
+
+        paused = (st.get("VOYAGE_WAIT", "") or "").strip() or v["paused"]
+        if paused:
+            txt.insert("end", f"\nPaused: {paused} node", "sec")
+            choices = [c.strip() for c in
+                       st.get("VRESOLVE", "").split(",") if c.strip()]
+            if choices:
+                txt.insert("end", "   choices: ", "dim")
+                txt.insert("end", ", ".join(choices), "cyan")
+            txt.insert("end", "\n")
 
         txt.insert("end", "\nChart", "sec")
         txt.insert("end", f"  ({w}x{h}"
@@ -1500,6 +2078,26 @@ class VikingStatus(tk.Toplevel):
             txt.insert("end", "  " + " -> ".join(
                 cell_label(r, c) for c, r in path) + "\n", "cyan")
 
+        spoils_lists = [(label, parse_counts(st.get(key, "")))
+                        for label, key in SPOILS_KEYS]
+        boons = [b.strip() for b in st.get("VBOONS", "").split(",")
+                 if b.strip()]
+        if st.get("VSPOILS") or boons or \
+                any(items for _l, items in spoils_lists):
+            txt.insert("end", "\nSpoils", "sec")
+            if st.get("VSPOILS"):
+                txt.insert("end", f"   {st['VSPOILS']} daler secured",
+                           "sea_dest")
+            txt.insert("end", "\n")
+            for label, items in spoils_lists:
+                if items:
+                    txt.insert("end", f"  {label}: ", "dim")
+                    txt.insert("end", ", ".join(
+                        f"{n} x{c}" for n, c in items) + "\n", "val")
+            if boons:
+                txt.insert("end", "  Boons: ", "dim")
+                txt.insert("end", ", ".join(boons) + "\n", "cyan")
+
         saga = [s.strip() for s in st.get("VSAGA", "").split(";")
                 if s.strip()]
         if saga:
@@ -1512,7 +2110,33 @@ class VikingStatus(tk.Toplevel):
             txt.insert("end", "\nMemories\n", "sec")
             for s in mem:
                 txt.insert("end", "  - " + s + "\n", "dim")
+        self._sea_fleet(txt, st)
         txt.configure(state="disabled")
+
+    def _sea_fleet(self, txt, st):
+        """The LONGSHIP voyage-side fleet roster (crew/rep/traits detail
+        the City-side SHIPS key doesn't carry)."""
+        fleet = parse_longship(st.get("LONGSHIP", ""))
+        if not fleet:
+            return
+        txt.insert("end", "\nFleet\n", "sec")
+        for s in fleet:
+            crew = s["crew"]
+            if s["hired"] not in ("", "0"):
+                crew += f"+{s['hired']}"
+            head = f"  {s['name']} T{s['tier']}  {s['state']}"
+            self._row(txt, head, "val", f"crew {crew}", "cyan")
+            if s["target"]:
+                suffix = (f"  ({fmt_secs(s['return_in'])})"
+                          if s["return_in"] not in ("", "0") else "")
+                txt.insert("end", f"      → {s['target']}{suffix}\n",
+                           "dim")
+            detail = " · ".join(p for p in (
+                s["identity"], s["captain"],
+                f"rep {s['rep']}" if s["rep"] else "",
+                s["crew_traits"], s["ship_traits"]) if p)
+            if detail:
+                txt.insert("end", "      " + detail + "\n", "dim")
 
     # ------------------------------------------------------- tab control
     def show(self, name):
@@ -1534,6 +2158,12 @@ class VikingStatus(tk.Toplevel):
         if self.city_txt is not None and \
                 any(k in state for k in CITY_KEYS):
             self._render_city(state)
+        if self.trade_txt is not None and \
+                any(k in state for k in TRADE_KEYS):
+            self._render_trade(state)
+        if self.raids_txt is not None and \
+                any(k in state for k in RAIDS_KEYS):
+            self._render_raids(state)
         if self.people_txt is not None and \
                 any(k in state for k in PEOPLE_KEYS):
             self._render_people(state)
@@ -1566,6 +2196,10 @@ class VikingStatus(tk.Toplevel):
         holds = parse_tgoods(tgoods)
         txt.configure(state="normal")
         txt.delete("1.0", "end")
+        if self.goods_filter:
+            self._render_good_focus(txt, holds, self.goods_filter)
+            txt.configure(state="disabled")
+            return
         if dcycle:
             parts = dcycle.split("|")
             txt.insert("end", "Demand cycle: ", "dim")
@@ -1576,6 +2210,11 @@ class VikingStatus(tk.Toplevel):
         for hid, goods in holds:
             txt.insert("end", HOLD_NAMES.get(hid, f"Hold {hid}") + "\n",
                        "hold")
+            # Only the goods that matter for trading: in demand (score
+            # +) or a major export (score -); neutrals hidden.
+            goods = [g for g in goods if g[1]]
+            if not goods:
+                txt.insert("end", "  (neutral market)\n", "dim")
             for i in range(0, len(goods), 2):
                 txt.insert("end", "  ")
                 self._cell(txt, goods[i])
@@ -1586,18 +2225,77 @@ class VikingStatus(tk.Toplevel):
             txt.insert("end", "\n")
         txt.configure(state="disabled")
 
+    def _render_good_focus(self, txt, holds, good):
+        """One good across every city: where to buy it cheapest and
+        where it sells highest, price-sorted."""
+        gtag = "good_" + good
+        if gtag not in txt.tag_names():
+            gtag = "num"
+        rows = []                 # (city, level, sup, dem, buy, sell)
+        for hid, goods in holds:
+            for g in goods:
+                if g[0] == good:
+                    rows.append((HOLD_NAMES.get(hid, f"Hold {hid}"),)
+                                + g[1:])
+        txt.insert("end", pretty_name(good) + "\n\n", gtag)
+        if not rows:
+            txt.insert("end", "  No market data for this good yet.\n",
+                       "dim")
+            return
+
+        def sym(level):
+            return (f"{LEVEL_SYM.get(level, ''):>3}",
+                    "lvl%d" % level if level in LEVEL_COLOR else "num")
+
+        buys = sorted((r for r in rows if r[4] is not None),
+                      key=lambda r: r[4])
+        txt.insert("end", "Best places to buy\n", "sec")
+        if not buys:
+            txt.insert("end", "  No prices received.\n", "dim")
+        for city, level, sup, _dem, buy, _sell in buys:
+            txt.insert("end", f"  {city:<15}", "val")
+            txt.insert("end", *sym(level))
+            txt.insert("end", "  buy ", "dim")
+            txt.insert("end", f"{buy:>4}", "cycle")
+            txt.insert("end", "   Sup:", "dim")
+            txt.insert("end", f"{sup}\n", "num")
+
+        sells = sorted((r for r in rows if r[5] is not None),
+                       key=lambda r: -r[5])
+        txt.insert("end", "\nBest places to sell\n", "sec")
+        if not sells:
+            txt.insert("end", "  No prices received.\n", "dim")
+        for city, level, _sup, dem, _buy, sell in sells:
+            txt.insert("end", f"  {city:<15}", "val")
+            txt.insert("end", *sym(level))
+            txt.insert("end", "  sell ", "dim")
+            txt.insert("end", f"{sell:>3}", "cycle")
+            txt.insert("end", "   Dem:", "dim")
+            txt.insert("end", f"{dem}\n", "num")
+
     def _cell(self, txt, good_tuple):
-        good, level, sup, dem = good_tuple
+        # In-demand goods show what the town pays you (sell) and how
+        # much it wants; exports show what it charges you (buy) and its
+        # stock.
+        good, level, sup, dem, buy, sell = good_tuple
         gtag = "good_" + good
         if gtag not in txt.tag_names():
             gtag = "num"
         txt.insert("end", f"{good:<11}", gtag)
         txt.insert("end", f"{LEVEL_SYM.get(level, ''):>3}",
                    "lvl%d" % level if level in LEVEL_COLOR else "num")
-        txt.insert("end", " Sup:", "dim")
-        txt.insert("end", f"{sup:>3}", "num")
-        txt.insert("end", " Dem:", "dim")
-        txt.insert("end", f"{dem:>3}", "num")
+        if level > 0:
+            txt.insert("end", " Dem:", "dim")
+            txt.insert("end", f"{dem:>3}", "num")
+            if sell is not None:
+                txt.insert("end", " sell ", "dim")
+                txt.insert("end", f"{sell:>3}", "cycle")
+        else:
+            txt.insert("end", " Sup:", "dim")
+            txt.insert("end", f"{sup:>3}", "num")
+            if buy is not None:
+                txt.insert("end", " buy  ", "dim")
+                txt.insert("end", f"{buy:>3}", "cycle")
 
     # --------------------------------------------------------- City tab
     CITY_W = 52        # right-align column for times / counts
@@ -1633,55 +2331,39 @@ class VikingStatus(tk.Toplevel):
             if st.get("GOD_POWER_NEXT"):
                 self._row(txt, "  Resets In:", "dim",
                           fmt_secs(st["GOD_POWER_NEXT"]), "cyan")
+            if st.get("GOD_POWER_FOCUS"):
+                self._row(txt, "  Focus:", "dim",
+                          st["GOD_POWER_FOCUS"], "val")
 
-        if "SHIPS" in st:
-            txt.insert("end", "Longships\n", "sec")
-            ships = split_entries(st["SHIPS"])
-            if not ships:
-                txt.insert("end", "  None\n", "dim")
-            for f in ships:
-                # name|tier|status|target|secs|load|cap (load/cap and the
-                # target/eta positions are best-effort - flagged)
-                name, status = field(f, 0), field(f, 2, "")
-                self._row(txt, f"  {name}  {status}", "val",
-                          f"{field(f, 5)}/{field(f, 6)}", "cyan")
-                target, eta = field(f, 3, ""), field(f, 4, "")
-                if status in ("voyaging", "raiding") and target:
-                    suffix = f"  ({fmt_secs(eta)})" if eta not in \
-                        ("", "0") else ""
-                    txt.insert("end", f"      → {target}{suffix}\n",
-                               "dim")
-
-        txt.insert("end", "Carts\n", "sec")
-        carts = split_entries(st.get("CARTS", ""))
-        idle = split_entries(st.get("CIDLE", ""))
-        if not carts and not idle:
-            txt.insert("end", "  No carts\n", "dim")
-        for f in carts:
-            # mode|good|village|secs|amt|half_in|quality|id|tier|dur|cap
-            # (validated against a live 'buy timber' cart)
-            head = (f"  #{field(f, 7)} {field(f, 0)} {field(f, 4)} "
-                    f"{field(f, 1)} → {field(f, 2)}")
-            self._row(txt, head, "val", fmt_secs(field(f, 3, "")), "cyan")
-            txt.insert("end",
-                       f"      T{field(f, 8)}  q{field(f, 6)}%  "
-                       f"dur{field(f, 9)}%  cap{field(f, 10)}\n", "dim")
-        for f in idle:                       # cart_id|tier|durability|cap
-            txt.insert("end",
-                       f"  #{field(f, 0)} idle   T{field(f, 1)}  "
-                       f"dur{field(f, 2)}%  cap{field(f, 3)}\n", "dim")
-
-        txt.insert("end", "Market Orders\n", "sec")
-        if not split_entries(st.get("MARKET", "")):
-            txt.insert("end", "  No open orders\n", "dim")
-
-        txt.insert("end", "Incoming Fills\n", "sec")
-        if not split_entries(st.get("INCOMING", "")):
-            txt.insert("end", "  None incoming\n", "dim")
+        thralls = parse_thralls(st.get("THRALLS", ""))
+        follower = parse_thrall_follower(st.get("THRALL_FOLLOWER", ""))
+        if thralls or follower:
+            total = sum(c for _n, c in thralls)
+            txt.insert("end", f"Thralls  [{total}]\n", "sec")
+            if follower:
+                head = f"  {follower['name']}  L{follower['level']}"
+                if follower["status"]:
+                    head += f"  {follower['status']}"
+                try:
+                    xp = (f"{int(follower['xp']):,}/"
+                          f"{int(follower['next_xp']):,} xp")
+                except ValueError:
+                    xp = f"{follower['xp']}/{follower['next_xp']} xp"
+                self._row(txt, head, "val",
+                          f"{xp}   carry {follower['carried']}/"
+                          f"{follower['cap']}", "cyan")
+            # Zero counts stay visible: an empty building means either
+            # unprioritized or its thralls escaped - both worth seeing.
+            for i in range(0, len(thralls), 2):
+                for n, c in thralls[i:i + 2]:
+                    tag = "val" if c else "dim"
+                    txt.insert("end", f"  {n:<17}", tag)
+                    txt.insert("end", f"{c:<7}", tag)
+                txt.insert("end", "\n")
 
         if "WSTOCK" in st:
             stock = parse_wstock(st["WSTOCK"])
-            total = sum(a for b in stock.values() for a, _ in b)
+            total = sum(b[0] for bs in stock.values() for b in bs)
             cap = warehouse_cap(st)
             head = f"Warehouse  [{total}" + \
                 (f" / {cap}]" if cap else "]")
@@ -1693,18 +2375,57 @@ class VikingStatus(tk.Toplevel):
                 gtag = "good_" + good
                 if gtag not in txt.tag_names():
                     gtag = "val"
-                for i, (amt, fresh) in enumerate(
+                for i, (amt, fresh, grade) in enumerate(
                         sorted(batches, key=lambda b: -b[1])):
                     band_i = next(j for j, (lo, _l, _c)
                                   in enumerate(FRESH_BANDS) if fresh >= lo)
-                    label = FRESH_BANDS[band_i][1]
+                    label = grade if grade else FRESH_BANDS[band_i][1]
                     ftag = "fr%d" % band_i
                     txt.insert("end", f"  {good if i == 0 else '':<9}",
                                gtag)
                     txt.insert("end", f"{label:<11}", ftag)
-                    txt.insert("end", f"{amt:>3} ", "num")
+                    txt.insert("end", f"{amt:>5} ", "num")
                     txt.insert("end", fresh_bar(fresh), ftag)
                     txt.insert("end", f"{fresh:>4}%\n", ftag)
+
+        if "CELLAR" in st:
+            cellar = parse_cellar(st["CELLAR"])
+            txt.insert("end", "Mead Cellar", "sec")
+            if cellar is None:
+                txt.insert("end", "\n  Not built\n", "dim")
+            else:
+                txt.insert("end", f"  T{cellar['tier']}  "
+                           f"[{cellar['stock']} / {cellar['cap']}]\n",
+                           "dim")
+                for qty, pct in cellar["brackets"]:
+                    txt.insert("end", f"  {qty:>4} @ ", "num")
+                    txt.insert("end", f"{pct}%\n", "cyan")
+
+        refineries = parse_refinery(st.get("REFINERY", ""))
+        if refineries:
+            txt.insert("end", "Refineries\n", "sec")
+            for r in refineries:
+                self._row(txt, f"  {pretty_name(r['bldg'])} T{r['tier']}",
+                          "val", f"{r['stock']}/{r['cap']}", "cyan")
+                if r["grades"]:
+                    txt.insert("end", "      " + "  ".join(
+                        f"{g} {q} ({p}%)" for g, q, p in r["grades"])
+                        + "\n", "dim")
+
+        # PRODUCTION reuses the BUILDINGS 'good:amount,...' form.
+        production = parse_buildings(st.get("PRODUCTION", ""))
+        if production:
+            txt.insert("end", "Production\n", "sec")
+            for i in range(0, len(production), 2):
+                line = ""
+                for good, amt in production[i:i + 2]:
+                    line += f"  {good:<14}{amt:>5}   "
+                txt.insert("end", line.rstrip() + "\n", "val")
+
+        if (st.get("BLOT") or "").strip():
+            txt.insert("end", "Blot ", "sec")
+            txt.insert("end", "(raw - unidentified)\n", "dim")
+            txt.insert("end", "  " + st["BLOT"].strip() + "\n", "val")
 
         builds = parse_buildings(st.get("BUILDINGS", ""))
         items = [f"{pretty_name(n)} T{t}" for n, t in builds if t > 0]
@@ -1726,6 +2447,155 @@ class VikingStatus(tk.Toplevel):
                 txt.insert("end", f"  ({count}/5 slots)\n", "dim")
                 if count == 0:
                     txt.insert("end", "  None inscribed\n", "dim")
+
+        txt.configure(state="disabled")
+
+    # -------------------------------------------------------- Trade tab
+    def _render_trade(self, st):
+        txt = self.trade_txt
+        if txt is None:
+            return
+        txt.configure(state="normal")
+        txt.delete("1.0", "end")
+
+        txt.insert("end", "Carts\n", "sec")
+        carts = parse_carts(st.get("CARTS", ""))
+        idle = split_entries(st.get("CIDLE", ""))
+        if not carts and not idle:
+            txt.insert("end", "  No carts\n", "dim")
+        for c in carts:
+            head = (f"  #{c['cart_id']} {c['mode']} {c['amt']} "
+                    f"{c['good']} → {c['village']}")
+            self._row(txt, head, "val", fmt_secs(c["secs"]), "cyan")
+            extra = (f"      T{c['tier']}  q{c['quality']}%  "
+                     f"dur{c['dur']}%  cap{c['cap']}")
+            if c["escort"] not in ("", "0"):
+                extra += f"  escort {c['escort']}"
+            txt.insert("end", extra + "\n", "dim")
+            for mode, good, amt, village in c["legs"]:
+                txt.insert("end",
+                           f"        ↳ {mode} {amt} {good} @ {village}\n",
+                           "dim")
+        for f in idle:                       # cart_id|tier|durability|cap
+            txt.insert("end",
+                       f"  #{field(f, 0)} idle   T{field(f, 1)}  "
+                       f"dur{field(f, 2)}%  cap{field(f, 3)}\n", "dim")
+
+        txt.insert("end", "Market Orders\n", "sec")
+        if not split_entries(st.get("MARKET", "")):
+            txt.insert("end", "  No open orders\n", "dim")
+
+        txt.insert("end", "Incoming Fills\n", "sec")
+        if not split_entries(st.get("INCOMING", "")):
+            txt.insert("end", "  None incoming\n", "dim")
+
+        routes = parse_routes(st.get("ROUTES", ""))
+        if routes:
+            txt.insert("end", "Routes\n", "sec")
+            for r in routes:
+                txt.insert("end", f"  {r['name']:<16}", "val")
+                txt.insert("end", f"road T{r['road']} ", "dim")
+                txt.insert("end", f"{r['road_maint']:>3}%",
+                           stat_band(r["road_maint"]))
+                txt.insert("end", f"   fort T{r['fort']} ", "dim")
+                txt.insert("end", f"{r['fort_maint']:>3}%\n",
+                           stat_band(r["fort_maint"]))
+
+        rbuild = parse_rbuild(st.get("RBUILD", ""))
+        if rbuild:
+            txt.insert("end", "Roads/Forts Under Construction\n", "sec")
+            for b in rbuild:
+                if b["secs_left"] < 0:
+                    status, tag = "awaiting materials", "res_no"
+                elif b["secs_left"] == 0:
+                    status, tag = "finalizing", "res_ok"
+                else:
+                    status, tag = fmt_secs(b["secs_left"]) + " left", "cyan"
+                self._row(txt, f"  {b['name']} {b['kind']} → "
+                          f"T{b['tier']}", "val", status, tag)
+                if b["mats"]:
+                    txt.insert("end", "    ", "dim")
+                    for good, have, need in b["mats"]:
+                        tag = "res_ok" if have >= need else "res_no"
+                        txt.insert("end", f"{good} {have}/{need}   ", tag)
+                    txt.insert("end", "\n")
+
+        # Named in the 2026-07 doc with no documented format.
+        for key in ("SUPG", "CUPG"):
+            if (st.get(key) or "").strip():
+                txt.insert("end", f"{key} ", "sec")
+                txt.insert("end", "(raw - unidentified)\n", "dim")
+                txt.insert("end", "  " + st[key].strip() + "\n", "val")
+
+        txt.configure(state="disabled")
+
+    # -------------------------------------------------------- Raids tab
+    def _render_raids(self, st):
+        txt = self.raids_txt
+        if txt is None:
+            return
+        txt.configure(state="normal")
+        txt.delete("1.0", "end")
+
+        if "SHIPS" in st:
+            txt.insert("end", "Longships\n", "sec")
+            ships = parse_ships(st["SHIPS"])
+            if not ships:
+                txt.insert("end", "  None\n", "dim")
+            for s in ships:
+                head = f"  {s['name']} T{s['tier']}  {s['state']}"
+                if s["held"] == "1":
+                    head += "  [held]"
+                self._row(txt, head, "val", f"crew {s['crew']}", "cyan")
+                if s["state"] in ("raiding", "voyaging", "building",
+                                  "upgrading") and s["target"]:
+                    suffix = (f"  ({fmt_secs(s['secs'])})"
+                              if s["secs"] not in ("", "0") else "")
+                    txt.insert("end", f"      → {s['target']}{suffix}\n",
+                               "dim")
+                detail = []
+                if s["saga_title"]:
+                    detail.append(f"{s['saga_title']} "
+                                  f"({s['saga_raids']} raids)")
+                if s["convoy"] == "1":
+                    detail.append(f"convoy x{s['convoy_size']} "
+                                  f"+{s['convoy_bonus']}")
+                if detail:
+                    txt.insert("end", "      " + " · ".join(detail)
+                               + "\n", "dim")
+
+        if "RTARGETS" in st:
+            lineage, historical = parse_rtargets(st["RTARGETS"])
+            for label, group in (("Lineage Targets", lineage),
+                                 ("Historical Targets", historical)):
+                if not group:
+                    continue
+                txt.insert("end", label + "\n", "sec")
+                for name, g1, g2 in group:
+                    self._row(txt, f"  {name}", "val",
+                              f"{g1}, {g2}", "dim")
+
+        if "RAIDLOG" in st:
+            # The wire sends oldest first; show newest first.
+            raidlog = parse_raidlog(st["RAIDLOG"])[::-1]
+            txt.insert("end", "Raid Log ", "sec")
+            txt.insert("end", "(newest first)\n", "dim")
+            if not raidlog:
+                txt.insert("end", "  No raids yet\n", "dim")
+            for r in raidlog:
+                head = f"  {r['ship']} → {r['target']}"
+                if r["lost"]:
+                    self._row(txt, head, "val", "SHIP LOST", "res_no")
+                else:
+                    self._row(txt, head, "val",
+                              f"{r['daler']:,} daler", "gold")
+                    loot = "  ".join(f"{g} {q}" for g, q in r["goods"])
+                    parts = [p for p in
+                             (f"{r['thralls']} thralls"
+                              if r["thralls"] else "", loot) if p]
+                    if parts:
+                        txt.insert("end", "      " + " · ".join(parts)
+                                   + "\n", "dim")
 
         txt.configure(state="disabled")
 
@@ -1763,6 +2633,10 @@ class VikingStatus(tk.Toplevel):
         avg = _settlerx_int(x, SETTLERX_HOUSING_AVG)
         self._row(txt, "  Housing:", "dim",
                   f"cap {cap}, {plots} plots, avg T{avg / 100:.2f}", "val")
+        shplots = parse_shplots(st.get("SHPLOTS", ""))
+        if any(c for _t, c in shplots):
+            self._row(txt, "  Plots:", "dim", ", ".join(
+                f"{c} x T{t}" for t, c in shplots if c), "val")
         edict_left = _settlerx_int(x, SETTLERX_EDICT_REMAINING)
         if edict_left > 0:
             self._row(txt, "  Edict:", "dim",
@@ -1798,6 +2672,23 @@ class VikingStatus(tk.Toplevel):
             txt.insert("end", "  No settlers yet; housing and community "
                        "still update here.\n", "dim")
 
+        # --- Civic buildings + settler upkeep (SCIVICS/SCONSUME) ---
+        civics = parse_semi_pairs(st.get("SCIVICS", ""))
+        if civics:
+            txt.insert("end", "Civic Buildings\n", "sec")
+            items = [f"{pretty_name(n)} T{v}" for n, v in civics]
+            for i in range(0, len(items), 2):
+                left = "  " + items[i]
+                right = items[i + 1] if i + 1 < len(items) else ""
+                txt.insert("end", f"{left:<26}{right}\n", "val")
+
+        consume = parse_semi_pairs(st.get("SCONSUME", ""))
+        if consume:
+            txt.insert("end", "Settler Upkeep\n", "sec")
+            txt.insert("end", "  " + "   ".join(
+                f"{pretty_name(n)} {v}" for n, v in consume) + "\n",
+                "val")
+
         # --- Settler community actions (SACTIONS) ---
         # Cracked 2026-06-20 (see parse_sactions) - a flat 6-number list,
         # one slot per action in SACTIONS_NAMES order, holding the
@@ -1829,6 +2720,48 @@ class VikingStatus(tk.Toplevel):
             extra = " · ".join(p for p in (age, loc, stance) if p)
             txt.insert("end", f"  {name}", "val")
             txt.insert("end", f"   {extra}\n" if extra else "\n", "dim")
+
+        # --- Patrol (hirdmadr shift) ---
+        patrol = parse_patrol(st.get("PATROL", ""))
+        if patrol is not None:
+            count, secs = patrol
+            txt.insert("end", "Patrol\n", "sec")
+            if count:
+                self._row(txt, f"  {count} hirdmadr on patrol", "val",
+                          f"shift ends in {fmt_secs(secs)}", "cyan")
+            else:
+                txt.insert("end", "  None on patrol\n", "dim")
+
+        # --- Staff (the vroster) ---
+        staff = parse_staff(st.get("STAFF", ""))
+        if staff:
+            txt.insert("end", "Staff\n", "sec")
+            for m in staff:
+                extra = " · ".join(p for p in (
+                    m["assigned"], m["specialty"], m["trait"]) if p)
+                txt.insert("end", f"  {m['name']}", "val")
+                if extra:
+                    txt.insert("end", f"   {extra}", "dim")
+                # Loyalty + age read as one phrase: 'Uneasy Veteran',
+                # colored by the loyalty band.
+                band = ("" if m["loyalty"] is None else
+                        STAFF_LOYALTY.get(m["loyalty"],
+                                          str(m["loyalty"])))
+                band = " ".join(p for p in (band, m["age"].title())
+                                if p)
+                if band:
+                    tag = ("dim" if m["loyalty"] is None else
+                           "stat_hi" if m["loyalty"] >= 4 else
+                           "stat_mid" if m["loyalty"] == 3 else
+                           "stat_lo")
+                    txt.insert("end", f"   {band}", tag)
+                txt.insert("end", "\n")
+                if m["stats"]:
+                    line = "      " + "  ".join(
+                        f"{n} {v}" for n, v in m["stats"])
+                    if m["unknown2"] not in ("", "0"):
+                        line += f"   [? {m['unknown2']}]"
+                    txt.insert("end", line + "\n", "cyan")
 
         # --- Varangian Guards ---
         txt.insert("end", "Varangian Guards\n", "sec")
@@ -1862,6 +2795,14 @@ class VikingStatus(tk.Toplevel):
             if detail:
                 txt.insert("end", f"    → {detail}\n", "dim")
 
+        # --- BDMG: named in the guild help doc with no field format
+        # documented and no capture yet, so shown raw until identified ---
+        bdmg = (st.get("BDMG") or "").strip()
+        if bdmg:
+            txt.insert("end", "Building Damage ", "sec")
+            txt.insert("end", "(raw - unidentified)\n", "dim")
+            txt.insert("end", "  " + bdmg + "\n", "val")
+
         txt.configure(state="disabled")
 
     # ---------------------------------------------------------- Map tab
@@ -1892,10 +2833,24 @@ class VikingStatus(tk.Toplevel):
             for j in (i, i + 1):
                 if j >= len(pois):
                     continue
-                kind, name, _x, _y = pois[j]
+                kind, name, x, y = pois[j]
                 tag = "poi_" + kind if kind in POI_COLOR else "poi_default"
                 cell = f"{POI_LABEL.get(kind, kind):<4} {name}"
-                txt.insert("end", f"{cell:<{col_w}}", tag)
+                # Each entry is click-to-walk (same walk_cb as clicking
+                # the map cell itself). One tag per list slot; re-binding
+                # on re-render replaces the old lambda, so stale
+                # coordinates never linger.
+                link = f"poi_link_{j}"
+                txt.insert("end", cell, (tag, link))
+                txt.insert("end", " " * max(0, col_w - len(cell)))
+                if self.walk_cb:
+                    txt.tag_bind(link, "<Button-1>",
+                                 lambda _e, wx=x, wy=y:
+                                     self.walk_cb(wx, wy))
+                    txt.tag_bind(link, "<Enter>",
+                                 lambda _e: txt.configure(cursor="hand2"))
+                    txt.tag_bind(link, "<Leave>",
+                                 lambda _e: txt.configure(cursor=""))
             txt.insert("end", "\n")
         txt.configure(state="disabled")
 
@@ -1950,9 +2905,28 @@ class VikingStatus(tk.Toplevel):
             txt.insert("end", f"{pts:,} points\n", "num")
             for sk in tree["skills"]:
                 ind = "      " if sk["child"] else "    "
-                txt.insert("end", f"{ind}{sk['name']}: ", "val")
-                txt.insert("end",
-                           f"{sk['saga']:,} ({sk['daler']:,})\n", "cost")
+                txt.insert("end", f"{ind}{sk['name']} ", "val")
+                txt.insert("end", f"L{sk['level']}", "num")
+                if sk["saga"] is None:
+                    txt.insert("end", "   max\n", "gold")
+                else:
+                    cost = f"   {sk['saga']:,}"
+                    if sk["daler"]:
+                        cost += f" ({sk['daler']:,})"
+                    txt.insert("end", cost + "\n", "cost")
+
+    def _glvl_precise(self):
+        """Guild level = sum of all skill levels / 4 (GAME FACT from the
+        user, 2026-07-11), computed from the last `vskills` read. The
+        fraction matters: 80.75 means one skill raise short of glvl 81.
+        Returns a display string, or None if vskills isn't loaded."""
+        if not self.vskills:
+            return None
+        total = sum(sk["level"] for tree in self.vskills.get("trees", [])
+                    for sk in tree["skills"])
+        if not total:
+            return None
+        return str(total // 4) if total % 4 == 0 else f"{total / 4:.2f}"
 
     def _render_stats(self, st):
         txt = self.stats_txt
@@ -1962,8 +2936,9 @@ class VikingStatus(tk.Toplevel):
         txt.delete("1.0", "end")
         if st.get("LIN") or st.get("GLVL"):
             txt.insert("end", st.get("LIN", "?"), "sec")
-            if st.get("GLVL"):
-                txt.insert("end", f"   Guild Level {st['GLVL']}", "dim")
+            glvl = self._glvl_precise() or st.get("GLVL")
+            if glvl:
+                txt.insert("end", f"   Guild Level {glvl}", "dim")
             txt.insert("end", "\n")
         self._render_gxp(txt, st)
         txt.insert("end", "\n")
@@ -2000,12 +2975,20 @@ class VikingStatus(tk.Toplevel):
             return
         txt.configure(state="normal")
         txt.delete("1.0", "end")
-        txt.insert("end", "Reputation ", "sec")
-        txt.insert("end", "(rank/progress fields best-effort)\n", "dim")
+        txt.insert("end", "Reputation\n", "sec")
+        # VREP semantics confirmed by the user 2026-07-11: rep (f2) is
+        # the LIFETIME rep with that hold, f4/f5 the CUMULATIVE
+        # thresholds of the current/next rank (525 got rank 2, 2025
+        # total gets rank 3) - so within-rank progress is rep-f4 out of
+        # f5-f4 (e.g. 1042/1500 for rep 1567).
         for _hid, name, rep, rank, cur, nxt in parse_vrep(
                 st.get("VREP", "")):
-            self._row(txt, f"  {name:<16}{rep:>5}", "val",
-                      f"rank {rank} ({cur}/{nxt})", "dim")
+            try:
+                progress = f"({rep - int(cur):,}/{int(nxt) - int(cur):,})"
+            except ValueError:
+                progress = f"({rep:,}/{nxt})"
+            self._row(txt, f"  {name:<16}rank {rank}", "val",
+                      progress, "dim")
         txt.configure(state="disabled")
 
     def _render_bonds(self, st):
@@ -2028,11 +3011,16 @@ class VikingStatus(tk.Toplevel):
             if flag == "1" or name.lower() == home:
                 txt.insert("end", "  ★ home", "gold")
             txt.insert("end", "\n")
-        bonds = st.get("BONDS", "")
+        bonds = parse_bonds(st.get("BONDS", ""))
         if bonds:
-            txt.insert("end", "Bonds\n", "sec")
-            for f in split_entries(bonds):
-                txt.insert("end", "  " + " | ".join(f) + "\n", "val")
+            names = hird_names(st)
+            txt.insert("end", "Guard Bonds\n", "sec")
+            for id1, id2, pts, lvl in bonds:
+                pair = (f"{names.get(id1, '#' + id1)} + "
+                        f"{names.get(id2, '#' + id2)}")
+                tier = BOND_LEVELS.get(lvl, f"L{lvl}")
+                self._row(txt, f"  {pair}", "val",
+                          f"{tier} ({pts:,})", "cyan")
         txt.configure(state="disabled")
 
     def _render_builds(self, st):
