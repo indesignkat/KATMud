@@ -203,15 +203,15 @@ Still in `_bot_start`, find (a few lines further down):
             self.write_local(
                 f"[hunt] roaming area '{self._bot_area_name}' - {markers}; "
                 f"attacks any mob it finds via {how}, skips rooms with a "
-                "non-party player. Hunt off to stop. (On deadman"
-                f"{clear} it walks back to start.)",
+                "non-party player. Hunt off to stop. (Needs autocombat ON; "
+                f"on deadman{clear} it walks back to start.)",
                 "#66cc66")
         else:
             self.write_local(
                 f"[bot] roaming area '{self._bot_area_name}' - {markers}; "
                 "fights aggro as it comes, skips rooms with a non-party "
-                "player. Bot off to stop. (On deadman it walks back to "
-                "start.)",
+                "player. Bot off to stop. (Needs autocombat ON; on deadman "
+                "it walks back to start.)",
                 "#66cc66")
 ```
 
@@ -229,14 +229,15 @@ Replace with:
             self.write_local(
                 f"[hunt] roaming {where} - {markers}; "
                 f"attacks any mob it finds via {how}, skips rooms with a "
-                f"non-party player. Hunt off to stop. (On deadman{clear} it "
-                f"{home}.)",
+                f"non-party player. Hunt off to stop. (Needs autocombat ON; "
+                f"on deadman{clear} it {home}.)",
                 "#66cc66")
         else:
             self.write_local(
                 f"[bot] roaming {where} - {markers}; "
                 "fights aggro as it comes, skips rooms with a non-party "
-                f"player. Bot off to stop. (On deadman it {home}.)",
+                f"player. Bot off to stop. (Needs autocombat ON; on deadman "
+                f"it {home}.)",
                 "#66cc66")
 ```
 
@@ -572,8 +573,8 @@ Find (around line 8550-8559):
 
 ```python
   Bot | Bot off            (roam the current room's AREA, fighting aggro
-      mobs as they engage, then moving on; needs the sqlite map and the
-      two room-marker asets - see #markers. Empty rooms are skipped
+      mobs as they engage, then moving on; needs the sqlite map, autocombat,
+      and the two room-marker asets - see #markers. Empty rooms are skipped
       instantly; rooms with a non-party player are ceded.)
   Hunt | Hunt off          (like Bot but ACTIVELY attacks any mob it finds:
       uses guild setting autoattack_command if set (a '{t}' token is replaced
@@ -587,9 +588,9 @@ Replace with:
 
 ```python
   Bot | Bot mapless | Bot off   (roam the current room's AREA, fighting
-      aggro mobs as they engage, then moving on; needs the sqlite map and
-      the two room-marker asets - see #markers. Empty rooms are skipped
-      instantly; rooms with a non-party player are ceded.
+      aggro mobs as they engage, then moving on; needs the sqlite map,
+      autocombat, and the two room-marker asets - see #markers. Empty rooms
+      are skipped instantly; rooms with a non-party player are ceded.
       'Bot mapless' drops the map requirement entirely - roams by direction
       only, for zones that can't be charted, e.g. every room sharing one
       vnum. No area-left stop; deadman trip stops in place, not walk-home.)
@@ -851,7 +852,7 @@ Find the same insertion point used in Task 5 (directly above `# ----------------
             "[chaossea] hunting for a chaotic charm + cube of raw chaos - "
             "examines every mutant, fights the ones carrying a needed item "
             "(or that aggro/block you), retreats once both are found. "
-            "Chaossea off to stop.", "#66cc66")
+            "Chaossea off to stop. (Needs autocombat ON.)", "#66cc66")
         self._chaossea_reschedule(0.6)
 
     def _chaossea_stop(self, why=""):

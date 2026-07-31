@@ -51,12 +51,25 @@ def spawn_picker():
     _spawn_detached()
 
 
+def web_dashboard_enabled():
+    """global.json settings.web_dashboard, default off. Read straight
+    from the file (not through config.Cascade, which needs per-character
+    context the picker has no reason to assemble)."""
+    data, _err = paths.load_json(paths.GLOBAL_FILE, default={})
+    return bool((data.get("settings") or {}).get("web_dashboard", False))
+
+
 def ensure_hub_running():
     """Phone/web dashboard (spec: docs/superpowers/specs/
     2026-06-21-web-dashboard-design.md): the hub must be up for the
     dashboard to work, but it isn't tied to any one character's
     lifetime, so the picker starts it (the same detached way it starts
-    characters) the first time it's not already listening."""
+    characters) the first time it's not already listening.
+
+    Off by default: resolve_bind_host shells out to `tailscale ip -4`,
+    which adds a visible delay to every character launch."""
+    if not web_dashboard_enabled():
+        return
     host = hub.resolve_bind_host()
     if hub.is_hub_running(host, hub.DEFAULT_PORT):
         return

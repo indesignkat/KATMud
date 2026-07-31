@@ -665,6 +665,21 @@ class MudClient:
         if err:
             self.write_local(f"settings save failed: {err}", "#cc6666")
 
+    def _toggle_web_dashboard(self):
+        """Settings menu checkbox. Global scope: the hub is one shared
+        process, and the picker (which reads global.json) is what starts
+        it. Turning it off only stops future launches from starting the
+        hub - an already-running one keeps serving until it's closed."""
+        on = self.web_dashboard_var.get()
+        self.set_setting("web_dashboard", on, scope="global")
+        if on:
+            picker.ensure_hub_running()
+            self.write_local("web dashboard on (hub starting)", "#88aa88")
+        else:
+            self.write_local(
+                "web dashboard off - no hub on future launches "
+                "(any running hub keeps serving)", "#88aa88")
+
     def load_layers(self):
         c = self.cascade
         self.aliases = dict(c.get("aliases", {}) or {})
@@ -776,6 +791,12 @@ class MudClient:
                           command=lambda: self.bump_font(+1))
         m_set.add_command(label="Smaller  Ctrl+-",
                           command=lambda: self.bump_font(-1))
+        m_set.add_separator()
+        self.web_dashboard_var = tk.BooleanVar(
+            value=bool(self.setting("web_dashboard", False)))
+        m_set.add_checkbutton(label="Web dashboard (phone)",
+                              variable=self.web_dashboard_var,
+                              command=self._toggle_web_dashboard)
         menubar.add_cascade(label="Settings", menu=m_set)
         m_tools = tk.Menu(menubar, tearoff=0)
         m_tools.add_command(label="Aliases && Triggers...",
@@ -6967,6 +6988,7 @@ class MudClient:
         upd = viking.parse_bbe(data)
         if not upd:
             return
+        viking.reassemble_vmapl(self.viking_state, upd)
         if "TGOODS" in upd:
             # TGOODS outgrew one packet (2026-07 trade expansion) and
             # arrives in pieces; merge by hold id, not last-chunk-wins.

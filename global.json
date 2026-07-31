@@ -79,6 +79,7 @@
     "history_min_chars": 0,
     "command_separator": ";",
     "auto_mapping": true,
-    "ntfy_topic": null
+    "ntfy_topic": null,
+    "web_dashboard": false
   }
 }

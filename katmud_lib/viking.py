@@ -54,16 +54,14 @@ def parse_bbe(data):
 # Multi-word goods use the mission board's underscore form as the
 # canonical name ('salted_fish'), matching the vtrade parsers below.
 GOOD_NAMES = {
-    "f": "furs", "h": "fish", "m": "mead", "a": "amber",
+    "f": "furs", "h": "fish", "m": "mead",
     "r": "runestones", "s": "spoils", "t": "timber", "i": "iron",
     "g": "grain", "o": "ore", "k": "salted_fish", "b": "bread",
     "e": "fine_furs", "l": "tools", "j": "gemstones",
 }
 # Goods added in the 2026-07-17 trade expansion, seen in `vtrade prices`
 # and on the mission board. Their TGOODS letters haven't been captured
-# yet, so they live here rather than in GOOD_NAMES; amber conversely
-# dropped off the price table but still appears in missions, so it stays
-# in GOOD_NAMES (a good with no market price counts 0 in goods_value).
+# yet, so they live here rather than in GOOD_NAMES.
 EXTRA_GOODS = ("sunstone", "honey", "weapons", "armour", "finery")
 # Hold id -> CITY name (user preference 2026-07-11: city names, not
 # lineage 'X Hold' names - e.g. lineage Eiriksson's city is Eiriksby).
@@ -161,6 +159,28 @@ def merge_vmapl(old, new):
         if len(f) >= 4:
             merged[(f[0], f[1])] = entry
     return ";".join(merged.values())
+
+
+_VMAPL_FRAG_RE = re.compile(r"^VMAPL_(\d+)of(\d+)$")
+
+
+def reassemble_vmapl(state, upd):
+    """Undo the MUD's sub-chunking of individual VMAPL chunks (wire
+    capture 2026-07-30: mip_20260730_130257.log). Each VMAPL chunk that
+    merge_vmapl expects can now itself arrive split across keys named
+    VMAPL_<n>of<m> instead of one plain VMAPL key - concatenating the
+    pieces in order reconstructs the original chunk text byte-for-byte
+    (splits land mid-word, e.g. 'Hafr' + 'fjord'). Buffers partial bursts
+    in state['_vmapl_frag'] across calls; once the final piece (n==m)
+    arrives, replaces the fragment keys in `upd` with a plain 'VMAPL' key
+    so the existing merge_vmapl path handles it unchanged."""
+    for k in [k for k in upd if _VMAPL_FRAG_RE.match(k)]:
+        n, m = (int(g) for g in _VMAPL_FRAG_RE.match(k).groups())
+        val = upd.pop(k)
+        state["_vmapl_frag"] = val if n == 1 else \
+            state.get("_vmapl_frag", "") + val
+        if n == m:
+            upd["VMAPL"] = state.pop("_vmapl_frag", "")
 
 
 # --- mip_city decoders (City tab) -------------------------------------
@@ -595,9 +615,9 @@ _NEWBIE_REP_RE = re.compile(r"\+(\d+)-(\d+)\s*reputation", re.IGNORECASE)
 _NEWBIE_FETCH_RE = re.compile(r"Fetch from\s+([A-Za-z'\s]+?)\s*->",
                               re.IGNORECASE)
 # Newbie errands never carry spoils/runestones (per supporting docs/VN.txt),
-# so the acceptable metrics are daler plus the 7 goods actually seen there.
+# so the acceptable metrics are daler plus the 6 goods actually seen there.
 NEWBIE_METRICS = ("daler", "timber", "iron", "furs", "fish", "grain",
-                  "mead", "amber")
+                  "mead")
 
 
 def parse_newbie_board(lines):
@@ -1077,7 +1097,7 @@ LEVEL_COLOR = {3: "#5fd65f", 2: "#7cc869", 1: "#9cbf77", 0: "#888888",
                -1: "#bf9b77", -2: "#cc7a52", -3: "#d65151"}
 GOOD_COLOR = {
     "furs": "#d2a679", "fish": "#6bb5c9", "mead": "#d98c8c",
-    "amber": "#e0a82e", "runestones": "#9aa3ad", "spoils": "#c79154",
+    "runestones": "#9aa3ad", "spoils": "#c79154",
     "timber": "#a8895f", "iron": "#9fb2c2", "grain": "#c9c45f",
     "ore": "#8a7f76", "salted_fish": "#4f93a8", "bread": "#d6b26b",
     "fine_furs": "#e8c9a0", "tools": "#b0b8a0", "gemstones": "#c76bd6",
