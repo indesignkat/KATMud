@@ -29,9 +29,9 @@ from collections import deque, namedtuple
 from tkinter import font as tkfont
 from tkinter import simpledialog
 
-from . import (blade, changeling, config, credentials, dialogs, mapdata,
-               mapparse, mapsql, mobdb, necro, paths, picker, profiles,
-               viking)
+from . import (bard, blade, changeling, config, credentials, dialogs,
+               mapdata, mapparse, mapsql, mobdb, necro, paths, picker,
+               profiles, viking)
 from .protocol import (MudConnection, parse_composite,
                        strip_mip_colors, tag_to_style)
 from .widgets import MapPane, VitalsBar
@@ -182,6 +182,13 @@ class MudClient:
         self.last_sent = time.time()
         self.last_manual = time.time()
         self.deadman_tripped = False
+        # 3s Bard: the FFF I/J text fields, parsed (see katmud_lib/bard.py).
+        # bard_effects is REBUILT from every I packet, never updated in place -
+        # the I payload is replace-not-merge, so a lapsed buff vanishes from it
+        # rather than reading 0, and merging would pin dead buffs forever.
+        self.bard_effects = {}
+        self.bard_status = {}
+        self._bard_last_cast = {}       # action key -> time.time() of last send
         # Cross-character reminders: shared reminders.json polled each tick.
         # Cache the parsed list and only re-read when the file's mtime moves
         # (another client/character may add or fire one at any time).
@@ -206,6 +213,8 @@ class MudClient:
         self.markers_debug = False      # #markers: report italic/underline
                                         # lines (mob/player room markers)
         self.viking_state = {}          # merged BBE feed (guild MIP)
+        self.vperf = False              # #vperf: time the BBE hot path
+        self.vperf_stats = {}           # rolling window accumulator
         self.viking_win = None
         self.viking_spells = ""         # active-spell status line
         self.viking_skills = None       # last parsed `vskills` (skill costs)
@@ -329,6 +338,8 @@ class MudClient:
         self._bot_no_combat_rooms = 0   # Hunt-only: consecutive rooms entered
                                         # with no fight; resets on any combat
         self._hunt_filter = None        # optional mob-name filter (Hunt n zombie)
+        self._hunt_watch = None         # optional 2nd keyword (Hunt zombie boss):
+                                        # seeing THIS mob stops the hunt + alerts
         self._hunt_attacked = False     # swung at this room's mob, waiting for
                                         # the fight to register (autocombat then
                                         # finishes it - don't roam meanwhile)
@@ -3244,14 +3255,26 @@ class MudClient:
             if fence_vnum is None:
                 self.write_local("[hunt] location unknown.", "#cc9933"); return
             self.send_line(first)
-            filt = " ".join(words[1:]) or None
+            filt, watch = self._hunt_targets(words[1:])
             self._bot_start(mode, fence_vnum=fence_vnum,
                             fence_dir=self._REVERSE_DIR[first],
-                            hunt_filter=filt)
+                            hunt_filter=filt, hunt_watch=watch)
             return
         mapless = (first == "mapless")
-        filt = first if (first and not mapless) else None
-        self._bot_start(mode, mapless=mapless, hunt_filter=filt)
+        filt, watch = self._hunt_targets(words[1:] if mapless else words)
+        self._bot_start(mode, mapless=mapless, hunt_filter=filt,
+                        hunt_watch=watch)
+
+    @staticmethod
+    def _hunt_targets(words):
+        """The trailing `[<target> [<watch>]]` of any Hunt form (plain,
+        `mapless`, or fenced `Hunt <dir>`) -> (target, watch). Both are single
+        kill keywords, positional: the mob to attack, and the mob whose
+        appearance stops the hunt. One parse rule for all three entry shapes,
+        so `Hunt north einherjer eihwaz` arms the watch like the plain form
+        does. Extra words are ignored."""
+        return (words[0] if words else None,
+                words[1] if len(words) > 1 else None)
 
     # ============================================================ Agent
     # Autonomous assistant (agent_spec.md). SCAFFOLD STAGE: the tick loop
@@ -3649,7 +3672,7 @@ class MudClient:
         row = self.mapdb.get_room(vnum)
         return row["area_id"] if row else None
 
-    def _bot_start(self, mode="aggro", mapless=False, fence_vnum=None, fence_dir=None, hunt_filter=None):
+    def _bot_start(self, mode="aggro", mapless=False, fence_vnum=None, fence_dir=None, hunt_filter=None, hunt_watch=None):
         verb = "bot" if mode == "aggro" else "hunt"
         v = None
         area_id = None
@@ -3694,6 +3717,7 @@ class MudClient:
         self._bot_no_combat_rooms = 0
         self._bot_recheck = True        # first tick looks at the current room
         self._hunt_filter = hunt_filter
+        self._hunt_watch = hunt_watch
         self._hunt_attacked = False
         self._hunt_whiffs = 0
         self._hunt_lines = []
@@ -3714,6 +3738,9 @@ class MudClient:
             how = (f"autoattack '{aa}'" if aa else "kill <keyword>")
             if hunt_filter:
                 how += f", filter='{hunt_filter}'"
+            if hunt_watch:
+                how += (f"; STOPS + alerts the moment a mob matching "
+                        f"'{hunt_watch}' is in the room")
             limit = self.wander_clear_limit if mapless else self.hunt_clear_limit
             clear = (f", or {limit} rooms with no combat," if limit else "")
             self.write_local(
@@ -3741,6 +3768,8 @@ class MudClient:
         self._bot_room_ready = False
         self._hunt_attacked = False
         self._hunt_whiffs = 0
+        self._hunt_filter = None
+        self._hunt_watch = None
         self._bot_fence_vnum = None
         self._bot_fence_dir = None
         if self._bot_job:
@@ -3921,6 +3950,15 @@ class MudClient:
     def _bot_assess(self):
         """Decide what to do in the just-displayed room. Returns "move" (caller
         roams on) or anything else (this method already rescheduled the tick)."""
+        # Watch target FIRST - before the player-skip and before any attack.
+        # A ceded room still counts as a sighting (the user wants to know
+        # eihwaz is up even if someone else is standing on it), and checking
+        # after the attack branch would send `kill <target>`, whiff, and roam
+        # straight past the mob we were waiting for.
+        watch_line = self._hunt_watch_line()
+        if watch_line:
+            self._hunt_watch_alert(watch_line)
+            return "stop"
         if self._bot_room_player:               # non-party player -> cede it
             self.write_local("[bot] player in room - moving on.", "#cc9933")
             return "move"
@@ -4319,6 +4357,38 @@ class MudClient:
     def _hunt_settle_s(self):
         return max(0.5, self.setting("hunt_settle_ms", 1800) / 1000.0)
 
+    def _hunt_watch_line(self):
+        """The room's mob line naming the `Hunt <target> <watch>` watch mob,
+        or None. Reads ONLY the italic look_monster lines - the authoritative
+        'this is a mob standing here' signal - so a tell, a chat line or a
+        room description mentioning the name can't false-alarm the stop.
+        Word-boundary match, so 'eihwaz' won't fire on 'eihwazian'."""
+        if not self._hunt_watch:
+            return None
+        rx = re.compile(r"\b" + re.escape(self._hunt_watch) + r"\b", re.I)
+        for line in self._bot_mob_lines:
+            if rx.search(line):
+                return line
+        return None
+
+    def _hunt_watch_alert(self, line):
+        """Loud stop: the point of a watch target is a rare spawn the user may
+        be away from the keyboard for. Same channel as a reminder / incoming
+        tell (bar + tell_sound), plus the ntfy push so it reaches the phone -
+        no-op when ntfy_topic isn't configured. Caller stops the bot."""
+        found = line.strip()
+        bar = "/" * 60
+        self.write_local("", "#ffcc44")
+        self.write_local(bar, "#ffcc44")
+        self.write_local(f"HUNT: '{self._hunt_watch}' SPOTTED: {found}",
+                         "#ffcc44")
+        self.write_local(bar, "#ffcc44")
+        self.write_local("", "#ffcc44")
+        play_sound(self.setting("tell_sound", "beep"))
+        self._push_ntfy_tell(f"[{self.character}] hunt: "
+                             f"'{self._hunt_watch}' spotted - {found}")
+        self._bot_stop(f"'{self._hunt_watch}' is here - stopped in place")
+
     def _hunt_try_attack(self):
         """Engage a mob in the current room. Returns True if an attack was
         sent (caller waits to see if combat starts), False if there was
@@ -4333,6 +4403,14 @@ class MudClient:
         (setting empty): `kill <keyword>` on that same keyword. Called only when
         a mob marker is present, so the keyword comes from a known mob line."""
         aa = (self.setting("autoattack_command", "") or "").strip()
+        if aa and self._hunt_filter and "{t}" not in aa:
+            # Targeted hunt on a guild whose autoattack self-targets (e.g.
+            # gentech 'autokill', monks 'akill'): sending it would attack
+            # whatever's in the room, which is exactly what the filter is
+            # there to prevent. Name the target explicitly instead - the
+            # MUD's "There is no <target> here." then moves us on.
+            self.send_line(f"kill {self._hunt_filter}")
+            return True
         if aa:
             if "{t}" in aa:
                 kw = self._hunt_filter or self._bot_kill_keyword()
@@ -6773,6 +6851,14 @@ class MudClient:
                 self.in_combat = False
                 self.vitals["enemy"] = ""
                 self.vitals.pop("enemycond", None)
+        if self.guild.lower() == "bards" and "hpbar2" in upd:
+            # J carries the song being performed plus its countdown, and it
+            # ticks on J-ONLY packets too - so parse it out here rather than
+            # inside the hpbar1 branch below, or the song timer would freeze
+            # between I packets. The redraw is left to that branch (or to the
+            # J-only elif) so a combined I~...~J packet repaints just once.
+            self.bard_status = bard.parse_status(
+                strip_mip_colors(upd["hpbar2"]).strip())
         if "hpbar1" in upd and upd["hpbar1"].strip():
             stripped = strip_mip_colors(upd["hpbar1"]).strip()
             guild = self.guild.lower()
@@ -6786,6 +6872,12 @@ class MudClient:
                 # both stay in self.vitals and are rendered directly in the
                 # info pane (_render_gentech_hpbar). Not deltas.
                 pass
+            elif guild == "bards":
+                # Bard I-field is the active-effect list (buff -> rounds left),
+                # not deltas. Rebuild wholesale, then top up anything low or
+                # lapsed. See _bard_maintain.
+                self.bard_effects = bard.parse_effects(stripped)
+                self._bard_maintain()
             elif guild == "changelings":
                 # Changeling I-field (Flux/Density/FF/form) -> the status bar
                 # under the hpbars; the info pane still gets the bioplast count.
@@ -6796,9 +6888,10 @@ class MudClient:
                 if guild == "vikings":
                     self.vitals.update(viking.parse_hpbar(upd["hpbar1"]))
             self.update_info()
-        elif self.guild.lower() == "changelings" and "hpbar2" in upd:
-            # J-only packet (bioplast count changed, no I field) - refresh the
-            # info pane so the bioplast line tracks gains/uses immediately.
+        elif self.guild.lower() in ("changelings", "bards") and \
+                "hpbar2" in upd:
+            # J-only packet (changeling bioplast count, or the bard song
+            # countdown) - refresh the info pane so it tracks immediately.
             self.update_info()
         self.update_vitals()
         self.call_hook("on_vitals", dict(self.vitals))
@@ -6985,10 +7078,17 @@ class MudClient:
         """All Viking guild feeds arrive under the BBE tag as KEY^^VALUE
         pairs, chunked across packets - so merge by key into one running
         state dict and refresh the status window if it's open."""
+        t_start = time.perf_counter() if self.vperf else 0.0
         upd = viking.parse_bbe(data)
         if not upd:
             return
-        viking.reassemble_vmapl(self.viking_state, upd)
+        viking.reassemble_chunks(self.viking_state, upd)
+        viking.accumulate_colony(self.viking_state, upd)
+        if "LONGSHIP" in upd:
+            # The voyage fleet roster also spans several packets
+            # (2026-08-03); append chunks instead of last-chunk-wins.
+            upd["LONGSHIP"] = viking.merge_longship(
+                self.viking_state.get("LONGSHIP", ""), upd["LONGSHIP"])
         if "TGOODS" in upd:
             # TGOODS outgrew one packet (2026-07 trade expansion) and
             # arrives in pieces; merge by hold id, not last-chunk-wins.
@@ -7010,9 +7110,56 @@ class MudClient:
         if "STFX" in upd or "DALER" in upd:
             self.viking_spells = viking.active_spells(self.viking_state)
             self.show_status()
+        if not self.vperf:
+            if self.viking_win is not None and \
+                    self.viking_win.winfo_exists():
+                self.viking_win.update_state(self.viking_state, upd)
+            return
+        t_merge = time.perf_counter()
+        perf = {}
         if self.viking_win is not None and \
                 self.viking_win.winfo_exists():
-            self.viking_win.update_state(self.viking_state)
+            self.viking_win.update_state(self.viking_state, upd, perf)
+        self._vperf_record(upd, t_start, t_merge, perf)
+
+    def _vperf_record(self, upd, t_start, t_merge, perf):
+        """#vperf accounting: add one BBE packet to the rolling window and
+        report every 5s. Splits the two candidate costs - everything
+        before the tabs (parse_bbe, reassemble_chunks, the merge_*
+        helpers, plus the vitals/show_status refreshes) vs the
+        status-window renders - and breaks the renders down per tab, so a
+        single window says both how often the feed fires and where the
+        time inside it actually goes."""
+        now = time.perf_counter()
+        s = self.vperf_stats
+        s["pkts"] = s.get("pkts", 0) + 1
+        s["frag"] = s.get("frag", 0) + sum(
+            1 for k in upd if viking._FRAG_RE.match(k))
+        s["merge_ms"] = s.get("merge_ms", 0.0) + (t_merge - t_start) * 1000
+        s["render_ms"] = s.get("render_ms", 0.0) + (now - t_merge) * 1000
+        tabs = s.setdefault("tabs", {})
+        for name, ms in perf.items():
+            tabs[name] = tabs.get(name, 0.0) + ms
+        s.setdefault("t0", now)
+        span = now - s["t0"]
+        if span < 5.0:
+            return
+        top = sorted(tabs.items(), key=lambda kv: -kv[1])[:5]
+        # Growth check: if the merged value behind a tab keeps climbing,
+        # the cost is accumulation, not packet rate.
+        sizes = " ".join(
+            "%s=%d" % (k, len(self.viking_state.get(k, "")))
+            for k in ("CPB", "TGOODS", "VMAPL", "LONGSHIP"))
+        busy = s["merge_ms"] + s["render_ms"]
+        self.write_local(
+            "[vperf] %.1fs: %d BBE pkts (%d frag, %.1f/s) | merge %.0fms"
+            " render %.0fms = %.0f%% of wall | %s | keys=%d %s" % (
+                span, s["pkts"], s["frag"], s["pkts"] / span,
+                s["merge_ms"], s["render_ms"], 100.0 * busy / (span * 1000),
+                " ".join("%s %.0f" % (n, ms) for n, ms in top),
+                len(self.viking_state), sizes),
+            "#cc8855")
+        self.vperf_stats = {}
 
     def _viking_raise_with_main(self, event=None):
         """Anchor the Viking status window to the main window: when the main
@@ -7981,25 +8128,30 @@ class MudClient:
     # claims due reminders atomically (update_json re-reads fresh, so only
     # the one client that actually removes a reminder announces it; no
     # double-fire across simultaneously-open clients).
-    _DUR_RE = re.compile(r"(\d+)\s*([smh])", re.I)
+    _DUR_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([smh])", re.I)
 
     @staticmethod
     def _parse_duration(text):
-        """'5m', '30s', '2h', '1h30m', or a bare integer (minutes) ->
-        seconds. Returns (seconds, rest_of_text) or (None, None)."""
+        """'5m', '30s', '2h', '1h30m', or a bare number (minutes) ->
+        seconds. Decimals are allowed ('3.67' = 3m40s, '1.5h').
+        Returns (seconds, rest_of_text) or (None, None)."""
         text = text.strip()
-        m = re.match(r"(\d+)(?![smh\d:])", text)
+        m = re.match(r"(\d+(?:\.\d+)?)(?![smh\d:.])", text)
         if m:                                  # bare number = minutes
-            return int(m.group(1)) * 60, text[m.end():].strip()
-        total, i, mult = 0, 0, {"s": 1, "m": 60, "h": 3600}
+            secs = int(round(float(m.group(1)) * 60))
+            if secs <= 0:
+                return None, None
+            return secs, text[m.end():].strip()
+        total, i, mult = 0.0, 0, {"s": 1, "m": 60, "h": 3600}
         for tok in MudClient._DUR_RE.finditer(text):
             if tok.start() != i:               # non-duration char hit
                 break
-            total += int(tok.group(1)) * mult[tok.group(2).lower()]
+            total += float(tok.group(1)) * mult[tok.group(2).lower()]
             i = tok.end()
-        if total <= 0:
+        secs = int(round(total))
+        if secs <= 0:
             return None, None
-        return total, text[i:].strip()
+        return secs, text[i:].strip()
 
     @staticmethod
     def _fmt_dur(secs):
@@ -8057,7 +8209,8 @@ class MudClient:
         if secs is None:
             self.write_local(
                 "Usage: Reminder <time> <text>   (e.g. Reminder 5m buff "
-                "wore off, Reminder 1h30m reboot soon).  "
+                "wore off, Reminder 3.67 = 3m40s, Reminder 1h30m reboot "
+                "soon).  "
                 "Reminder every <time> <text> repeats.  "
                 "Reminder = list, Reminder clear [<id>|all].", "#cc6666")
             return
@@ -8776,11 +8929,90 @@ class MudClient:
         self.info.delete("1.0", "end")
         self.info.insert("end", "\n".join(lines))
         self._render_necro_status()
+        self._render_bard_status()
         self._render_tracked()
         self._render_reminders()
         self._render_missions()
         self._render_newbie_missions()
         self.info.configure(state="disabled")
+
+    def _bard_maintain(self):
+        """Top up any bard buff that has fallen below threshold or lapsed
+        entirely. All eight must stay up at all times (user rule), so this
+        fires unattended off each I packet.
+
+        Deadman is respected for free: these go out via send_line WITHOUT
+        manual=True, and send_line drops every non-manual send while
+        deadman_tripped (a keypress releases it, as everywhere else). That
+        is the whole "don't act unattended" contract - no separate gate.
+
+        The per-action cooldown exists because the counter does not move
+        until the MUD answers: without it, every I packet in the second or
+        two after `cast refresh` would still read low and re-send.
+        """
+        if self.deadman_tripped:
+            # send_line would drop these anyway (non-manual), but returning
+            # here keeps us from echoing "[bard] cast x" for a command that
+            # never left, and from burning the cooldown while unattended.
+            return
+        cfg = self.setting("bard_maintain", None)
+        actions = bard.due(self.bard_effects, cfg)
+        if not actions:
+            return
+        now = time.time()
+        cooldown = (cfg or {}).get("cooldown", 15)
+        for key, cmd in actions:
+            if now - self._bard_last_cast.get(key, 0) < cooldown:
+                continue
+            self._bard_last_cast[key] = now
+            self.write_local(f"[bard] {cmd}", "#9955cc")
+            self.send_line(cmd)
+            # ONE cast per I packet (= one per round). At login nothing is up
+            # and all six actions come back due at once; firing them together
+            # would burst six commands into a single round, which the MUD
+            # can't honour anyway (a cast interrupts a cast) and which the
+            # trigger flood breaker would NOT catch - it only counts trigger
+            # fires. Buffing up from nothing paces itself over six rounds.
+            return
+
+    def _render_bard_status(self):
+        """Bard block in the info pane: the song being performed, then every
+        active buff with its rounds remaining - songs as a fraction of the
+        ceiling `cast refresh` restores them to, spells as a bare count.
+        Anything under threshold is flagged red, which is also the trigger
+        _bard_maintain acts on, so the display explains what it just did."""
+        if self.guild.lower() != "bards":
+            return
+        if not self.bard_effects and not self.bard_status:
+            return
+        cfg = self.setting("bard_maintain", None) or {}
+        limit = cfg.get("threshold", 30)
+        if self.info.index("end-1c") != "1.0":
+            self.info.insert("end", "\n")
+        self.info.insert("end", "Bard\n", "track_hdr")
+        st = self.bard_status
+        if st.get("song"):
+            self.info.insert("end", f"  Song: {st['song']} "
+                                    f"({st.get('song_left', '?')}r)\n")
+        if "smiles" in st:
+            # Smile: banked sp reserves that auto-top-up sp until spent,
+            # plus % toward the next one.
+            self.info.insert("end", f"  Smiles: {st['smiles']} "
+                                    f"({st['reset_pct']}%)\n")
+        for token, rounds in self.bard_effects.items():
+            name = bard.label(token)
+            if rounds is None:                  # toggle, no counter (ab, RF)
+                self.info.insert("end", f"  {name}\n")
+                continue
+            cap = bard.SONG_CAPS.get(token)
+            shown = f"{rounds}/{cap}r" if cap else f"{rounds}r"
+            self.info.insert("end", f"  {name}: {shown}\n",
+                             "track_low" if rounds < limit else ())
+        missing = [t for t in bard.SONGS + tuple(cfg.get("spells") or ())
+                   if t not in self.bard_effects]
+        for token in missing:
+            self.info.insert("end", f"  {bard.label(token)}: DOWN\n",
+                             "track_low")
 
     def _render_necro_status(self):
         """Necro Status block in the info pane: worth / protection / veil /
@@ -9166,6 +9398,15 @@ class MudClient:
             self.cmd_vnlist(arg)
         elif name == "corpse":
             self.cmd_corpse(arg)
+        elif name == "vperf":
+            self.vperf = not self.vperf
+            self.vperf_stats = {}
+            self.write_local(
+                "Viking BBE perf trace %s%s" % (
+                    "ON - reports every 5s" if self.vperf else "OFF",
+                    " (close the Viking window to compare renders vs "
+                    "merge cost)" if self.vperf else ""),
+                "#cc8855")
         elif name == "mipraw":
             self.mipraw = not self.mipraw
             if self.mipraw:
@@ -9871,7 +10112,7 @@ class MudClient:
 
 
 HELP_TEXT = """\
-CLIENT COMMANDS
+CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
   #connect [host port] | #disconnect | #reload (cascade + scripts)
   #alias name = cmds | #alias name | #aliases   (character scope;
       use Tools > Aliases & Triggers for other scopes)
@@ -9884,7 +10125,9 @@ CLIENT COMMANDS
   #trigmode /regex/ = party|noparty|always | #party [on|off]
   #gag /pattern/ | #gags | #keys
   #chatgag /pattern/ | #chatgags   (filter the chat/tell pane only)
-  #deadman <minutes|off> | #mip | #mipraw | #markers
+  #deadman <minutes|off> | #mip | #mipraw | #markers | #vperf
+      (#vperf: time the Viking BBE feed - packet rate, merge vs render
+      cost, per-tab render breakdown; reports every 5s)
       (#markers: report room mob(italic)/player(underline) marker lines -
       needs 'aset look_monster italics' + 'aset look_player underline')
   #viking                         (Vikings: open the status window)
@@ -9918,6 +10161,25 @@ CLIENT COMMANDS
       from). Toggle flat makes it skip up/down exits. wander_clear_limit
       (default 30, 0=off) replaces hunt_clear_limit's no-combat stop when
       mapless.)
+  Hunt <target> | Hunt mapless <target>   (same roam, but only kills that
+      target: sends 'kill <target>' in any room with a mob, moving on when the
+      MUD answers "There is no <target> here." Overrides a self-targeting
+      autoattack_command; a '{t}' one gets the target substituted. Still
+      cedes rooms holding a non-party player. Note hunt_clear_limit still
+      counts target-less rooms as 'no combat' - raise it or set it to 0 for
+      a long targeted sweep.)
+  Hunt <target> <watch>   (e.g. 'Hunt einherjer eihwaz' - farm einherjer
+      until eihwaz shows up. When a mob line in the room matches <watch> the
+      hunt STOPS in place and alerts: bar in the main pane + tell_sound + an
+      ntfy push if ntfy_topic is set. Checked before the attack and before
+      the player-skip, so it never kills past the watch mob or misses one in
+      a ceded room; matched only against the italic look_monster lines, so
+      chat can't false-alarm it. Checked on room entry and after every kill
+      (the post-kill glance), NOT during a fight - a watch mob that arrives
+      and leaves mid-fight is missed; one still standing there is caught by
+      that glance. Both keywords are
+      single words. Works with the mapless and <dir> forms too:
+      'Hunt mapless einherjer eihwaz', 'Hunt north einherjer eihwaz'.)
   Chaossea | Chaossea fight | Chaossea off  (Sea of Chaos: builds a
       session-local fake-room map from directions taken (no roomid - that
       zone shares one vnum and regenerates per visit). Movement always
@@ -9975,7 +10237,7 @@ CLIENT COMMANDS
       'vmission newbie' and recommend the highest-'metric' newbie errands
       up to your remaining daily quota. metric is 'daler' (default - NET
       value: daler + market value of the goods awarded) or one of timber/
-      iron/furs/fish/grain/mead/amber - newbie errands cost nothing to
+      iron/furs/fish/grain/mead - newbie errands cost nothing to
       accept, so it's a plain top-N pick, no stock to conflict over.
       'top5' ignores the quota and shows the best 5 anyway. `VNlist
       clear` wipes the Newbie Errands section from the info pane without

@@ -20,6 +20,7 @@ client merges its chunks by hold id (see merge_tgoods).
 import itertools
 import math
 import re
+import time
 import tkinter as tk
 
 
@@ -58,11 +59,16 @@ GOOD_NAMES = {
     "r": "runestones", "s": "spoils", "t": "timber", "i": "iron",
     "g": "grain", "o": "ore", "k": "salted_fish", "b": "bread",
     "e": "fine_furs", "l": "tools", "j": "gemstones",
+    # Amber was retired from the game and replaced by sunstone; the
+    # MUD kept its 'a' letter. Confirmed 2026-08-23 against
+    # `vtrade goods midgard`: wire 'a:-2:206:32:32:34' = the
+    # readout's "Sunstone  32  34  206  32".
+    "a": "sunstone",
 }
 # Goods added in the 2026-07-17 trade expansion, seen in `vtrade prices`
 # and on the mission board. Their TGOODS letters haven't been captured
 # yet, so they live here rather than in GOOD_NAMES.
-EXTRA_GOODS = ("sunstone", "honey", "weapons", "armour", "finery")
+EXTRA_GOODS = ("honey", "weapons", "armour", "finery")
 # Hold id -> CITY name (user preference 2026-07-11: city names, not
 # lineage 'X Hold' names - e.g. lineage Eiriksson's city is Eiriksby).
 HOLD_NAMES = {
@@ -161,26 +167,84 @@ def merge_vmapl(old, new):
     return ";".join(merged.values())
 
 
-_VMAPL_FRAG_RE = re.compile(r"^VMAPL_(\d+)of(\d+)$")
+def merge_longship(old, new):
+    """Merge a LONGSHIP chunk into the previous LONGSHIP value.
+
+    Like TGOODS/VMAPL, the voyage-side fleet roster outgrew one packet
+    (capture 2026-08-03: ships 1-2 as LONGSHIP_1of2/2of2, then ships 6-7
+    and 8-9 as two more plain LONGSHIP packets), so last-chunk-wins left
+    the Sea tab showing only the tail of the fleet. Chunks arrive in
+    ascending ship-id order, so a chunk whose first id is not greater
+    than the last id we hold starts a fresh push - which also drops
+    ships that have left the fleet."""
+    def first_sid(value):
+        for f in split_entries(value):
+            if f and f[0].isdigit():
+                return int(f[0])
+        return None
+
+    def last_sid(value):
+        sids = [int(f[0]) for f in split_entries(value)
+                if f and f[0].isdigit()]
+        return sids[-1] if sids else None
+
+    head, tail = first_sid(new), last_sid(old)
+    if head is None or tail is None or head <= tail:
+        return new
+    return old + ";" + new
 
 
-def reassemble_vmapl(state, upd):
-    """Undo the MUD's sub-chunking of individual VMAPL chunks (wire
-    capture 2026-07-30: mip_20260730_130257.log). Each VMAPL chunk that
-    merge_vmapl expects can now itself arrive split across keys named
-    VMAPL_<n>of<m> instead of one plain VMAPL key - concatenating the
-    pieces in order reconstructs the original chunk text byte-for-byte
-    (splits land mid-word, e.g. 'Hafr' + 'fjord'). Buffers partial bursts
-    in state['_vmapl_frag'] across calls; once the final piece (n==m)
-    arrives, replaces the fragment keys in `upd` with a plain 'VMAPL' key
-    so the existing merge_vmapl path handles it unchanged."""
-    for k in [k for k in upd if _VMAPL_FRAG_RE.match(k)]:
-        n, m = (int(g) for g in _VMAPL_FRAG_RE.match(k).groups())
+def accumulate_colony(state, upd):
+    """Join the settlement plan's repeated CPB/CPU keys into one value.
+
+    The plan pushes its building lists as many separate BBE packets under
+    the same key (13x CPB, 2x CPU in the 2026-08-03 capture), so plain
+    last-packet-wins keeps only the tail. Every push leads with CPLAN and
+    closes with CPEND, so CPLAN restarts the accumulation - which also
+    drops buildings that have since been demolished or moved."""
+    if "CPLAN" in upd:
+        for k in ("CPB", "CPU"):
+            state.pop(k, None)
+    for k in ("CPB", "CPU"):
+        if k in upd and state.get(k):
+            upd[k] = state[k] + ";" + upd[k]
+
+
+_FRAG_RE = re.compile(r"^([A-Z][A-Z0-9_]*)_(\d+)of(\d+)$")
+
+
+def reassemble_chunks(state, upd):
+    """Undo the MUD's sub-chunking of long BBE values.
+
+    First seen on VMAPL (2026-07-30); the 2026-08-03 feed update
+    generalised it to every long key (wire capture
+    mip_20260803_074035.log: WSTOCK_1of4, SHIPS_1of3, RAIDLOG_1of6,
+    ROUTES/RTARGETS/STANDINGS/VREP/VOYAGE/VSAGA/VMEM/STAFF/BUILDINGS/
+    FARM/HIRD/REFINERY/SCIVICS/SROLES/LONGSHIP/TGOODS...). A value that
+    doesn't fit one packet arrives as KEY_<n>of<m>; concatenating the
+    pieces in order reconstructs the original text byte-for-byte (splits
+    land mid-word, e.g. 'bre' + 'ad').
+
+    Partial bursts are buffered per key in state['_frag'] across calls;
+    once the final piece (n==m) arrives the fragment keys in `upd` are
+    replaced by the plain KEY, so every existing decoder - including the
+    merge_tgoods/merge_vmapl multi-chunk paths - works unchanged. Pieces
+    that arrive out of order (e.g. we connected mid-burst) are dropped
+    rather than concatenated into a corrupt value."""
+    frags = state.setdefault("_frag", {})
+    for k in [k for k in upd if _FRAG_RE.match(k)]:
+        key, n, m = _FRAG_RE.match(k).groups()
+        n, m = int(n), int(m)
         val = upd.pop(k)
-        state["_vmapl_frag"] = val if n == 1 else \
-            state.get("_vmapl_frag", "") + val
+        if n == 1:
+            frags[key] = (1, val)
+        elif frags.get(key, (0, ""))[0] == n - 1:
+            frags[key] = (n, frags[key][1] + val)
+        else:
+            frags.pop(key, None)        # lost a piece - drop the burst
+            continue
         if n == m:
-            upd["VMAPL"] = state.pop("_vmapl_frag", "")
+            upd[key] = frags.pop(key)[1]
 
 
 # --- mip_city decoders (City tab) -------------------------------------
@@ -268,7 +332,6 @@ def parse_construction(value):
         return None
 
 
-BUILD_KEYS = ("BUILDS", "BUILDINGS", "MONUMENTS", "SPROJ")
 
 
 # Warehouse capacity per tier (GAME FACT from the user, 2026-07-11).
@@ -729,24 +792,223 @@ def fresh_bar(pct, width=12):
     return "█" * fill + "░" * (width - fill)
 
 
-CITY_KEYS = ("DALER", "GOD_POWER", "WSTOCK", "CELLAR", "REFINERY",
-             "PRODUCTION", "BUILDINGS", "MONUMENTS", "THRALLS", "BLOT")
+# Trade is Warehouse + Carts. BUILDINGS rides along because warehouse_cap
+# reads the warehouse tier out of it.
+TRADE_KEYS = ("CARTS", "CIDLE", "WSTOCK", "NEXTTICK", "BUILDINGS",
+              "REFINERY", "SUPG", "CUPG")
 
-# Carts/market moved off the City tab to the Trade tab in the 2026-07
-# feed expansion (ROUTES/RBUILD gave trade its own tab's worth of data).
-TRADE_KEYS = ("CARTS", "CIDLE", "MARKET", "INCOMING", "ROUTES", "RBUILD",
-              "SUPG", "CUPG")
+# Production tab: what the settlement makes, what it is building, and the
+# refineries that convert one into the other.
+# REFINERY sits on Trade (warehouse stock and what feeds the refineries
+# read together), not Production - user, 2026-08-23.
+PRODUCTION_KEYS = ("PRODUCTION", "BUILDS", "BUILDINGS",
+                   "MONUMENTS", "SPROJ", "RBUILD")
 
-RAIDS_KEYS = ("SHIPS", "RAIDLOG", "RTARGETS")
+# Skills tab: the GXP pools (with their per-skill costs from `vskills`)
+# and the rotating god power.
+SKILLS_KEYS = ("DALER", "VIS", "KAP", "SOE", "AUD", "GOD_POWER",
+               "GOD_POWER_NEXT", "GOD_POWER_FOCUS")
+
+RAIDS_KEYS = ("SHIPS", "RTARGETS")
 
 # SHPLOTS/SCIVICS/SCONSUME/PATROL/STAFF/BDMG are named in the 2026-07
 # guild help doc with no field format; shown raw until captured.
 PEOPLE_KEYS = ("SETTLERS", "SETTLERX", "HIRD", "VARANG", "RAID",
                "MISSIONS", "ERRAND", "GARRISON", "SACTIONS", "SHPLOTS",
-               "SCIVICS", "SCONSUME", "PATROL", "STAFF", "BDMG",
+               "SCIVICS", "SCONSUME", "PATROL", "BDMG",
                "THRALL_FOLLOWER")
 
-FARM_KEYS = ("FARM",)
+# --- Livestock decoders (Farm tab) ------------------------------------
+# Wire format confirmed 2026-08-23 against a live `vlivestock herds`
+# readout: the byre entry
+#   byre:17:44:4:0:46:28:51:39:56:fjord_cattle:2:purebred:13
+# is the readout's "Fjord Cattle 17/20  Gen 4  +2HV {Purebred}
+# H:49->46 F:28 Y:51 V:39 C:56  Ster:0". The guild help doc documents 12
+# fields (bldg:head:quality:gen:sterile + 5 stats + breed:hv); the wire
+# sends 14 - it never mentions the trait label (field 12) or the trailing
+# value (field 13, 6-13 across buildings) that no readout accounts for.
+HERD_STATS = ("H", "F", "Y", "V", "C")
+
+
+def parse_herds(value):
+    """HERDS -> [{bldg, head, quality, gen, sterile, stats, breed, hv,
+    trait}, ...]. Entries are comma-separated, fields colon-separated."""
+    out = []
+    for entry in value.split(","):
+        f = entry.split(":")
+        if len(f) < 13:
+            continue
+        try:
+            out.append({
+                "bldg": f[0], "head": int(f[1]), "quality": int(f[2]),
+                "gen": int(f[3]), "sterile": f[4],
+                "stats": [(n, int(v)) for n, v in zip(HERD_STATS, f[5:10])],
+                "breed": f[10], "hv": f[11], "trait": f[12],
+            })
+        except ValueError:
+            continue
+    return out
+
+
+# LMARKET/LNEEDS species keys -> the headings `vlivestock herds` uses,
+# in the order the user reads them (2026-08-23).
+MARKET_SPECIES = (("sheep", "Sheep"), ("cow", "Cattle"),
+                  ("horse", "Horses"), ("pig", "Pigs"),
+                  ("chicken", "Hens"))
+
+
+def parse_weather(value):
+    """WEATHER 'season|weather|n' -> (season, weather, n) or None.
+    Seen 'winter|snow|2'; the third field is undecoded (no readout names
+    it), so it is shown raw rather than guessed at."""
+    f = value.split("|")
+    if len(f) < 3 or not f[0]:
+        return None
+    return f[0], f[1], f[2]
+
+
+def parse_upkeep(value):
+    """UPKEEP 'buildings|settlers|?|?|?|total' -> (buildings, settlers,
+    total) or None.
+
+    Pinned 2026-08-23: '4686|516|0|0|0|5202' against `vsettler community`
+    "Upkeep: 516 daler / tick" (the settler share), and 4686 + 516 = 5202,
+    so field 5 is the total. The three zero fields are unidentified."""
+    f = value.split("|")
+    if len(f) < 6:
+        return None
+    try:
+        return int(f[0]), int(f[1]), int(f[5])
+    except ValueError:
+        return None
+
+
+def parse_sevents(value):
+    """SEVENTS 'epoch|text;epoch|text;...' -> [(epoch, text), ...],
+    newest first (the wire sends it that way). Same lines as `vsettler
+    status`'s Recent Events block."""
+    out = []
+    for entry in value.split(";"):
+        stamp, _, text = entry.partition("|")
+        if not text:
+            continue
+        try:
+            out.append((int(stamp), text.strip()))
+        except ValueError:
+            continue
+    return out
+
+
+def fmt_ago(epoch, now=None):
+    """Unix stamp -> '1h ago' / 'just now', matching the readout's
+    '[1h ago]' prefix."""
+    delta = int((now if now is not None else time.time()) - epoch)
+    if delta < 60:
+        return "just now"
+    return fmt_secs(delta) + " ago"
+
+
+def parse_lmarket(value):
+    """LMARKET 'lineage|slot|species|breed|qty|price|H|F|Y|V|C|trait;...'
+    -> [{lineage, slot, species, breed, qty, price, stats, trait}, ...].
+
+    The whole market in one key: 13 lineages x 10 head, i.e. what
+    `vlivestock market <lineage>` shows one lineage at a time. Pinned
+    2026-08-23 against a `vlivestock market sverker` readout - lineage 9
+    row 0 is '9|0|cow|doela|1|637|41|21|61|32|41|bountiful' and the
+    readout's "#1 Cattle Doela Qty: 1 {Bountiful} H:41 F:21 Y:61 V:32
+    C:41 P: 637 T: 637". Field 4 is the QTY on offer (1-3), field 5 the
+    PER-HEAD price; the readout's T is just price x qty. The lineage id
+    is 1-based in STANDINGS order (9 = Sverker), and slot+1 is the '#'
+    the buy command wants: `vlivestock buy <lineage> <#> [count]`."""
+    out = []
+    for f in split_entries(value):
+        if len(f) < 12:
+            continue
+        try:
+            out.append({
+                "lineage": int(f[0]), "slot": int(f[1]), "species": f[2],
+                "breed": f[3], "qty": int(f[4]), "price": int(f[5]),
+                "stats": [(n, int(v)) for n, v in zip(HERD_STATS, f[6:11])],
+                "trait": f[11],
+            })
+        except ValueError:
+            continue
+    return out
+
+
+def lineage_names(state):
+    """LMARKET's lineage ids -> LINEAGE names, read off STANDINGS.
+
+    The id is the hold id shared by STANDINGS/VREP/TGOODS (9 = Sverker,
+    confirmed against `vlivestock market sverker`); ids start at 1
+    because Midgard (0) is the player's own capital and sells no stock.
+    Deliberately NOT run through HOLD_NAMES: the market is buyable from
+    anywhere and `vlivestock market|buy` take the lineage name, so the
+    lineage is the word the user needs here - unlike hird, where you
+    travel to the city and the city name is what matters (user,
+    2026-08-23)."""
+    return {i + 1: name for i, (_hid, name, _v, _l, _f)
+            in enumerate(parse_standings(state.get("STANDINGS", "")))}
+
+
+def parse_lneeds(value):
+    """LNEEDS 'species|head|cap;...' -> [(species, head, cap), ...].
+    The per-species cap the HERDS entries don't carry."""
+    out = []
+    for f in split_entries(value):
+        if len(f) < 3:
+            continue
+        try:
+            out.append((f[0], int(f[1]), int(f[2])))
+        except ValueError:
+            continue
+    return out
+
+
+def parse_lfeed(value):
+    """LFEED 'grain|water|head' -> (grain, water, head) or None.
+    Confirmed: '19|19|133' = "Feed per tick: 19 grain + 19 water
+    (133 head)"."""
+    f = value.split("|")
+    if len(f) < 3:
+        return None
+    try:
+        return int(f[0]), int(f[1]), int(f[2])
+    except ValueError:
+        return None
+
+
+def parse_bqueue(value):
+    """BQUEUE 'used/cap|slot:species:meat:qty:secs[:grade],...' ->
+    (used, cap, [{slot, species, meat, qty, secs, grade}, ...]).
+
+    The doc documents the entries but not the 'used/cap|' header the wire
+    puts in front of them ('1/2|1:sheep:mutton:2:2668:bountiful')."""
+    head, _, rest = value.partition("|")
+    used = cap = None
+    if "/" in head:
+        a, _, b = head.partition("/")
+        try:
+            used, cap = int(a), int(b)
+        except ValueError:
+            used = cap = None
+    entries = []
+    for entry in rest.split(","):
+        f = entry.split(":")
+        if len(f) < 5:
+            continue
+        try:
+            entries.append({"slot": f[0], "species": f[1], "meat": f[2],
+                            "qty": int(f[3]), "secs": int(f[4]),
+                            "grade": f[5] if len(f) > 5 else ""})
+        except ValueError:
+            continue
+    return used, cap, entries
+
+
+FARM_KEYS = ("FARM", "HERDS", "LFEED", "LNEEDS", "BQUEUE",
+             "LMARKET", "STANDINGS")
 
 
 # --- Trade tab decoders (CARTS/CIDLE/ROUTES/RBUILD) --------------------
@@ -930,32 +1192,63 @@ def parse_farm(value):
 # what the player themselves activated). The remaining 3 (indices 6,13,18,
 # all read 0 so far) are still genuinely unidentified - flourishing is in
 # there somewhere, but can't be picked out from an all-zero field.
+# 2026-08-03: the record grew from 19 to 23 fields and the old indices
+# shifted. Re-pinned by value-matching the capture's
+#   SETTLERX^^|0|2460|330|9|244|48|69|299|299|14|120|74|94|0|1475|7329|
+#             243|100|81|22|8858|84458^^
+# against the `vsettler status` + `vsettler community` readouts taken
+# minutes later (supporting docs/vsettler.txt): Housing cap 330 (9 plots,
+# T2.44, q48), Jobs 299/299, Market staffed 14, Happiness x1.20,
+# Security 74, Dignity 94, Community net +1475, Tax income +7329,
+# Upkeep 243, Sustenance 100%, Employment 81%, Sentiment +22. So index 6
+# is the Housing governance bar (the old "unidentified" slot), a new
+# unknown went in at 7, tax income at 16, sentiment at 20, and two tail
+# fields (21, 22) are still unidentified.
 SETTLERS_POPULATION, SETTLERS_MOOD = 0, 1
 
+# Index 0 carries the active edict's id ('levy' = the readout's
+# "Emergency Levy"), empty while none is running; index 14 is the
+# Flourishing flag (1 = the readout's "Flourishing : YES").
+SETTLERX_EDICT_NAME, SETTLERX_FLOURISHING = 0, 14
 SETTLERX_EDICT_REMAINING, SETTLERX_EDICT_COOLDOWN = 1, 2
 SETTLERX_HOUSING_CAP, SETTLERX_HOUSING_PLOTS = 3, 4
-SETTLERX_HOUSING_AVG = 5
-SETTLERX_JOBS = 7
-SETTLERX_EMPLOYED, SETTLERX_MARKET_STAFFED = 8, 9      # order inferred
-SETTLERX_HAPPINESS_MULT = 10
-SETTLERX_SECURITY, SETTLERX_DIGNITY = 11, 12
-SETTLERX_COMMUNITY_NET, SETTLERX_UPKEEP = 14, 15
-SETTLERX_SUSTENANCE, SETTLERX_EMPLOYMENT = 16, 17
+SETTLERX_HOUSING_AVG, SETTLERX_HOUSING_QUALITY = 5, 6
+# `vsettler housing` 2026-08-23: "Quality: 45/100", "Housing upkeep: 244
+# daler / tick", "Plots total: 38/50" - which identifies index 7 (244) as
+# the housing upkeep and index 23 (50) as the plot cap, and confirms that
+# index 6 is the housing QUALITY. The governance bar the MUD prints as
+# "Housing" is that same quality number (both read 45), which is why the
+# bar is labelled "Housing qual" here - "Housing" alone reads as though
+# 45% of the settlers are housed, when housing cap 418 covers all 418.
+SETTLERX_HOUSING_UPKEEP = 7
+SETTLERX_PLOT_CAP = 23
+SETTLERX_JOBS = 8
+SETTLERX_EMPLOYED, SETTLERX_MARKET_STAFFED = 9, 10     # order inferred
+SETTLERX_HAPPINESS_MULT = 11
+SETTLERX_SECURITY, SETTLERX_DIGNITY = 12, 13
+SETTLERX_COMMUNITY_NET, SETTLERX_TAX_INCOME = 15, 16
+SETTLERX_UPKEEP = 17
+SETTLERX_SUSTENANCE, SETTLERX_EMPLOYMENT = 18, 19
+SETTLERX_SENTIMENT = 20
 
 # Confirmed 0-100 percentage fields, rendered as bars (Mood comes from
 # SETTLERS, not this list - see _render_people).
 SETTLERX_BARS = [("Sustenance", SETTLERX_SUSTENANCE),
                  ("Employment", SETTLERX_EMPLOYMENT),
                  ("Security", SETTLERX_SECURITY),
-                 ("Dignity", SETTLERX_DIGNITY)]
+                 ("Dignity", SETTLERX_DIGNITY),
+                 ("Housing qual", SETTLERX_HOUSING_QUALITY)]
 
 SETTLERX_KNOWN_INDICES = frozenset(
     (SETTLERX_EDICT_REMAINING, SETTLERX_EDICT_COOLDOWN,
      SETTLERX_HOUSING_CAP, SETTLERX_HOUSING_PLOTS, SETTLERX_HOUSING_AVG,
-     SETTLERX_JOBS, SETTLERX_EMPLOYED, SETTLERX_MARKET_STAFFED,
-     SETTLERX_HAPPINESS_MULT, SETTLERX_SECURITY, SETTLERX_DIGNITY,
-     SETTLERX_COMMUNITY_NET, SETTLERX_UPKEEP, SETTLERX_SUSTENANCE,
-     SETTLERX_EMPLOYMENT))
+     SETTLERX_HOUSING_QUALITY, SETTLERX_HOUSING_UPKEEP,
+     SETTLERX_PLOT_CAP, SETTLERX_EDICT_NAME, SETTLERX_FLOURISHING,
+     SETTLERX_JOBS, SETTLERX_EMPLOYED,
+     SETTLERX_MARKET_STAFFED, SETTLERX_HAPPINESS_MULT,
+     SETTLERX_SECURITY, SETTLERX_DIGNITY, SETTLERX_COMMUNITY_NET,
+     SETTLERX_TAX_INCOME, SETTLERX_UPKEEP, SETTLERX_SUSTENANCE,
+     SETTLERX_EMPLOYMENT, SETTLERX_SENTIMENT))
 
 
 def _settlerx_int(fields, idx):
@@ -1076,20 +1369,109 @@ def stat_band(pct):
     return "stat_hi"
 
 
+# --- Colony tab decoders (the settlement plan) -------------------------
+# New in the 2026-08-03 feed (capture logs/mip_20260803_074035.log): the
+# settlement is now a placeable grid. CPP names the site profile
+# ('coast'), CPEND the grid size (20), CPT00..CPT19 the terrain rows, CPB
+# the placed buildings and CPU ones the settlement has but hasn't placed
+# (same record minus the coordinates). CPB/CPU arrive as many repeated
+# keys per push - see accumulate_colony.
+#
+# GEOMETRY, confirmed cell-by-cell against a `vplan` readout (supporting
+# docs/vplan.txt): the CPT grid is a 20x20 frame around the 12x12
+# buildable interior at offset (4, 4), and record coords are 'x|y' =
+# column|row - `vplan` names cells row-letter + column-number, so CPB's
+# farm|9|11 is the Farm the legend puts at L10.
+COLONY_INTERIOR_OFFSET = 4
+
+# CPT uses different terrain letters than the `vplan` map the user sees;
+# translating makes the tab read like the game screen. Derived by
+# aligning all 20 rows of the capture against vplan.txt (the mapping is
+# exact); letters not listed are building glyphs, which already match.
+COLONY_TERRAIN = {"c": "~", "M": "~", "W": "#", "H": "^", "B": "=",
+                  "G": "+"}
+
+
+def colony_cell(x, y):
+    """Interior (x, y) -> the cell name `vplan place` uses, e.g. 'L10'."""
+    return f"{chr(ord('A') + y)}{x + 1}"
+
+
+def parse_colony_buildings(value):
+    """CPB 'name|x|y|w|h|category|glyph|Label;...' -> placed buildings.
+    x/y are interior coords (0-11); w/h the footprint in tiles."""
+    out = []
+    for f in split_entries(value):
+        if len(f) < 8:
+            continue
+        try:
+            x, y, w, h = (int(f[i]) for i in (1, 2, 3, 4))
+        except ValueError:
+            continue
+        out.append({"name": f[0], "x": x, "y": y, "w": w, "h": h,
+                    "cat": f[5], "glyph": f[6], "label": f[7]})
+    return out
+
+
+def parse_colony_unplaced(value):
+    """CPU 'name|category|glyph|Label;...' -> buildings with no place on
+    the grid yet (the record is the CPB one minus x/y/w/h)."""
+    out = []
+    for f in split_entries(value):
+        if len(f) < 4:
+            continue
+        out.append({"name": f[0], "cat": f[1], "glyph": f[2],
+                    "label": f[3]})
+    return out
+
+
+def colony_grid(st):
+    """Merged BBE state -> (rows, buildings) for the Colony map, where
+    rows is the CPT terrain with every placed building's glyph painted
+    over its footprint, or None if the plan hasn't arrived yet."""
+    try:
+        size = int(st.get("CPEND", ""))
+    except ValueError:
+        return None
+    rows = []
+    for i in range(size):
+        row = st.get("CPT%02d" % i)
+        if row is None:
+            return None
+        rows.append(list(row))
+    rows = [[COLONY_TERRAIN.get(ch, ch) for ch in row] for row in rows]
+    buildings = parse_colony_buildings(st.get("CPB", ""))
+    off = COLONY_INTERIOR_OFFSET
+    for b in buildings:
+        for dy in range(b["h"]):
+            for dx in range(b["w"]):
+                r, c = off + b["y"] + dy, off + b["x"] + dx
+                if 0 <= r < len(rows) and 0 <= c < len(rows[r]):
+                    rows[r][c] = b["glyph"]
+    return rows, buildings
+
+
 # ======================================================================
 # Status window
 # ======================================================================
 # Tab layout: the reference client's two rows of five, plus the Trade
 # and Raids tabs added for the 2026-07 feed expansion (carts/routes and
 # the raid log outgrew the City tab).
-TABS = [["Stats", "City", "Trade", "Farm", "Builds", "People"],
-        ["Goods", "Map", "Bonds", "Ranks", "Raids", "Sea"]]
+# 2026-08-23 layout pass: the window is ~71 text lines tall, so a tab that
+# overflows is effectively unreadable while the feed is live (a redraw used
+# to snap the view to the top; _redraw_begin/_redraw_end now keep it, but
+# short tabs are still the goal). Ranks folded into Bonds, Builds folded
+# into the new Production tab, and Stats split into Stats + Skills.
+TABS = [["Stats", "Skills", "Trade", "Production", "Farm", "People"],
+        ["Goods", "Map", "Bonds", "Raids", "Sea", "Colony"]]
 TAB_FEED = {
-    "Stats": "mip_extra", "City": "mip_city", "Trade": "mip_city",
-    "Farm": "mip_city", "Builds": "mip_city", "People": "mip_city",
-    "Goods": "mip_trade_goods", "Map": "mip_map", "Bonds": "mip_city",
-    "Ranks": "mip_city", "Raids": "mip_city", "Sea": "mip_voyage",
+    "Stats": "mip_extra", "Skills": "mip_extra",
+    "Trade": "mip_city", "Production": "mip_city", "Farm": "mip_city",
+    "People": "mip_city", "Goods": "mip_trade_goods", "Map": "mip_map",
+    "Bonds": "mip_city", "Raids": "mip_city", "Sea": "mip_voyage",
+    "Colony": "mip_city",
 }
+COLONY_KEYS = ("CPEND", "CPB", "CPU", "CPP")
 
 LEVEL_SYM = {3: "+++", 2: "++", 1: "+", 0: "",
              -1: "-", -2: "--", -3: "---"}
@@ -1263,9 +1645,16 @@ def map_landmarks(state):
 # resources - the MUD's M-prefixed values for them are not real maxes - so
 # they're pulled out of the resource bars and shown in their own GXP section
 # with the per-skill costs from `vskills`.
-STATS_RESOURCES = ["HP", "SP", "VIG", "RAD", "SEID", "THREK"]
+# SP is omitted on purpose: the Viking guild does not use spell points
+# and gains nothing from intelligence, so MSP (49) is not a real max
+# and the bar rendered as 345/49 (user, 2026-08-23).
+STATS_RESOURCES = ["HP", "VIG", "RAD", "SEID", "THREK"]
+# The City tab was folded into the tail of Stats (2026-08-23): its four
+# surviving sections (Daler, Thralls, Mead Cellar, Blot) are 13 lines.
 STATS_KEYS = ("HP", "FURY", "VIG", "KAP", "GLVL", "LIN", "STFX",
-              "DALER", "VIS", "SOE", "AUD")
+              "ENN", "VIS", "SOE", "AUD",
+              "DALER", "CELLAR", "THRALLS", "THRALL_FOLLOWER", "BLOT",
+              "WEATHER", "UPKEEP", "SEVENTS")
 
 # GXP pool name (as printed in `vskills`) -> the live mip_extra key that
 # carries its current points between vskills reads.
@@ -1331,8 +1720,68 @@ def parse_vskills(lines):
         if md:
             daler = _vsk_num(md.group(1))
     return {"daler": daler, "trees": trees}
-RANK_KEYS = ("VREP",)
-BONDS_KEYS = ("STANDINGS", "BONDS")
+# VREP's numeric rank -> the name `vrep` prints, in the ladder its own
+# legend lists (supporting docs/vrep.txt). Pinned by two rows of that
+# readout against the same capture: Midgard rank 3 = Vinur, Eiriksby
+# rank 4 = Arsmadur.
+VREP_RANKS = ("Framandi", "Gestur", "Kaupmadur", "Vinur", "Arsmadur",
+              "Felagi", "Hofdingi", "Jarl")
+BONDS_KEYS = ("STANDINGS", "BONDS", "HEAT", "GRUDGES", "SPY", "VREP")
+
+
+def parse_heat(value):
+    """HEAT '0;13;14;...' -> 0-100 raid heat per city, in STANDINGS
+    order. Confirmed against a `vheat` readout (supporting docs/
+    vrep.txt): its 13 cities are the 13 STANDINGS lineages in the same
+    order, and its 20-segment bars match these numbers as percentages
+    (54 -> 10 bars). Returns [] on any malformed value so the Bonds tab
+    just omits the column."""
+    out = []
+    for tok in value.split(";"):
+        try:
+            out.append(int(tok))
+        except ValueError:
+            return []
+    return out
+
+
+def parse_grudges(value):
+    """GRUDGES 'City:secs;...' -> [(city, seconds), ...] of reprisal
+    risk. Confirmed against `vheat`'s Reprisal Grudges section, which
+    read 'Lejre reprisal risk for 23h 51m' beside GRUDGES 'Lejre:86754'.
+    Grudges fade ~3 days after your last raid on that town."""
+    out = []
+    for entry in value.split(";"):
+        if ":" not in entry:
+            continue
+        city, secs = entry.rsplit(":", 1)
+        try:
+            out.append((city, int(secs)))
+        except ValueError:
+            continue
+    return out
+
+
+# GRUDGES names a city, STANDINGS a lineage. `vheat` lists the cities in
+# STANDINGS order, so position is the join: index 11 is Lejre, whose
+# lineage is Skjoldung.
+HEAT_CITIES = ("Lodbrok's Hold", "Eiriksby", "Imaird", "Holmgard",
+               "Hafrfjord", "Uppsala", "Borgarfjord", "Vestergotland",
+               "Sverkersby", "Ericsgard", "Birka", "Lejre", "Nidaros")
+
+
+def grudge_by_index(value):
+    """GRUDGES -> {standings row index: seconds}, for showing a reprisal
+    timer on the row of the lineage whose city holds the grudge."""
+    lower = [c.lower() for c in HEAT_CITIES]
+    out = {}
+    for city, secs in parse_grudges(value):
+        key = city.strip().lower()
+        for i, name in enumerate(lower):
+            if name == key or name.startswith(key):
+                out[i] = secs
+                break
+    return out
 
 STANDING_COLOR = {
     "allied": "#46d246", "friendly": "#7cc869", "neutral": "#9aa3ad",
@@ -1346,7 +1795,11 @@ STANDING_COLOR = {
 # VCHH header (w|h|mode), the planned route in VQPATH, the event log in
 # VSAGA/VMEM. The raid fleet roster (SHIPS) shows on the Raids tab, so
 # the Sea tab focuses on the active voyage, its chart, and its spoils.
-VOYAGE_KEYS = ("VOYAGE", "VCHH", "VQPATH", "VSAGA", "VMEM", "LONGSHIP",
+# LONGSHIP is deliberately absent: the Fleet section came off the Sea tab
+# in the 2026-08-23 layout pass, so nothing renders it and waking Sea on
+# LONGSHIP packets would redraw for no change. Put it back (here or in
+# RAIDS_KEYS) if the fleet detail finds a new home.
+VOYAGE_KEYS = ("VOYAGE", "VCHH", "VQPATH", "VSAGA", "VMEM",
                "VOYAGE_WAIT", "VRESOLVE", "VBOONS", "VSPOILS", "VGOODS",
                "VAIDS", "VRUNES", "VRELICS", "VCURIOS")
 
@@ -1364,8 +1817,14 @@ def parse_voyage(value):
     state|ship_id|ship_name|contract_name|contract_type|danger|x|y|width|
     height|hull|morale|supplies|hull_stress|crew_alive|crew_max|
     steps_sailed|next_move_in|threat_name|threat_level|threat_pressure|
-    paused_type|weather|ship_renown|captain_style|ship_identity|
-    crew_traits|ship_traits"""
+    paused_type|weather|captain_style|ship_identity|crew_traits|
+    ship_traits
+
+    2026-08-03: the tail lost the doc's ship_renown field, shifting the
+    four style/trait fields down one - the live record ends
+    'stormbelt|cunning|storm-cutter|hard-handed boarders|storm sail',
+    and the user confirms storm-cutter is the ship and cunning the
+    captain (LONGSHIP carries the same four)."""
     f = value.split("|")
     g = lambda i: f[i].strip() if 0 <= i < len(f) else ""
     return {
@@ -1376,16 +1835,21 @@ def parse_voyage(value):
         "stress": g(13), "crew": g(14), "crew_max": g(15),
         "steps": g(16), "next": g(17),
         "threat": g(18), "threat_lvl": g(19), "pressure": g(20),
-        "paused": g(21), "weather": g(22), "renown": g(23),
-        "captain": g(24), "identity": g(25),
-        "crew_desc": g(26), "traits": g(27),
+        "paused": g(21), "weather": g(22), "captain": g(23),
+        "ship_style": g(24), "crew_traits": g(25),
+        "ship_traits": g(26),
     }
 
 
 def parse_longship(value):
     """LONGSHIP 'sid|name|tier|state|target|return_in_secs|crew|
-    hired_crew|safe|voyage_rep|voyage_identity|captain_style|crew_traits|
-    ship_traits;...' -> voyage-side fleet dicts (2026-07 doc)."""
+    hired_crew|safe|ship_style|captain_style|crew_traits|ship_traits|
+    saga_title|saga_raids;...' -> voyage-side fleet dicts.
+
+    2026-08-03: the record grew to 15 fields - a ship style went in at
+    index 9 (so the old 'voyage_rep' slot is gone) and the tail is the
+    same saga_title|saga_raids pair SHIPS carries. Styles confirmed by
+    the user: 'storm-cutter' is the ship, 'cunning' the captain."""
     out = []
     for f in split_entries(value):
         if len(f) < 4:
@@ -1394,10 +1858,12 @@ def parse_longship(value):
                     "state": f[3], "target": field(f, 4, ""),
                     "return_in": field(f, 5, ""), "crew": field(f, 6, ""),
                     "hired": field(f, 7, ""), "safe": field(f, 8, ""),
-                    "rep": field(f, 9, ""), "identity": field(f, 10, ""),
-                    "captain": field(f, 11, ""),
-                    "crew_traits": field(f, 12, ""),
-                    "ship_traits": field(f, 13, "")})
+                    "ship_style": field(f, 9, ""),
+                    "captain": field(f, 10, ""),
+                    "crew_traits": field(f, 11, ""),
+                    "ship_traits": field(f, 12, ""),
+                    "saga_title": field(f, 13, ""),
+                    "saga_raids": field(f, 14, "")})
     return out
 
 
@@ -1714,7 +2180,6 @@ class VikingStatus(tk.Toplevel):
         self.tab_btns = {}
         self.current = None
         self.goods_txt = None
-        self.city_txt = None
         self.trade_txt = None
         self.raids_txt = None
         self.people_txt = None
@@ -1724,11 +2189,12 @@ class VikingStatus(tk.Toplevel):
         self._map_sig = None
         self.stats_txt = None
         self.vskills = None         # last parsed `vskills` (skill costs)
-        self.ranks_txt = None
+        self.skills_txt = None
         self.bonds_txt = None
-        self.builds_txt = None
+        self.production_txt = None
         self.farm_txt = None
         self.sea_txt = None
+        self.colony_txt = None
         self._build()
 
     # ------------------------------------------------------ construction
@@ -1755,8 +2221,6 @@ class VikingStatus(tk.Toplevel):
                 self.tabs[name] = frame
                 if name == "Goods":
                     self._build_goods(frame)
-                elif name == "City":
-                    self._build_city(frame)
                 elif name == "Trade":
                     self._build_trade(frame)
                 elif name == "Raids":
@@ -1767,16 +2231,18 @@ class VikingStatus(tk.Toplevel):
                     self._build_map(frame)
                 elif name == "Stats":
                     self._build_stats(frame)
-                elif name == "Ranks":
-                    self._build_ranks(frame)
+                elif name == "Skills":
+                    self._build_skills(frame)
                 elif name == "Bonds":
                     self._build_bonds(frame)
-                elif name == "Builds":
-                    self._build_builds(frame)
+                elif name == "Production":
+                    self._build_production(frame)
                 elif name == "Farm":
                     self._build_farm(frame)
                 elif name == "Sea":
                     self._build_sea(frame)
+                elif name == "Colony":
+                    self._build_colony(frame)
                 else:
                     tk.Label(
                         frame, bg=BG, fg="#556070", justify="left",
@@ -1786,11 +2252,15 @@ class VikingStatus(tk.Toplevel):
                     ).pack(anchor="nw")
         self.show("Goods")
 
-    def _scrolled_text(self, frame):
+    def _scrolled_text(self, frame, wrap="word"):
+        """A tab's text pane. Everything wraps by default - an unwrapped
+        line silently loses whatever runs past the right edge, and these
+        panes have no horizontal scrollbar. Sea and Map pass wrap="none"
+        because their grids are position-significant."""
         sb = tk.Scrollbar(frame)
         sb.pack(side="right", fill="y")
         txt = tk.Text(frame, bg=BG, fg="#cccccc", font=self.mono,
-                      wrap="none", state="disabled", padx=10, pady=8,
+                      wrap=wrap, state="disabled", padx=10, pady=8,
                       highlightthickness=0, borderwidth=0,
                       yscrollcommand=sb.set)
         txt.pack(side="left", fill="both", expand=True)
@@ -1798,6 +2268,23 @@ class VikingStatus(tk.Toplevel):
         txt.tag_configure("dim", foreground="#777777")
         txt.tag_configure("num", foreground="#dddddd")
         return txt
+
+    def _redraw_begin(self, txt):
+        """Clear a tab for redraw, returning its scroll position.
+
+        Renders rebuild their whole widget, which snapped the view back
+        to the top on every packet - so anything below the fold was
+        unreadable while the feed was live. _redraw_end puts the view
+        back. The position is a fraction, so it drifts slightly when the
+        content length changes; that beats losing the position outright."""
+        pos = txt.yview()[0]
+        txt.configure(state="normal")
+        txt.delete("1.0", "end")
+        return pos
+
+    def _redraw_end(self, txt, pos):
+        txt.configure(state="disabled")
+        txt.yview_moveto(pos)
 
     def _build_goods(self, frame):
         # Filter bar: a button per good -> best-places-to-buy/sell view
@@ -1843,19 +2330,6 @@ class VikingStatus(tk.Toplevel):
         self._render_goods(self.state_data.get("TGOODS", ""),
                            self.state_data.get("DCYCLE", ""))
 
-    def _build_city(self, frame):
-        txt = self._scrolled_text(frame)
-        txt.tag_configure("sec", foreground="#d79030",
-                          font=self.mono_bold)
-        txt.tag_configure("gold", foreground="#e0b94a")
-        txt.tag_configure("val", foreground="#cccccc")
-        txt.tag_configure("cyan", foreground="#6fb6d6")
-        for good, col in GOOD_COLOR.items():
-            txt.tag_configure("good_" + good, foreground=col)
-        for i, (_lo, _label, col) in enumerate(FRESH_BANDS):
-            txt.tag_configure("fr%d" % i, foreground=col)
-        self.city_txt = txt
-
     def _build_trade(self, frame):
         txt = self._scrolled_text(frame)
         txt.tag_configure("sec", foreground="#d79030",
@@ -1869,6 +2343,9 @@ class VikingStatus(tk.Toplevel):
         txt.tag_configure("stat_hi", foreground="#46c246")
         for good, col in GOOD_COLOR.items():
             txt.tag_configure("good_" + good, foreground=col)
+        for i, (_lo, _label, col) in enumerate(FRESH_BANDS):
+            txt.tag_configure("fr%d" % i, foreground=col)
+        txt.tag_configure("gold", foreground="#e0b94a")
         self.trade_txt = txt
 
     def _build_raids(self, frame):
@@ -1892,6 +2369,7 @@ class VikingStatus(tk.Toplevel):
         txt.tag_configure("stat_lo", foreground="#d65151")
         txt.tag_configure("stat_mid", foreground="#e0b94a")
         txt.tag_configure("stat_hi", foreground="#46c246")
+        txt.tag_configure("res_ok", foreground="#46c246")
         self.people_txt = txt
 
     def _build_map(self, frame):
@@ -1932,6 +2410,8 @@ class VikingStatus(tk.Toplevel):
         txt.tag_configure("sec", foreground="#d79030",
                           font=self.mono_bold)
         txt.tag_configure("val", foreground="#cccccc")
+        txt.tag_configure("gold", foreground="#e0b94a")
+        txt.tag_configure("cyan", foreground="#6fb6d6")
         txt.tag_configure("fury", foreground="#e0703a")
         txt.tag_configure("stat_lo", foreground="#d65151")
         txt.tag_configure("stat_mid", foreground="#e0b94a")
@@ -1941,12 +2421,15 @@ class VikingStatus(tk.Toplevel):
         txt.tag_configure("cost", foreground="#88aacc")
         self.stats_txt = txt
 
-    def _build_ranks(self, frame):
+    def _build_skills(self, frame):
         txt = self._scrolled_text(frame)
         txt.tag_configure("sec", foreground="#d79030",
                           font=self.mono_bold)
         txt.tag_configure("val", foreground="#cccccc")
-        self.ranks_txt = txt
+        txt.tag_configure("gold", foreground="#e0b94a")
+        txt.tag_configure("cyan", foreground="#6fb6d6")
+        txt.tag_configure("cost", foreground="#88aacc")
+        self.skills_txt = txt
 
     def _build_bonds(self, frame):
         txt = self._scrolled_text(frame)
@@ -1955,11 +2438,13 @@ class VikingStatus(tk.Toplevel):
         txt.tag_configure("val", foreground="#cccccc")
         txt.tag_configure("gold", foreground="#e0b94a")
         txt.tag_configure("cyan", foreground="#6fb6d6")
+        txt.tag_configure("dim", foreground="#667088")
+        txt.tag_configure("num", foreground="#cccccc")
         for label, color in STANDING_COLOR.items():
             txt.tag_configure("st_" + label, foreground=color)
         self.bonds_txt = txt
 
-    def _build_builds(self, frame):
+    def _build_production(self, frame):
         txt = self._scrolled_text(frame)
         txt.tag_configure("sec", foreground="#d79030",
                           font=self.mono_bold)
@@ -1970,7 +2455,7 @@ class VikingStatus(tk.Toplevel):
         txt.tag_configure("stat_lo", foreground="#d65151")
         txt.tag_configure("stat_mid", foreground="#e0b94a")
         txt.tag_configure("stat_hi", foreground="#46c246")
-        self.builds_txt = txt
+        self.production_txt = txt
 
     def _build_farm(self, frame):
         txt = self._scrolled_text(frame)
@@ -1978,12 +2463,27 @@ class VikingStatus(tk.Toplevel):
                           font=self.mono_bold)
         txt.tag_configure("val", foreground="#cccccc")
         txt.tag_configure("cyan", foreground="#6fb6d6")
+        txt.tag_configure("gold", foreground="#e0b94a")
+        txt.tag_configure("stat_lo", foreground="#d65151")
+        txt.tag_configure("stat_mid", foreground="#e0b94a")
+        txt.tag_configure("stat_hi", foreground="#46c246")
         txt.tag_configure("res_ok", foreground="#46c246")
         txt.tag_configure("res_no", foreground="#d65151")
         self.farm_txt = txt
 
-    def _build_sea(self, frame):
+    def _build_colony(self, frame):
         txt = self._scrolled_text(frame)
+        txt.tag_configure("sec", foreground="#d79030",
+                          font=self.mono_bold)
+        txt.tag_configure("val", foreground="#cccccc")
+        txt.tag_configure("dim", foreground="#667088")
+        txt.tag_configure("cyan", foreground="#6fb6d6")
+        txt.tag_configure("bld", foreground="#e0b94a",
+                          font=self.mono_bold)
+        self.colony_txt = txt
+
+    def _build_sea(self, frame):
+        txt = self._scrolled_text(frame, wrap="none")
         txt.tag_configure("sec", foreground="#d79030",
                           font=self.mono_bold)
         txt.tag_configure("val", foreground="#cccccc")
@@ -2031,8 +2531,7 @@ class VikingStatus(tk.Toplevel):
         txt = self.sea_txt
         if txt is None:
             return
-        txt.configure(state="normal")
-        txt.delete("1.0", "end")
+        pos = self._redraw_begin(txt)
         voy = st.get("VOYAGE", "")
         w, h, mode = parse_vchh(st.get("VCHH", ""))
         rows = voyage_chart(st, h)
@@ -2041,8 +2540,7 @@ class VikingStatus(tk.Toplevel):
             txt.insert("end", "  Put a longship to sea, and enable "
                               "'vtoggle mip_voyage' to feed this tab.\n",
                        "dim")
-            self._sea_fleet(txt, st)
-            txt.configure(state="disabled")
+            self._redraw_end(txt, pos)
             return
 
         v = parse_voyage(voy)
@@ -2064,10 +2562,10 @@ class VikingStatus(tk.Toplevel):
              ("Type", v["type"]), ("Danger", v["danger"]),
              ("Hull", _pct(v["hull"])), ("Morale", _pct(v["morale"])),
              ("Stress", _pct(v["stress"])), ("State", v["state"]),
-             ("Threat", threat), ("Identity", v["identity"]),
-             ("Traits", v["traits"]), ("Crew", v["crew_desc"])],
+             ("Threat", threat), ("Ship style", v["ship_style"]),
+             ("Crew traits", v["crew_traits"]),
+             ("Ship traits", v["ship_traits"])],
             [("Position", position), ("Mode", mode.capitalize()),
-             ("Renown", v["renown"]),
              ("Crew", f"{v['crew']}/{v['crew_max']}"),
              ("Supplies", _pct(v["supplies"])),
              ("Weather", v["weather"] or "Calm"),
@@ -2130,33 +2628,59 @@ class VikingStatus(tk.Toplevel):
             txt.insert("end", "\nMemories\n", "sec")
             for s in mem:
                 txt.insert("end", "  - " + s + "\n", "dim")
-        self._sea_fleet(txt, st)
-        txt.configure(state="disabled")
+        self._redraw_end(txt, pos)
 
-    def _sea_fleet(self, txt, st):
-        """The LONGSHIP voyage-side fleet roster (crew/rep/traits detail
-        the City-side SHIPS key doesn't carry)."""
-        fleet = parse_longship(st.get("LONGSHIP", ""))
-        if not fleet:
+    def _render_colony(self, st):
+        txt = self.colony_txt
+        pos = self._redraw_begin(txt)
+        grid = colony_grid(st)
+        if grid is None:
+            txt.insert("end", "\n  No settlement plan yet.\n", "dim")
+            self._redraw_end(txt, pos)
             return
-        txt.insert("end", "\nFleet\n", "sec")
-        for s in fleet:
-            crew = s["crew"]
-            if s["hired"] not in ("", "0"):
-                crew += f"+{s['hired']}"
-            head = f"  {s['name']} T{s['tier']}  {s['state']}"
-            self._row(txt, head, "val", f"crew {crew}", "cyan")
-            if s["target"]:
-                suffix = (f"  ({fmt_secs(s['return_in'])})"
-                          if s["return_in"] not in ("", "0") else "")
-                txt.insert("end", f"      → {s['target']}{suffix}\n",
-                           "dim")
-            detail = " · ".join(p for p in (
-                s["identity"], s["captain"],
-                f"rep {s['rep']}" if s["rep"] else "",
-                s["crew_traits"], s["ship_traits"]) if p)
-            if detail:
-                txt.insert("end", "      " + detail + "\n", "dim")
+        rows, buildings = grid
+        placed = {(COLONY_INTERIOR_OFFSET + b["x"] + dx,
+                   COLONY_INTERIOR_OFFSET + b["y"] + dy)
+                  for b in buildings
+                  for dx in range(b["w"]) for dy in range(b["h"])}
+        site = st.get("CPP", "")
+        head = f"Settlement{'  ' + site if site else ''}"
+        self._row(txt, head, "sec", f"{len(buildings)} placed", "dim")
+        # Column numbers over the interior, then a row letter per
+        # interior row - the cell names `vplan place` takes.
+        off = COLONY_INTERIOR_OFFSET
+        inner = len(rows) - 2 * off
+        txt.insert("end", "\n    " + "  " * off
+                   + "".join(f"{n + 1:<2}" for n in range(inner))
+                   + "\n", "dim")
+        for r, row in enumerate(rows):
+            label = chr(ord("A") + r - off) if off <= r < off + inner \
+                else " "
+            txt.insert("end", "  " + label + " ", "dim")
+            for c, ch in enumerate(row):
+                txt.insert("end", ch + " ",
+                           "bld" if (c, r) in placed else "dim")
+            txt.insert("end", "\n")
+
+        def col(entries, width=30):
+            """Two columns of pre-formatted entries."""
+            for i in range(0, len(entries), 2):
+                txt.insert("end", "  ")
+                for glyph, rest in entries[i:i + 2]:
+                    txt.insert("end", glyph + " ", "bld")
+                    txt.insert("end", rest.ljust(width - 2), "val")
+                txt.insert("end", "\n")
+
+        if buildings:
+            txt.insert("end", "\nPlaced\n", "sec")
+            col([(b["glyph"],
+                  f"{b['label']:<18}{colony_cell(b['x'], b['y'])}")
+                 for b in buildings])
+        unplaced = parse_colony_unplaced(st.get("CPU", ""))
+        if unplaced:
+            txt.insert("end", "\nNot placed\n", "sec")
+            col([(u["glyph"], u["label"]) for u in unplaced])
+        self._redraw_end(txt, pos)
 
     # ------------------------------------------------------- tab control
     def show(self, name):
@@ -2168,57 +2692,81 @@ class VikingStatus(tk.Toplevel):
         self.tabs[name].pack(fill="both", expand=True)
         self.tab_btns[name].configure(bg=TAB_BG_ON, fg=TAB_FG_ON)
         self.current = name
+        # Now that a packet only redraws the tabs it touched, the one
+        # being switched to can be holding stale content - refresh from
+        # the merged feed on the way in (same on-demand redraw
+        # _set_goods_filter does).
+        if self.state_data:
+            self.update_state(self.state_data)
 
     # ----------------------------------------------------------- updates
-    def update_state(self, state):
+    def _timed(self, perf, name, fn, *args):
+        """Run a tab renderer, adding its cost to `perf` when #vperf is
+        tracing. No-op wrapper (one call, no clock reads) when it isn't."""
+        if perf is None:
+            return fn(*args)
+        t0 = time.perf_counter()
+        fn(*args)
+        perf[name] = perf.get(name, 0.0) + (time.perf_counter() - t0) * 1000
+
+    def update_state(self, state, upd=None, perf=None):
+        """Redraw the tabs `upd` (this packet's keys) touched, reading the
+        values from `state` (the merged feed).
+
+        The two must stay separate: testing the guards against `state`
+        meant every guard was true forever once a key had ever arrived,
+        so all 13 tabs redrew on every BBE packet - measured at 14.4ms a
+        packet, 41% of wall time at a busy 28 packets/s. `upd=None` means
+        "no packet, redraw everything": what window-open and tab-switch
+        want."""
         self.state_data = state
-        if "TGOODS" in state:
-            self._render_goods(state.get("TGOODS", ""),
-                               state.get("DCYCLE", ""))
-        if self.city_txt is not None and \
-                any(k in state for k in CITY_KEYS):
-            self._render_city(state)
+        keys = state if upd is None else upd
+        if "TGOODS" in keys:
+            self._timed(perf, "Goods", self._render_goods,
+                        state.get("TGOODS", ""), state.get("DCYCLE", ""))
         if self.trade_txt is not None and \
-                any(k in state for k in TRADE_KEYS):
-            self._render_trade(state)
+                any(k in keys for k in TRADE_KEYS):
+            self._timed(perf, "Trade", self._render_trade, state)
         if self.raids_txt is not None and \
-                any(k in state for k in RAIDS_KEYS):
-            self._render_raids(state)
+                any(k in keys for k in RAIDS_KEYS):
+            self._timed(perf, "Raids", self._render_raids, state)
         if self.people_txt is not None and \
-                any(k in state for k in PEOPLE_KEYS):
-            self._render_people(state)
-        if self.map_canvas is not None and "VMAPH" in state:
-            self._render_map(state)
+                any(k in keys for k in PEOPLE_KEYS):
+            self._timed(perf, "People", self._render_people, state)
+        if self.map_canvas is not None and "VMAPH" in keys:
+            self._timed(perf, "Map", self._render_map, state)
         if self.stats_txt is not None and \
-                any(k in state for k in STATS_KEYS):
-            self._render_stats(state)
-        if self.ranks_txt is not None and \
-                any(k in state for k in RANK_KEYS):
-            self._render_ranks(state)
+                any(k in keys for k in STATS_KEYS):
+            self._timed(perf, "Stats", self._render_stats, state)
+        if self.skills_txt is not None and \
+                any(k in keys for k in SKILLS_KEYS):
+            self._timed(perf, "Skills", self._render_skills, state)
         if self.bonds_txt is not None and \
-                any(k in state for k in BONDS_KEYS):
-            self._render_bonds(state)
-        if self.builds_txt is not None and \
-                any(k in state for k in BUILD_KEYS):
-            self._render_builds(state)
+                any(k in keys for k in BONDS_KEYS):
+            self._timed(perf, "Bonds", self._render_bonds, state)
+        if self.production_txt is not None and \
+                any(k in keys for k in PRODUCTION_KEYS):
+            self._timed(perf, "Production", self._render_production, state)
         if self.farm_txt is not None and \
-                any(k in state for k in FARM_KEYS):
-            self._render_farm(state)
+                any(k in keys for k in FARM_KEYS):
+            self._timed(perf, "Farm", self._render_farm, state)
         if self.sea_txt is not None and (
-                any(k in state for k in VOYAGE_KEYS)
-                or any(k.startswith("VCR") for k in state)):
-            self._render_sea(state)
+                any(k in keys for k in VOYAGE_KEYS)
+                or any(k.startswith("VCR") for k in keys)):
+            self._timed(perf, "Sea", self._render_sea, state)
+        if self.colony_txt is not None and \
+                any(k in keys for k in COLONY_KEYS):
+            self._timed(perf, "Colony", self._render_colony, state)
 
     def _render_goods(self, tgoods, dcycle):
         txt = self.goods_txt
         if txt is None:
             return
         holds = parse_tgoods(tgoods)
-        txt.configure(state="normal")
-        txt.delete("1.0", "end")
+        pos = self._redraw_begin(txt)
         if self.goods_filter:
             self._render_good_focus(txt, holds, self.goods_filter)
-            txt.configure(state="disabled")
+            self._redraw_end(txt, pos)
             return
         if dcycle:
             parts = dcycle.split("|")
@@ -2243,7 +2791,7 @@ class VikingStatus(tk.Toplevel):
                     self._cell(txt, goods[i + 1])
                 txt.insert("end", "\n")
             txt.insert("end", "\n")
-        txt.configure(state="disabled")
+        self._redraw_end(txt, pos)
 
     def _render_good_focus(self, txt, holds, good):
         """One good across every city: where to buy it cheapest and
@@ -2327,59 +2875,12 @@ class VikingStatus(tk.Toplevel):
         txt.insert("end", " " * max(1, pad), "dim")
         txt.insert("end", right + "\n", right_tag)
 
-    def _render_city(self, st):
-        txt = self.city_txt
+    # -------------------------------------------------------- Trade tab
+    def _render_trade(self, st):
+        txt = self.trade_txt
         if txt is None:
             return
-        txt.configure(state="normal")
-        txt.delete("1.0", "end")
-
-        if "DALER" in st:
-            txt.insert("end", "Daler: ", "sec")
-            daler = st["DALER"]
-            try:
-                daler = f"{int(daler):,}"
-            except ValueError:
-                pass
-            txt.insert("end", daler + "\n", "gold")
-
-        god = st.get("GOD_POWER", "")
-        if god:
-            txt.insert("end", "Active God\n", "sec")
-            txt.insert("end", "  In Power: ", "dim")
-            txt.insert("end", god + "\n", "val")
-            if st.get("GOD_POWER_NEXT"):
-                self._row(txt, "  Resets In:", "dim",
-                          fmt_secs(st["GOD_POWER_NEXT"]), "cyan")
-            if st.get("GOD_POWER_FOCUS"):
-                self._row(txt, "  Focus:", "dim",
-                          st["GOD_POWER_FOCUS"], "val")
-
-        thralls = parse_thralls(st.get("THRALLS", ""))
-        follower = parse_thrall_follower(st.get("THRALL_FOLLOWER", ""))
-        if thralls or follower:
-            total = sum(c for _n, c in thralls)
-            txt.insert("end", f"Thralls  [{total}]\n", "sec")
-            if follower:
-                head = f"  {follower['name']}  L{follower['level']}"
-                if follower["status"]:
-                    head += f"  {follower['status']}"
-                try:
-                    xp = (f"{int(follower['xp']):,}/"
-                          f"{int(follower['next_xp']):,} xp")
-                except ValueError:
-                    xp = f"{follower['xp']}/{follower['next_xp']} xp"
-                self._row(txt, head, "val",
-                          f"{xp}   carry {follower['carried']}/"
-                          f"{follower['cap']}", "cyan")
-            # Zero counts stay visible: an empty building means either
-            # unprioritized or its thralls escaped - both worth seeing.
-            for i in range(0, len(thralls), 2):
-                for n, c in thralls[i:i + 2]:
-                    tag = "val" if c else "dim"
-                    txt.insert("end", f"  {n:<17}", tag)
-                    txt.insert("end", f"{c:<7}", tag)
-                txt.insert("end", "\n")
+        pos = self._redraw_begin(txt)
 
         if "WSTOCK" in st:
             stock = parse_wstock(st["WSTOCK"])
@@ -2392,6 +2893,14 @@ class VikingStatus(tk.Toplevel):
                 self._row(txt, "  Next stock tick", "dim",
                           fmt_secs(st["NEXTTICK"]), "cyan")
             for good, batches in stock.items():
+                # Amber was retired from the game (replaced by sunstone)
+                # but old stock still rides the WSTOCK feed. The MUD's own
+                # `vtrade stock` hides the row while still counting it
+                # toward the stored total (capture 2026-08-23: "2370/4619
+                # stored" = the feed's total including amber's 288), so
+                # skip the row only.
+                if good == "amber":
+                    continue
                 gtag = "good_" + good
                 if gtag not in txt.tag_names():
                     gtag = "val"
@@ -2401,82 +2910,13 @@ class VikingStatus(tk.Toplevel):
                                   in enumerate(FRESH_BANDS) if fresh >= lo)
                     label = grade if grade else FRESH_BANDS[band_i][1]
                     ftag = "fr%d" % band_i
-                    txt.insert("end", f"  {good if i == 0 else '':<9}",
+                    # 12 wide: the 2026-07 goods include 'salted_fish'.
+                    txt.insert("end", f"  {good if i == 0 else '':<12}",
                                gtag)
                     txt.insert("end", f"{label:<11}", ftag)
                     txt.insert("end", f"{amt:>5} ", "num")
                     txt.insert("end", fresh_bar(fresh), ftag)
                     txt.insert("end", f"{fresh:>4}%\n", ftag)
-
-        if "CELLAR" in st:
-            cellar = parse_cellar(st["CELLAR"])
-            txt.insert("end", "Mead Cellar", "sec")
-            if cellar is None:
-                txt.insert("end", "\n  Not built\n", "dim")
-            else:
-                txt.insert("end", f"  T{cellar['tier']}  "
-                           f"[{cellar['stock']} / {cellar['cap']}]\n",
-                           "dim")
-                for qty, pct in cellar["brackets"]:
-                    txt.insert("end", f"  {qty:>4} @ ", "num")
-                    txt.insert("end", f"{pct}%\n", "cyan")
-
-        refineries = parse_refinery(st.get("REFINERY", ""))
-        if refineries:
-            txt.insert("end", "Refineries\n", "sec")
-            for r in refineries:
-                self._row(txt, f"  {pretty_name(r['bldg'])} T{r['tier']}",
-                          "val", f"{r['stock']}/{r['cap']}", "cyan")
-                if r["grades"]:
-                    txt.insert("end", "      " + "  ".join(
-                        f"{g} {q} ({p}%)" for g, q, p in r["grades"])
-                        + "\n", "dim")
-
-        # PRODUCTION reuses the BUILDINGS 'good:amount,...' form.
-        production = parse_buildings(st.get("PRODUCTION", ""))
-        if production:
-            txt.insert("end", "Production\n", "sec")
-            for i in range(0, len(production), 2):
-                line = ""
-                for good, amt in production[i:i + 2]:
-                    line += f"  {good:<14}{amt:>5}   "
-                txt.insert("end", line.rstrip() + "\n", "val")
-
-        if (st.get("BLOT") or "").strip():
-            txt.insert("end", "Blot ", "sec")
-            txt.insert("end", "(raw - unidentified)\n", "dim")
-            txt.insert("end", "  " + st["BLOT"].strip() + "\n", "val")
-
-        builds = parse_buildings(st.get("BUILDINGS", ""))
-        items = [f"{pretty_name(n)} T{t}" for n, t in builds if t > 0]
-        if items:
-            txt.insert("end", "Buildings\n", "sec")
-            for i in range(0, len(items), 2):
-                left = "  " + items[i]
-                right = items[i + 1] if i + 1 < len(items) else ""
-                txt.insert("end", f"{left:<26}{right}\n", "val")
-
-        if "MONUMENTS" in st:
-            txt.insert("end", "Runic Monuments\n", "sec")
-            mon = st["MONUMENTS"]
-            try:
-                count = int(mon)
-            except ValueError:
-                count = None
-            if count is not None:
-                txt.insert("end", f"  ({count}/5 slots)\n", "dim")
-                if count == 0:
-                    txt.insert("end", "  None inscribed\n", "dim")
-
-        txt.configure(state="disabled")
-
-    # -------------------------------------------------------- Trade tab
-    def _render_trade(self, st):
-        txt = self.trade_txt
-        if txt is None:
-            return
-        txt.configure(state="normal")
-        txt.delete("1.0", "end")
 
         txt.insert("end", "Carts\n", "sec")
         carts = parse_carts(st.get("CARTS", ""))
@@ -2501,44 +2941,16 @@ class VikingStatus(tk.Toplevel):
                        f"  #{field(f, 0)} idle   T{field(f, 1)}  "
                        f"dur{field(f, 2)}%  cap{field(f, 3)}\n", "dim")
 
-        txt.insert("end", "Market Orders\n", "sec")
-        if not split_entries(st.get("MARKET", "")):
-            txt.insert("end", "  No open orders\n", "dim")
-
-        txt.insert("end", "Incoming Fills\n", "sec")
-        if not split_entries(st.get("INCOMING", "")):
-            txt.insert("end", "  None incoming\n", "dim")
-
-        routes = parse_routes(st.get("ROUTES", ""))
-        if routes:
-            txt.insert("end", "Routes\n", "sec")
-            for r in routes:
-                txt.insert("end", f"  {r['name']:<16}", "val")
-                txt.insert("end", f"road T{r['road']} ", "dim")
-                txt.insert("end", f"{r['road_maint']:>3}%",
-                           stat_band(r["road_maint"]))
-                txt.insert("end", f"   fort T{r['fort']} ", "dim")
-                txt.insert("end", f"{r['fort_maint']:>3}%\n",
-                           stat_band(r["fort_maint"]))
-
-        rbuild = parse_rbuild(st.get("RBUILD", ""))
-        if rbuild:
-            txt.insert("end", "Roads/Forts Under Construction\n", "sec")
-            for b in rbuild:
-                if b["secs_left"] < 0:
-                    status, tag = "awaiting materials", "res_no"
-                elif b["secs_left"] == 0:
-                    status, tag = "finalizing", "res_ok"
-                else:
-                    status, tag = fmt_secs(b["secs_left"]) + " left", "cyan"
-                self._row(txt, f"  {b['name']} {b['kind']} → "
-                          f"T{b['tier']}", "val", status, tag)
-                if b["mats"]:
-                    txt.insert("end", "    ", "dim")
-                    for good, have, need in b["mats"]:
-                        tag = "res_ok" if have >= need else "res_no"
-                        txt.insert("end", f"{good} {have}/{need}   ", tag)
-                    txt.insert("end", "\n")
+        refineries = parse_refinery(st.get("REFINERY", ""))
+        if refineries:
+            txt.insert("end", "Refineries\n", "sec")
+            for r in refineries:
+                self._row(txt, f"  {pretty_name(r['bldg'])} T{r['tier']}",
+                          "val", f"{r['stock']}/{r['cap']}", "cyan")
+                if r["grades"]:
+                    txt.insert("end", "      " + "  ".join(
+                        f"{g} {q} ({p}%)" for g, q, p in r["grades"])
+                        + "\n", "dim")
 
         # Named in the 2026-07 doc with no documented format.
         for key in ("SUPG", "CUPG"):
@@ -2547,15 +2959,14 @@ class VikingStatus(tk.Toplevel):
                 txt.insert("end", "(raw - unidentified)\n", "dim")
                 txt.insert("end", "  " + st[key].strip() + "\n", "val")
 
-        txt.configure(state="disabled")
+        self._redraw_end(txt, pos)
 
     # -------------------------------------------------------- Raids tab
     def _render_raids(self, st):
         txt = self.raids_txt
         if txt is None:
             return
-        txt.configure(state="normal")
-        txt.delete("1.0", "end")
+        pos = self._redraw_begin(txt)
 
         if "SHIPS" in st:
             txt.insert("end", "Longships\n", "sec")
@@ -2595,29 +3006,7 @@ class VikingStatus(tk.Toplevel):
                     self._row(txt, f"  {name}", "val",
                               f"{g1}, {g2}", "dim")
 
-        if "RAIDLOG" in st:
-            # The wire sends oldest first; show newest first.
-            raidlog = parse_raidlog(st["RAIDLOG"])[::-1]
-            txt.insert("end", "Raid Log ", "sec")
-            txt.insert("end", "(newest first)\n", "dim")
-            if not raidlog:
-                txt.insert("end", "  No raids yet\n", "dim")
-            for r in raidlog:
-                head = f"  {r['ship']} → {r['target']}"
-                if r["lost"]:
-                    self._row(txt, head, "val", "SHIP LOST", "res_no")
-                else:
-                    self._row(txt, head, "val",
-                              f"{r['daler']:,} daler", "gold")
-                    loot = "  ".join(f"{g} {q}" for g, q in r["goods"])
-                    parts = [p for p in
-                             (f"{r['thralls']} thralls"
-                              if r["thralls"] else "", loot) if p]
-                    if parts:
-                        txt.insert("end", "      " + " · ".join(parts)
-                                   + "\n", "dim")
-
-        txt.configure(state="disabled")
+        self._redraw_end(txt, pos)
 
     # ------------------------------------------------------- People tab
     def _stat_bar(self, txt, label, pct):
@@ -2631,8 +3020,7 @@ class VikingStatus(tk.Toplevel):
         txt = self.people_txt
         if txt is None:
             return
-        txt.configure(state="normal")
-        txt.delete("1.0", "end")
+        pos = self._redraw_begin(txt)
 
         # --- Settlers (12 of 18 SETTLERX fields confirmed against live
         # `vsettler status`/`vsettler community` readouts - see the
@@ -2651,15 +3039,21 @@ class VikingStatus(tk.Toplevel):
         cap = _settlerx_int(x, SETTLERX_HOUSING_CAP)
         plots = _settlerx_int(x, SETTLERX_HOUSING_PLOTS)
         avg = _settlerx_int(x, SETTLERX_HOUSING_AVG)
+        plot_cap = _settlerx_int(x, SETTLERX_PLOT_CAP)
+        house_upkeep = _settlerx_int(x, SETTLERX_HOUSING_UPKEEP)
+        plots_txt = f"{plots}/{plot_cap}" if plot_cap else f"{plots}"
         self._row(txt, "  Housing:", "dim",
-                  f"cap {cap}, {plots} plots, avg T{avg / 100:.2f}", "val")
+                  f"{pop}/{cap} housed, {plots_txt} plots, "
+                  f"avg T{avg / 100:.2f}, upkeep {house_upkeep}/tick",
+                  "val")
         shplots = parse_shplots(st.get("SHPLOTS", ""))
         if any(c for _t, c in shplots):
             self._row(txt, "  Plots:", "dim", ", ".join(
                 f"{c} x T{t}" for t, c in shplots if c), "val")
         edict_left = _settlerx_int(x, SETTLERX_EDICT_REMAINING)
         if edict_left > 0:
-            self._row(txt, "  Edict:", "dim",
+            name = pretty_name(field(x, SETTLERX_EDICT_NAME, "")) or "active"
+            self._row(txt, f"  Edict: {name}", "dim",
                       fmt_secs(edict_left) + " left", "cyan")
         else:
             cooldown = _settlerx_int(x, SETTLERX_EDICT_COOLDOWN)
@@ -2674,10 +3068,20 @@ class VikingStatus(tk.Toplevel):
                   "val")
         mult = _settlerx_int(x, SETTLERX_HAPPINESS_MULT)
         net = _settlerx_int(x, SETTLERX_COMMUNITY_NET)
+        tax = _settlerx_int(x, SETTLERX_TAX_INCOME)
         upkeep = _settlerx_int(x, SETTLERX_UPKEEP)
         self._row(txt, "  Economy:", "dim",
-                  f"happiness x{mult / 100:.2f}, net {net:+d}/tick, "
+                  f"happiness x{mult / 100:.2f}, net {net + tax:+d}/tick "
+                  f"(tax {tax:+d}, community {net:+d}), "
                   f"upkeep {upkeep}/tick", "val")
+        sentiment = _settlerx_int(x, SETTLERX_SENTIMENT)
+        if sentiment:
+            self._row(txt, "  Sentiment:", "dim", f"{sentiment:+d}",
+                      "val")
+        flourishing = _settlerx_int(x, SETTLERX_FLOURISHING)
+        self._row(txt, "  Flourishing:", "dim",
+                  "YES" if flourishing else "no",
+                  "res_ok" if flourishing else "dim")
         unknown = [v for i, v in enumerate(x)
                   if i not in SETTLERX_KNOWN_INDICES and i > 0]
         if unknown and any(v for v in unknown):
@@ -2752,37 +3156,6 @@ class VikingStatus(tk.Toplevel):
             else:
                 txt.insert("end", "  None on patrol\n", "dim")
 
-        # --- Staff (the vroster) ---
-        staff = parse_staff(st.get("STAFF", ""))
-        if staff:
-            txt.insert("end", "Staff\n", "sec")
-            for m in staff:
-                extra = " · ".join(p for p in (
-                    m["assigned"], m["specialty"], m["trait"]) if p)
-                txt.insert("end", f"  {m['name']}", "val")
-                if extra:
-                    txt.insert("end", f"   {extra}", "dim")
-                # Loyalty + age read as one phrase: 'Uneasy Veteran',
-                # colored by the loyalty band.
-                band = ("" if m["loyalty"] is None else
-                        STAFF_LOYALTY.get(m["loyalty"],
-                                          str(m["loyalty"])))
-                band = " ".join(p for p in (band, m["age"].title())
-                                if p)
-                if band:
-                    tag = ("dim" if m["loyalty"] is None else
-                           "stat_hi" if m["loyalty"] >= 4 else
-                           "stat_mid" if m["loyalty"] == 3 else
-                           "stat_lo")
-                    txt.insert("end", f"   {band}", tag)
-                txt.insert("end", "\n")
-                if m["stats"]:
-                    line = "      " + "  ".join(
-                        f"{n} {v}" for n, v in m["stats"])
-                    if m["unknown2"] not in ("", "0"):
-                        line += f"   [? {m['unknown2']}]"
-                    txt.insert("end", line + "\n", "cyan")
-
         # --- Varangian Guards ---
         txt.insert("end", "Varangian Guards\n", "sec")
         if not (st.get("VARANG", "") or "").strip():
@@ -2823,7 +3196,7 @@ class VikingStatus(tk.Toplevel):
             txt.insert("end", "(raw - unidentified)\n", "dim")
             txt.insert("end", "  " + bdmg + "\n", "val")
 
-        txt.configure(state="disabled")
+        self._redraw_end(txt, pos)
 
     # ---------------------------------------------------------- Map tab
     def _render_map(self, st):
@@ -2846,8 +3219,7 @@ class VikingStatus(tk.Toplevel):
             self.map_pos.configure(text=f"@{px},{py}")
 
         txt = self.map_poi
-        txt.configure(state="normal")
-        txt.delete("1.0", "end")
+        pos = self._redraw_begin(txt)
         col_w = 30
         for i in range(0, len(pois), 2):
             for j in (i, i + 1):
@@ -2872,7 +3244,7 @@ class VikingStatus(tk.Toplevel):
                     txt.tag_bind(link, "<Leave>",
                                  lambda _e: txt.configure(cursor=""))
             txt.insert("end", "\n")
-        txt.configure(state="disabled")
+        self._redraw_end(txt, pos)
 
     # --------------------------------------------------- Stats/Ranks/Bonds
     def _res_bar(self, txt, label, cur, mx):
@@ -2948,20 +3320,37 @@ class VikingStatus(tk.Toplevel):
             return None
         return str(total // 4) if total % 4 == 0 else f"{total / 4:.2f}"
 
+    def _render_skills(self, st):
+        txt = self.skills_txt
+        if txt is None:
+            return
+        pos = self._redraw_begin(txt)
+        self._render_gxp(txt, st)
+        god = st.get("GOD_POWER", "")
+        if god:
+            txt.insert("end", "\nActive God\n", "sec")
+            txt.insert("end", "  In Power: ", "dim")
+            txt.insert("end", god + "\n", "val")
+            if st.get("GOD_POWER_NEXT"):
+                self._row(txt, "  Resets In:", "dim",
+                          fmt_secs(st["GOD_POWER_NEXT"]), "cyan")
+            if st.get("GOD_POWER_FOCUS"):
+                self._row(txt, "  Focus:", "dim",
+                          st["GOD_POWER_FOCUS"], "val")
+
+        self._redraw_end(txt, pos)
+
     def _render_stats(self, st):
         txt = self.stats_txt
         if txt is None:
             return
-        txt.configure(state="normal")
-        txt.delete("1.0", "end")
+        pos = self._redraw_begin(txt)
         if st.get("LIN") or st.get("GLVL"):
             txt.insert("end", st.get("LIN", "?"), "sec")
             glvl = self._glvl_precise() or st.get("GLVL")
             if glvl:
                 txt.insert("end", f"   Guild Level {glvl}", "dim")
             txt.insert("end", "\n")
-        self._render_gxp(txt, st)
-        txt.insert("end", "\n")
         txt.insert("end", "Resources ", "sec")
         txt.insert("end", "(abbrevs as the MUD sends them)\n", "dim")
         for name in STATS_RESOURCES:
@@ -2978,6 +3367,12 @@ class VikingStatus(tk.Toplevel):
             txt.insert("end", "Fury  ", "sec")
             txt.insert("end", "█" * fill + "░" * (total - fill), "fury")
             txt.insert("end", f"  {fill}/{total}\n", "num")
+        pools = [(name, self._pool_points(st, name)) for name in POOL_MIP]
+        if any(pts for _n, pts in pools):
+            txt.insert("end", "Guild Experience ", "sec")
+            txt.insert("end", "(available to spend)\n", "dim")
+            for name, pts in pools:
+                self._row(txt, f"  {name}", "val", f"{pts:,}", "num")
         fx = parse_effects(st.get("STFX", ""))
         if fx:
             txt.insert("end", "Effects\n", "sec")
@@ -2987,14 +3382,128 @@ class VikingStatus(tk.Toplevel):
         if enemy and enemy != "None":
             txt.insert("end", "Target\n", "sec")
             txt.insert("end", f"  {enemy}\n", "val")
-        txt.configure(state="disabled")
 
-    def _render_ranks(self, st):
-        txt = self.ranks_txt
+        if "DALER" in st:
+            txt.insert("end", "Daler: ", "sec")
+            daler = st["DALER"]
+            try:
+                daler = f"{int(daler):,}"
+            except ValueError:
+                pass
+            txt.insert("end", daler + "\n", "gold")
+
+        thralls = parse_thralls(st.get("THRALLS", ""))
+        follower = parse_thrall_follower(st.get("THRALL_FOLLOWER", ""))
+        if thralls or follower:
+            total = sum(c for _n, c in thralls)
+            txt.insert("end", f"Thralls  [{total}]\n", "sec")
+            if follower:
+                head = f"  {follower['name']}  L{follower['level']}"
+                if follower["status"]:
+                    head += f"  {follower['status']}"
+                try:
+                    xp = (f"{int(follower['xp']):,}/"
+                          f"{int(follower['next_xp']):,} xp")
+                except ValueError:
+                    xp = f"{follower['xp']}/{follower['next_xp']} xp"
+                self._row(txt, head, "val",
+                          f"{xp}   carry {follower['carried']}/"
+                          f"{follower['cap']}", "cyan")
+            # Zero counts stay visible: an empty building means either
+            # unprioritized or its thralls escaped - both worth seeing.
+            for i in range(0, len(thralls), 2):
+                for n, c in thralls[i:i + 2]:
+                    tag = "val" if c else "dim"
+                    txt.insert("end", f"  {n:<17}", tag)
+                    txt.insert("end", f"{c:<7}", tag)
+                txt.insert("end", "\n")
+
+        if "CELLAR" in st:
+            cellar = parse_cellar(st["CELLAR"])
+            txt.insert("end", "Mead Cellar", "sec")
+            if cellar is None:
+                txt.insert("end", "\n  Not built\n", "dim")
+            else:
+                txt.insert("end", f"  T{cellar['tier']}  "
+                           f"[{cellar['stock']} / {cellar['cap']}]\n",
+                           "dim")
+                for qty, pct in cellar["brackets"]:
+                    txt.insert("end", f"  {qty:>4} @ ", "num")
+                    txt.insert("end", f"{pct}%\n", "cyan")
+
+        if (st.get("BLOT") or "").strip():
+            txt.insert("end", "Blot ", "sec")
+            txt.insert("end", "(raw - unidentified)\n", "dim")
+            txt.insert("end", "  " + st["BLOT"].strip() + "\n", "val")
+        self._render_settlement(txt, st)
+        self._redraw_end(txt, pos)
+
+    # How many SEVENTS lines to show. They are full sentences that wrap to
+    # 3-4 display lines each, so this is the expensive knob on this tab.
+    EVENTS_SHOWN = 3
+
+    def _render_settlement(self, txt, st):
+        """Weather, upkeep and the settlement event log - the tail of the
+        Stats tab since the City tab was folded in."""
+        weather = parse_weather(st.get("WEATHER", ""))
+        if weather:
+            season, sky, raw = weather
+            txt.insert("end", "Weather", "sec")
+            txt.insert("end", f"   {pretty_name(season)} · "
+                              f"{pretty_name(sky)}", "val")
+            txt.insert("end", f"   [{raw}]\n", "dim")
+        upkeep = parse_upkeep(st.get("UPKEEP", ""))
+        if upkeep:
+            buildings, settlers, total = upkeep
+            self._row(txt, "Upkeep", "sec",
+                      f"{total:,} daler/tick", "gold")
+            txt.insert("end", f"  buildings {buildings:,}"
+                              f"   settlers {settlers:,}\n", "dim")
+        events = parse_sevents(st.get("SEVENTS", ""))
+        if events:
+            txt.insert("end", "Recent Events\n", "sec")
+            for stamp, text in events[:self.EVENTS_SHOWN]:
+                txt.insert("end", f"  [{fmt_ago(stamp)}] ", "cyan")
+                txt.insert("end", text + "\n", "val")
+
+    def _render_bonds(self, st):
+        txt = self.bonds_txt
         if txt is None:
             return
-        txt.configure(state="normal")
-        txt.delete("1.0", "end")
+        pos = self._redraw_begin(txt)
+        home = (st.get("LIN", "") or "").lower()
+        txt.insert("end", "Standings\n", "sec")
+        rows = parse_standings(st.get("STANDINGS", ""))
+        if not rows:
+            txt.insert("end", "  None\n", "dim")
+        # HEAT/GRUDGES are per city but line up with these rows by
+        # position (see parse_heat / grudge_by_index).
+        heat = parse_heat(st.get("HEAT", ""))
+        if len(heat) != len(rows):
+            heat = []
+        grudges = grudge_by_index(st.get("GRUDGES", ""))
+        for i, (_hid, name, val, label, flag) in enumerate(rows):
+            tag = "st_" + label.lower() if label.lower() in \
+                STANDING_COLOR else "val"
+            txt.insert("end", f"  {name:<16}", "val")
+            txt.insert("end", f"{label:<10}", tag)
+            txt.insert("end", f"{val:>4}", "num")
+            if heat:
+                txt.insert("end", "   heat ", "dim")
+                txt.insert("end", f"{heat[i]:>3}",
+                           "num" if heat[i] else "dim")
+            if i in grudges:
+                txt.insert("end", f"   reprisal {fmt_secs(grudges[i])}",
+                           "st_hostile")
+            if flag == "1" or name.lower() == home:
+                txt.insert("end", "  ★ home", "gold")
+            txt.insert("end", "\n")
+        # SPY field 0 is the Shadow-House tier (SPY read '1|||0|0|0|0!'
+        # while `vspy` reported tier 1); the rest is undecoded.
+        spy = st.get("SPY", "").split("|")
+        if spy and spy[0].strip().isdigit():
+            txt.insert("end", f"  Shadow-House T{spy[0].strip()}"
+                              "   (vspy scout/sabotage)\n", "dim")
         txt.insert("end", "Reputation\n", "sec")
         # VREP semantics confirmed by the user 2026-07-11: rep (f2) is
         # the LIFETIME rep with that hold, f4/f5 the CUMULATIVE
@@ -3007,30 +3516,12 @@ class VikingStatus(tk.Toplevel):
                 progress = f"({rep - int(cur):,}/{int(nxt) - int(cur):,})"
             except ValueError:
                 progress = f"({rep:,}/{nxt})"
-            self._row(txt, f"  {name:<16}rank {rank}", "val",
+            try:
+                title = VREP_RANKS[int(rank)]
+            except (ValueError, IndexError):
+                title = f"rank {rank}"
+            self._row(txt, f"  {name:<16}{title:<10}", "val",
                       progress, "dim")
-        txt.configure(state="disabled")
-
-    def _render_bonds(self, st):
-        txt = self.bonds_txt
-        if txt is None:
-            return
-        txt.configure(state="normal")
-        txt.delete("1.0", "end")
-        home = (st.get("LIN", "") or "").lower()
-        txt.insert("end", "Standings\n", "sec")
-        rows = parse_standings(st.get("STANDINGS", ""))
-        if not rows:
-            txt.insert("end", "  None\n", "dim")
-        for _hid, name, val, label, flag in rows:
-            tag = "st_" + label.lower() if label.lower() in \
-                STANDING_COLOR else "val"
-            txt.insert("end", f"  {name:<16}", "val")
-            txt.insert("end", f"{label:<10}", tag)
-            txt.insert("end", f"{val:>4}", "num")
-            if flag == "1" or name.lower() == home:
-                txt.insert("end", "  ★ home", "gold")
-            txt.insert("end", "\n")
         bonds = parse_bonds(st.get("BONDS", ""))
         if bonds:
             names = hird_names(st)
@@ -3041,14 +3532,23 @@ class VikingStatus(tk.Toplevel):
                 tier = BOND_LEVELS.get(lvl, f"L{lvl}")
                 self._row(txt, f"  {pair}", "val",
                           f"{tier} ({pts:,})", "cyan")
-        txt.configure(state="disabled")
+        self._redraw_end(txt, pos)
 
-    def _render_builds(self, st):
-        txt = self.builds_txt
+    def _render_production(self, st):
+        txt = self.production_txt
         if txt is None:
             return
-        txt.configure(state="normal")
-        txt.delete("1.0", "end")
+        pos = self._redraw_begin(txt)
+
+        # PRODUCTION reuses the BUILDINGS 'good:amount,...' form.
+        production = parse_buildings(st.get("PRODUCTION", ""))
+        if production:
+            txt.insert("end", "Production\n", "sec")
+            for i in range(0, len(production), 2):
+                line = ""
+                for good, amt in production[i:i + 2]:
+                    line += f"  {good:<14}{amt:>5}   "
+                txt.insert("end", line.rstrip() + "\n", "val")
 
         txt.insert("end", "Under Construction\n", "sec")
         con = parse_construction(st.get("BUILDS", ""))
@@ -3073,10 +3573,25 @@ class VikingStatus(tk.Toplevel):
         sproj = split_entries(st.get("SPROJ", ""))
         if sproj:
             txt.insert("end", "Settler Projects\n", "sec")
-            for f in sproj:           # kind|target_tier|secs_remaining
-                self._row(txt, f"  {pretty_name(field(f, 0))} → "
-                          f"T{field(f, 1)}", "val",
-                          f"{fmt_secs(field(f, 2, '0'))} left", "cyan")
+            # 2026-08-03: name|kind|from_tier|to_tier|secs_remaining|?|?|
+            # materials|daler_cost (was name|target_tier|secs). Pinned
+            # against `vsettler status`: "Hearth Quarter upgrade T2->T3,
+            # Cost: 16100 daler, Iron 50/50 ..., Completes in 6h 28m".
+            for f in sproj:
+                self._row(txt, f"  {pretty_name(field(f, 0))} "
+                          f"T{field(f, 2)} → T{field(f, 3)}", "val",
+                          f"{fmt_secs(field(f, 4, '0'))} left", "cyan")
+                cost = field(f, 8, "")
+                if cost.isdigit():
+                    self._row(txt, "    cost", "dim",
+                              f"{int(cost):,} daler", "val")
+                mats = parse_build_res(field(f, 7, ""))
+                if mats:
+                    txt.insert("end", "    ")
+                    for good, have, need in mats:
+                        tag = "res_ok" if have >= need else "res_no"
+                        txt.insert("end", f"{good} {have}/{need}   ", tag)
+                    txt.insert("end", "\n")
 
         builds = parse_buildings(st.get("BUILDINGS", ""))
         items = [f"{pretty_name(n)} T{t}" for n, t in builds if t > 0]
@@ -3097,14 +3612,34 @@ class VikingStatus(tk.Toplevel):
                 txt.insert("end", f"  ({count}/5 slots)\n", "dim")
                 if count == 0:
                     txt.insert("end", "  None inscribed\n", "dim")
-        txt.configure(state="disabled")
+
+        rbuild = parse_rbuild(st.get("RBUILD", ""))
+        if rbuild:
+            txt.insert("end", "Roads/Forts Under Construction\n", "sec")
+            for b in rbuild:
+                if b["secs_left"] < 0:
+                    status, tag = "awaiting materials", "res_no"
+                elif b["secs_left"] == 0:
+                    status, tag = "finalizing", "res_ok"
+                else:
+                    status, tag = fmt_secs(b["secs_left"]) + " left", "cyan"
+                self._row(txt, f"  {b['name']} {b['kind']} → "
+                          f"T{b['tier']}", "val", status, tag)
+                if b["mats"]:
+                    txt.insert("end", "    ", "dim")
+                    for good, have, need in b["mats"]:
+                        tag = "res_ok" if have >= need else "res_no"
+                        txt.insert("end", f"{good} {have}/{need}   ", tag)
+                    txt.insert("end", "\n")
+
+
+        self._redraw_end(txt, pos)
 
     def _render_farm(self, st):
         txt = self.farm_txt
         if txt is None:
             return
-        txt.configure(state="normal")
-        txt.delete("1.0", "end")
+        pos = self._redraw_begin(txt)
         weather_mod, plots = parse_farm(st.get("FARM", ""))
         txt.insert("end", "Mushroom Farm\n", "sec")
         if weather_mod is not None:
@@ -3122,7 +3657,104 @@ class VikingStatus(tk.Toplevel):
             extra = " (fertilized)" if p["fertilized"] else ""
             self._row(txt, f"  {p['coord']} {pretty_name(p['shroom_id'])}"
                       f"{extra}", "val", status, tag)
-        txt.configure(state="disabled")
+        self._render_livestock(txt, st)
+        self._redraw_end(txt, pos)
+
+    # The market is ~130 head across 13 lineages and the tab budget is
+    # ~71 lines, so only TRAITED animals are listed (user, 2026-08-23):
+    # trait is LMARKET field 11, and an untraited animal reads '0'. In
+    # the 2026-08-23 capture that is 28 of 130 - the ones actually worth
+    # a trip, and the comparison the game makes tedious by only ever
+    # showing one lineage at a time.
+    def _render_market(self, txt, st):
+        market = parse_lmarket(st.get("LMARKET", ""))
+        if not market:
+            return
+        names = lineage_names(st)
+        lineages = len({a["lineage"] for a in market})
+        traited = [a for a in market if a["trait"] not in ("", "0")]
+        txt.insert("end", "Livestock Market", "sec")
+        txt.insert("end", f"   {len(traited)} traited of {len(market)}"
+                          f" head across {lineages} lineages\n", "dim")
+        if not traited:
+            txt.insert("end", "  No traited stock on offer.\n", "dim")
+            return
+        by_species = {}
+        for a in traited:
+            by_species.setdefault(a["species"], []).append(a)
+        order = [k for k, _label in MARKET_SPECIES]
+        rest = sorted(k for k in by_species if k not in order)
+        labels = dict(MARKET_SPECIES)
+        for species in [k for k in order if k in by_species] + rest:
+            txt.insert("end", "  " + labels.get(species,
+                                                pretty_name(species))
+                       + "\n", "val")
+            # Sorted by where, so the same lineage's offers read together.
+            for a in sorted(by_species[species],
+                            key=lambda a: (names.get(a["lineage"], ""),
+                                           a["slot"])):
+                lin = names.get(a["lineage"], "#%d" % a["lineage"])
+                txt.insert("end", f"    {lin:<12}", "val")
+                txt.insert("end", f"#{a['slot'] + 1:<3}", "dim")
+                txt.insert("end", f"{a['trait']:<11}", "cyan")
+                txt.insert("end", f"{pretty_name(a['breed']):<18}", "dim")
+                for name, val in a["stats"]:
+                    txt.insert("end", f" {name}", "dim")
+                    txt.insert("end", f"{val:<3}", stat_band(val))
+                txt.insert("end", f"  {a['price']:>5} ea", "gold")
+                txt.insert("end", f"  x{a['qty']}", "dim")
+                txt.insert("end", "\n")
+
+    def _render_livestock(self, txt, st):
+        """Herds, their feed draw, and the butchery queue."""
+        herds = parse_herds(st.get("HERDS", ""))
+        feed = parse_lfeed(st.get("LFEED", ""))
+        if herds or feed:
+            txt.insert("end", "Livestock", "sec")
+            if feed:
+                grain, water, head = feed
+                txt.insert("end", f"   {grain} grain + {water} water"
+                           f" / tick   ({head} head)\n", "dim")
+            else:
+                txt.insert("end", "\n")
+        for h in herds:
+            hv = f"  +{h['hv']}HV" if h["hv"] not in ("", "0") else ""
+            trait = f"  {h['trait']}" if h["trait"] not in ("", "0") else ""
+            self._row(txt, f"  {pretty_name(h['bldg'])}"
+                      f"  {pretty_name(h['breed'])}", "val",
+                      f"{h['head']} head", "cyan")
+            txt.insert("end", f"      gen {h['gen']}{hv}{trait}", "dim")
+            txt.insert("end", "   q", "dim")
+            txt.insert("end", f"{h['quality']}", stat_band(h["quality"]))
+            for name, val in h["stats"]:
+                txt.insert("end", f"  {name}", "dim")
+                txt.insert("end", f"{val}", stat_band(val))
+            if h["sterile"] not in ("", "0"):
+                txt.insert("end", f"   sterile {h['sterile']}", "res_no")
+            txt.insert("end", "\n")
+        needs = parse_lneeds(st.get("LNEEDS", ""))
+        if needs:
+            txt.insert("end", "  caps  ", "dim")
+            for species, have, cap in needs:
+                txt.insert("end", f"{species} ", "dim")
+                txt.insert("end", f"{have}/{cap}   ",
+                           "res_ok" if have >= cap else "val")
+            txt.insert("end", "\n")
+
+        if "BQUEUE" in st:
+            used, cap, entries = parse_bqueue(st.get("BQUEUE", ""))
+            txt.insert("end", "Butchery", "sec")
+            if used is not None:
+                txt.insert("end", f"  [{used}/{cap}]", "dim")
+            txt.insert("end", "\n")
+            if not entries:
+                txt.insert("end", "  Nothing in the queue\n", "dim")
+            for e in entries:
+                grade = f"  {e['grade']}" if e["grade"] else ""
+                self._row(txt, f"  slot {e['slot']}  {e['species']} → "
+                          f"{e['qty']} {e['meat']}{grade}", "val",
+                          fmt_secs(e["secs"]), "cyan")
+        self._render_market(txt, st)
 
     # ------------------------------------------------------------- close
     def _closed(self):

@@ -36,7 +36,8 @@
   "login_commands": [],
   "aliases": {
     "sk": "Vskills",
-    "af": "vmission accept %1;vmission fulfill %1"
+    "af": "vmission accept %1;vmission fulfill %1",
+    "pullall": "vtrade refine salting transfer grade hard-cured;vtrade refine bakehouse transfer grade hardtack;vtrade refine furrier transfer grade trimmed;vtrade refine smelter transfer grade seax-grade;vtrade refine smithy transfer grade masterwork;vtrade refine mead transfer grade aged;vtrade refine weaponry transfer grade masterwork;vtrade refine armoury transfer grade warplate;vtrade refine goldsmith transfer grade regalia;vtrade refine weaver transfer grade broadcloth;iii smokehouse transfer grade hard-cured;iii creamery transfer grade vintage"
   },
   "triggers": [],
   "gags": [],

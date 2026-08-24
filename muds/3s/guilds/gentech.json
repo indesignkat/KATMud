@@ -13,10 +13,14 @@
   "aliases": {},
   "triggers": [
     {
-      "pattern": "[[ WARNING :: Tactical Enhancement Termination ]]",
+      "pattern": "\\[\\[ WARNING :: Tactical Enhancement Termination \\]\\]",
       "command": "tactical",
       "cooldown": 10,
-      "_cooldown_note": "Re-sending 'tactical' while one is still active echoes a status line that re-matches this trigger -> loop. cooldown (secs) blocks the refire. Tune toward the tac-enhance duration if it still misfires; the global flood breaker backstops regardless."
+      "_pattern_note": "Patterns are REGEX (re.compile, no auto-escape), so the brackets MUST be escaped. Unescaped, '[[ WARNING ...]]' parses as a character class + a literal ']' and matches ANY line with a common letter or space before a ']' - '[Notice]', '[chat]', '[Newbie]' all fired 'tactical'."
+    },
+    {
+      "pattern": "Random dealt the killing blow to",
+      "command": "reclaim"
     }
   ],
   "gags": [],

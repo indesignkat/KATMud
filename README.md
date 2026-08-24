@@ -1,15 +1,7 @@
-# KatMUD v0.7
+# KatMUD v7
 
-MIP-integrated MUD client for MUDs that speak 3k-style MIP (built and
-tested against 3Scapes). Tkinter, Windows-native, one process per
-character.
-
-This is the public/private companion repo: it ships the client engine
-and the 3Scapes (`3s`) configuration, with no personal character data.
-`profiles.json` ships empty (see the comment in that file for the
-schema) and `characters/` ships only `_TEMPLATE_character.json` - copy
-it to `characters/<name>.json` per character, or let the picker
-scaffold one on profile save.
+MIP-integrated MUD client for 3Scapes/3Kingdoms. Formerly pymud.
+Tkinter, Windows-native, one process per character.
 
 ## Install
 
@@ -21,9 +13,24 @@ strongly recommended dependency:
 Without it, passwords cannot be stored and the client prompts on
 every connect.
 
+## Migrate from pymud v6
+
+    python tools\migrate_v6.py <path-to-old-pymud-folder>
+
+This builds profiles.json, writes characters/<name>.json personal
+layers (aliases, triggers, gags, numpad->keys, seen_max), copies
+per-port landmark files to per-mud ones, and stores each profile's
+password in Windows Credential Manager under katmud/<mud>/<character>.
+**Delete the old pymud_profiles.json afterwards - it still contains
+plaintext passwords.** Guild files do NOT migrate (v6's per-port
+format is incompatible); re-author them under muds/<mud>/guilds/
+using muds/3s/guilds/vikings.json as the section reference.
+
 ## Run
 
     katmud.pyw                 -> character picker
+    katmud.pyw 3s-normal       -> that profile directly
+                                  (make per-character shortcuts)
 
 The picker spawns each client as a detached process and exits. A
 crash in one character can never take down another. Startup failures
@@ -44,7 +51,25 @@ character files, or guild-switching breaks its promise. The builder
 layer; hand-editing the json files is equally valid - unknown keys
 and ordering are preserved.
 
-`#help` in the client lists commands. `#map on/off/here/rate` and
+`#help` in the client lists commands; **docs/COMMANDS.md** is the full
+reference for every command the client recognizes. `#map on/off/here/rate` and
 `#record [scope]` drive the mapping system; mapping mode auto-engages
 when you walk off the known map (disable: settings.auto_mapping
 false in any layer).
+
+## Verified against live output
+
+Rating capture (AREA NAME / AREA RATING -> / Monster class range,
+including the name-less overland response and [House] detection) is
+confirmed against live 3s captures, 2026-06-12.
+
+## Needs live verification
+
+1. **Auth-failure detection** matches /wrong|incorrect password/i.
+   If 3s words rejection differently, the re-prompt won't trigger -
+   capture the real line and adjust AUTH_FAIL_RE in
+   katmud_lib/client.py.
+2. **3k speedruns** file is intentionally header-only: the shared
+   file's room ids were authored against the 3s map and are wrong on
+   3k's id space. Rebuild it when the new 3k map exists
+   (tools/split_speedruns.py --trust-ids to override).

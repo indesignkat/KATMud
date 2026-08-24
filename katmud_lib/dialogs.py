@@ -165,7 +165,7 @@ class BuilderDialog(tk.Toplevel):
             self.a_names.append(k)
         self.t_lb.delete(0, "end")
         self.t_patterns = []
-        for pat, _x, body, snd in c.triggers:
+        for pat, _x, body, snd, _cd in c.triggers:
             scope = c.cascade.source_of("triggers", pat) or "?"
             mark = " *snd" if snd else ""
             if c.trigger_modes.get(pat):

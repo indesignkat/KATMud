@@ -1,8 +1,12 @@
 {
   "_comment": [
     "Bards guild layer for 3s. Like Necromancers, this guild has NO private MIP tag - vitals ride the mud-wide FFF composite feed (A=hp C=sp E=gp1 G=gp2). Maxes self-calibrate from peak observed value. Cascade rule REPLACE (character file wins).",
-    "Pool labels: HP/SP verified from score; GP1, GP2 still GUESSED (value didn't echo to a named gscore line) - rename live. ",
-    "Attack: '{t}' = parsed mob keyword."
+    "Pools (all four user-confirmed): HP, SP, GP1 = Karma, GP2 = Voice. Karma caps at 802 (wire F~802) and is spent on songs. Voice drifts 92-105 and is NOT a percent - it must never be clamped to 100 the way the changeling E-field is.",
+    "Attack: '{t}' = parsed mob keyword.",
+    "AAA (the bard ability feed: bard_<ability> then bard_perform/bard_cast/bard_ceased_song) is deliberately NOT registered. It carries nothing the display needs - J is authoritative for the song being performed and I for the active buffs - and client.py already suppresses AAA from the 'mip?' unknown-tag line, so registering it would buy nothing.",
+    "bard_maintain: all eight buffs must stay up at all times (user rule). The client casts for them automatically - see katmud_lib/bard.py for the wire evidence behind the token map. Sends go through the normal non-manual send_line path, so a tripped deadman silently blocks them and any keypress releases it.",
+    "Command strings are user-confirmed. 'cast refresh' is also wire-confirmed (line 983 of logs/3s bards.log tops up all three songs at once).",
+    "ab (anticipate blows), AB (avoid blows) and RF (righteous fury) carry no counter and never wear off, so they are displayed but never maintained. ab/AB are mutually exclusive and differ only by case."
   ],
   "login_commands": [],
   "aliases": {},
@@ -36,14 +40,14 @@
       "width": 200
     },
     {
-      "label": "GP1",
+      "label": "Karma",
       "cur": "gp1",
       "max": "gp1max",
       "color": "#9955cc",
       "width": 200
     },
     {
-      "label": "GP2",
+      "label": "Voice",
       "cur": "gp2",
       "max": "gp2max",
       "color": "#cc8833",
@@ -59,6 +63,19 @@
   "mip_required": [],
   "map_patches": [],
   "settings": {
-    "autoattack_command": "cacophony {t}"
+    "autoattack_command": "cacophony {t}",
+    "bard_maintain": {
+      "enabled": true,
+      "threshold": 30,
+      "cooldown": 15,
+      "refresh_command": "cast refresh",
+      "spells": {
+        "PR": "cast protection",
+        "PE": "cast protection from elements",
+        "HS": "cast hardened skin",
+        "B": "cast blink",
+        "MB": "cast mind blank"
+      }
+    }
   }
 }

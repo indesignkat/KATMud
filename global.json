@@ -39,9 +39,20 @@
   },
   "speedwalk": {
     "_comment": "single-letter speedwalk map; edit freely, any layer can override per-letter. Anything not listed must be (parenthesized) in a speedwalk.",
-    "n": "n", "s": "s", "e": "e", "w": "w", "u": "u", "d": "d",
-    "t": "ne", "v": "se", "z": "sw", "q": "nw",
-    "r": "enter", "o": "out", "p": "portal", "l": "leave"
+    "n": "n",
+    "s": "s",
+    "e": "e",
+    "w": "w",
+    "u": "u",
+    "d": "d",
+    "t": "ne",
+    "v": "se",
+    "z": "sw",
+    "q": "nw",
+    "r": "enter",
+    "o": "out",
+    "p": "portal",
+    "l": "leave"
   },
   "triggers": [
     {
