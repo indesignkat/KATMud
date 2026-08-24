@@ -64,11 +64,63 @@ GOOD_NAMES = {
     # `vtrade goods midgard`: wire 'a:-2:206:32:32:34' = the
     # readout's "Sunstone  32  34  206  32".
     "a": "sunstone",
+    # The rest of the 30, pinned against that same readout - its row
+    # order matches the wire's letter order good for good. Three of
+    # these letters are two characters and none of the three appear in
+    # the guild help doc's abbreviation list: mi/hm/cs. Note hm is
+    # horseMEAT, not horses.
+    "y": "honey", "w": "weapons", "u": "armour", "n": "finery",
+    "c": "wool", "d": "eggs", "p": "pork", "q": "mutton",
+    "v": "poultry", "x": "beef", "mi": "milk", "hm": "horsemeat",
+    "z": "cloth", "sm": "smoked_meat", "cs": "cheese",
 }
-# Goods added in the 2026-07-17 trade expansion, seen in `vtrade prices`
-# and on the mission board. Their TGOODS letters haven't been captured
-# yet, so they live here rather than in GOOD_NAMES.
-EXTRA_GOODS = ("honey", "weapons", "armour", "finery")
+# Every good now has a TGOODS letter (2026-08-23), so this is empty -
+# kept as the hook for the next expansion's letterless goods.
+EXTRA_GOODS = ()
+
+# The three groups `vtrade goods` prints, in its order. Drives the Goods
+# tab's filter bar so related goods sit together.
+GOOD_GROUPS = (
+    ("raw", ("timber", "ore", "iron", "furs", "fish", "grain", "honey",
+             "sunstone", "runestones", "spoils")),
+    ("refined", ("mead", "salted_fish", "bread", "fine_furs", "tools",
+                 "weapons", "armour", "finery", "gemstones", "cloth",
+                 "smoked_meat", "cheese")),
+    ("husbandry", ("wool", "eggs", "pork", "mutton", "poultry", "beef",
+                   "milk", "horsemeat")),
+)
+
+# Refinery input -> output, read off `vtrade refine` (2026-08-23). The
+# keys are the REFINERY feed's building ids. This is what makes selling
+# a raw good visibly expensive: fish sells for 6, but cures into
+# salted_fish at 65, and iron is two steps below weapons at 234.
+REFINERY_CHAIN = {
+    "salting_house": ("fish", "salted_fish"),
+    "bakehouse": ("grain", "bread"),
+    "furriers_lodge": ("furs", "fine_furs"),
+    "smelter": ("ore", "iron"),
+    "smithy": ("iron", "tools"),
+    "mead_cellar": ("honey", "mead"),
+    "weaponry": ("tools", "weapons"),
+    "armoury": ("tools", "armour"),
+    "goldsmith": ("spoils", "finery"),
+    "weaver": ("wool", "cloth"),
+    "smokehouse": ("pork", "smoked_meat"),
+    "creamery": ("milk", "cheese"),
+}
+
+# Goods `vbuild` asks for when upgrading anything (readout 2026-08-23).
+# Selling these funds a cart and stalls a building, so the sell list
+# flags them. Exact per-upgrade quantities are not on the MIP wire - only
+# the vbuild readout has them.
+BUILD_MATERIALS = ("timber", "iron", "sunstone", "tools", "mead",
+                   "grain", "fine_furs", "gemstones", "runestones",
+                   "furs")
+
+# Never/rarely sold, overridable per character with the
+# `trade_hold_goods` setting. Iron is mid-chain (ore -> iron -> tools ->
+# weapons/armour) and timber goes into nearly every upgrade.
+DEFAULT_HOLD_GOODS = ("iron", "timber")
 # Hold id -> CITY name (user preference 2026-07-11: city names, not
 # lineage 'X Hold' names - e.g. lineage Eiriksson's city is Eiriksby).
 HOLD_NAMES = {
@@ -857,6 +909,96 @@ MARKET_SPECIES = (("sheep", "Sheep"), ("cow", "Cattle"),
                   ("chicken", "Hens"))
 
 
+def sell_plan(state, hold=DEFAULT_HOLD_GOODS, hid=None):
+    """What to sell and where, ranked by the daler it actually realises.
+
+    For every good in stock, finds the city paying the most for as much
+    of it as that city will still take: realisable = sell price x
+    min(stock, remaining demand). Ranking by unit price alone just lists
+    the expensive goods (finery is dearest everywhere, which says nothing
+    about where to sail); ranking by the demand SYMBOL walks you into
+    filled markets - 24 of the 109 '+2'/'+3' pairs in the 2026-08-23
+    capture had demand 0 with the level unchanged.
+
+    Stock counts cured refinery output (a grade at 100%), which is
+    otherwise invisible: finished bread sits in the bakehouse whenever
+    the warehouse is at its cap. Those rows name the building to
+    `vtrade refine ... transfer` from first.
+
+    Rows carry the notes the tab needs: whether the good feeds one of
+    your refineries, what the settlement eats per tick, whether vbuild
+    wants it, and whether it is on the hold list.
+
+    `hid` restricts the search to one hold. Trading with a city raises
+    your standing there, and Midgard (hold 0) is the one hold whose
+    standing cannot be raised by missions - so its best sales are worth
+    knowing even when a better price exists elsewhere."""
+    stock = stock_totals(state)
+    refineries = parse_refinery(state.get("REFINERY", ""))
+    cured, feeds = {}, {}
+    for r in refineries:
+        chain = REFINERY_CHAIN.get(r["bldg"])
+        if not chain:
+            continue
+        # Only a BUILT refinery eats a good, and tools feed two of them.
+        feeds.setdefault(chain[0], []).append(r["bldg"])
+        ready = sum(q for _g, q, pct in r["grades"] if pct >= 100)
+        if ready:
+            stock[chain[1]] = stock.get(chain[1], 0) + ready
+            cured[chain[1]] = (ready, r["bldg"])
+    consume = dict(parse_semi_pairs(state.get("SCONSUME", "")))
+    hold = {g.lower() for g in (hold or ())}
+
+    best = {}
+    for hold_id, goods in parse_tgoods(state.get("TGOODS", "")):
+        if hid is not None and hold_id != hid:
+            continue
+        for good, _lvl, _sup, dem, _buy, sell in goods:
+            have = stock.get(good, 0)
+            if not have or not sell or dem <= 0:
+                continue
+            units = min(have, dem)
+            daler = units * sell
+            if good not in best or daler > best[good]["daler"]:
+                best[good] = {
+                    "good": good, "daler": daler, "sell": sell,
+                    "units": units, "stock": have, "demand": dem,
+                    "city": HOLD_NAMES.get(hold_id,
+                                           "Hold %s" % hold_id),
+                }
+    rows = []
+    for good, row in best.items():
+        row["cured"], row["cured_bldg"] = cured.get(good, (0, ""))
+        row["feeds"] = tuple(feeds.get(good, ()))
+        try:
+            row["consumed"] = int(consume.get(good, 0) or 0)
+        except (TypeError, ValueError):
+            row["consumed"] = 0
+        row["material"] = good in BUILD_MATERIALS
+        row["held"] = good in hold
+        rows.append(row)
+    rows.sort(key=lambda r: -r["daler"])
+    return rows
+
+
+def standing_note(state, hid):
+    """'Vinur 2,544/2,975' for one hold, off VREP - the progress toward
+    the next rank, which is what trading with the city moves."""
+    for vhid, _name, rep, rank, cur, nxt in parse_vrep(
+            state.get("VREP", "")):
+        if vhid != hid:
+            continue
+        try:
+            title = VREP_RANKS[int(rank)]
+        except (ValueError, IndexError):
+            title = "rank %s" % rank
+        try:
+            return f"{title} {rep - int(cur):,}/{int(nxt) - int(cur):,}"
+        except ValueError:
+            return title
+    return ""
+
+
 def parse_weather(value):
     """WEATHER 'season|weather|n' -> (season, weather, n) or None.
     Seen 'winter|snow|2'; the third field is undecoded (no readout names
@@ -1483,6 +1625,12 @@ GOOD_COLOR = {
     "timber": "#a8895f", "iron": "#9fb2c2", "grain": "#c9c45f",
     "ore": "#8a7f76", "salted_fish": "#4f93a8", "bread": "#d6b26b",
     "fine_furs": "#e8c9a0", "tools": "#b0b8a0", "gemstones": "#c76bd6",
+    "sunstone": "#e8c65a", "honey": "#e0a83a", "mead": "#d98c8c",
+    "weapons": "#9aa8c0", "armour": "#8fa0b8", "finery": "#d68ad6",
+    "cloth": "#a8b8d8", "smoked_meat": "#b08a6a", "cheese": "#e0c46a",
+    "wool": "#d8c7a0", "eggs": "#e8d98a", "milk": "#e8e8e0",
+    "pork": "#d99a9a", "mutton": "#c98a8a", "poultry": "#d8b48a",
+    "beef": "#b8706a", "horsemeat": "#a86a5a",
 }
 
 BG = "#0c0c12"
@@ -1795,11 +1943,7 @@ STANDING_COLOR = {
 # VCHH header (w|h|mode), the planned route in VQPATH, the event log in
 # VSAGA/VMEM. The raid fleet roster (SHIPS) shows on the Raids tab, so
 # the Sea tab focuses on the active voyage, its chart, and its spoils.
-# LONGSHIP is deliberately absent: the Fleet section came off the Sea tab
-# in the 2026-08-23 layout pass, so nothing renders it and waking Sea on
-# LONGSHIP packets would redraw for no change. Put it back (here or in
-# RAIDS_KEYS) if the fleet detail finds a new home.
-VOYAGE_KEYS = ("VOYAGE", "VCHH", "VQPATH", "VSAGA", "VMEM",
+VOYAGE_KEYS = ("VOYAGE", "VCHH", "VQPATH", "VSAGA", "VMEM", "LONGSHIP",
                "VOYAGE_WAIT", "VRESOLVE", "VBOONS", "VSPOILS", "VGOODS",
                "VAIDS", "VRUNES", "VRELICS", "VCURIOS")
 
@@ -2164,13 +2308,16 @@ class VikingStatus(tk.Toplevel):
     client may call it on every BBE packet."""
 
     def __init__(self, master, fonts=None, on_close=None, walk_cb=None,
-                 geometry=None):
+                 geometry=None, hold_goods=None):
         super().__init__(master)
         self.title("Viking Status")
         self.configure(bg=BG)
         self.geometry(geometry or "720x780")
         self.on_close = on_close
         self.walk_cb = walk_cb
+        # Goods the sell list refuses to rank: the `trade_hold_goods`
+        # setting, else iron and timber.
+        self.hold_goods = tuple(hold_goods or DEFAULT_HOLD_GOODS)
         self.protocol("WM_DELETE_WINDOW", self._closed)
         f = fonts or {}
         self.mono = f.get("mono", ("Consolas", 11))
@@ -2293,8 +2440,11 @@ class VikingStatus(tk.Toplevel):
         self.goods_btns = {}
         bar = tk.Frame(frame, bg=BG)
         bar.pack(side="top", fill="x")
-        names = ["all"] + list(GOOD_COLOR)
-        for row in (names[:8], names[8:]):
+        # 31 buttons now the whole 30-good table is named. 8 to a row
+        # keeps every label readable at the default width, and
+        # GOOD_GROUPS order keeps raw/refined/husbandry together.
+        names = ["all"] + [g for _grp, goods in GOOD_GROUPS for g in goods]
+        for row in [names[i:i + 8] for i in range(0, len(names), 8)]:
             rf = tk.Frame(bar, bg=BG)
             rf.pack(fill="x")
             for name in row:
@@ -2540,6 +2690,7 @@ class VikingStatus(tk.Toplevel):
             txt.insert("end", "  Put a longship to sea, and enable "
                               "'vtoggle mip_voyage' to feed this tab.\n",
                        "dim")
+            self._sea_fleet(txt, st)
             self._redraw_end(txt, pos)
             return
 
@@ -2571,7 +2722,11 @@ class VikingStatus(tk.Toplevel):
              ("Weather", v["weather"] or "Calm"),
              ("Next", fmt_secs(v["next"]) if v["next"] else "-"),
              ("Pressure", v["pressure"]), ("Captain", v["captain"]),
-             ("Steps", v["steps"])])
+             # "Sailed", not "Steps": the doc calls index 16
+             # steps_sailed, and sitting above the Queue section a bare
+             # "Steps" reads as the queue length - which is VQPATH's
+             # pair count, a different number entirely.
+             ("Sailed", v["steps"])])
 
         paused = (st.get("VOYAGE_WAIT", "") or "").strip() or v["paused"]
         if paused:
@@ -2628,8 +2783,43 @@ class VikingStatus(tk.Toplevel):
             txt.insert("end", "\nMemories\n", "sec")
             for s in mem:
                 txt.insert("end", "  - " + s + "\n", "dim")
+        self._sea_fleet(txt, st)
         self._redraw_end(txt, pos)
 
+    def _sea_fleet(self, txt, st):
+        """The LONGSHIP voyage-side fleet roster (crew/style/traits the
+        City-side SHIPS key doesn't carry). Field order re-checked
+        2026-08-23 against `vlongship`: the wire's
+        '1|Skidbladnir|5|raiding|Antwerp|4190|60|0|1|whisper-prowed|
+        devout|||the Legendary|141' is the readout's "Skidbladnir Busse
+        convoy raiding Antwerp, back in 1h 1m, Crew: 60/60, Saga:
+        Skidbladnir the Legendary (141 raids)"."""
+        fleet = parse_longship(st.get("LONGSHIP", ""))
+        if not fleet:
+            return
+        txt.insert("end", "\nFleet\n", "sec")
+        # One line a ship: a full fleet is 8 of them, and three lines
+        # each overflowed the tab. The voyaging ship's style/captain/
+        # traits are already spelled out in the Voyage block above.
+        for s in fleet:
+            crew = s["crew"]
+            if s["hired"] not in ("", "0"):
+                crew += f"+{s['hired']}"
+            txt.insert("end", f"  {s['name']:<15}", "val")
+            txt.insert("end", f"T{s['tier']} {s['state']:<9}", "dim")
+            where = ""
+            if s["target"]:
+                where = f"→ {s['target']}"
+                if s["return_in"] not in ("", "0"):
+                    where += f" ({fmt_secs(s['return_in'])})"
+            txt.insert("end", f"{where:<22}", "cyan")
+            txt.insert("end", f"crew {crew:<7}", "num")
+            if s["saga_title"]:
+                txt.insert("end", f"{s['saga_title']} "
+                                  f"({s['saga_raids']})", "dim")
+            txt.insert("end", "\n")
+
+    # ------------------------------------------------------- Colony tab
     def _render_colony(self, st):
         txt = self.colony_txt
         pos = self._redraw_begin(txt)
@@ -2775,23 +2965,83 @@ class VikingStatus(tk.Toplevel):
             if len(parts) > 1:
                 txt.insert("end", f"   {fmt_secs(parts[1])} left", "dim")
             txt.insert("end", "\n\n")
-        for hid, goods in holds:
-            txt.insert("end", HOLD_NAMES.get(hid, f"Hold {hid}") + "\n",
-                       "hold")
-            # Only the goods that matter for trading: in demand (score
-            # +) or a major export (score -); neutrals hidden.
-            goods = [g for g in goods if g[1]]
-            if not goods:
-                txt.insert("end", "  (neutral market)\n", "dim")
-            for i in range(0, len(goods), 2):
-                txt.insert("end", "  ")
-                self._cell(txt, goods[i])
-                if i + 1 < len(goods):
-                    txt.insert("end", "    ")
-                    self._cell(txt, goods[i + 1])
-                txt.insert("end", "\n")
-            txt.insert("end", "\n")
+        self._render_sell_plan(txt, self.state_data)
         self._redraw_end(txt, pos)
+
+    def _sell_row(self, txt, r):
+        gtag = "good_" + r["good"]
+        if gtag not in txt.tag_names():
+            gtag = "val"
+        txt.insert("end", f"  {pretty_name(r['good']):<13}", gtag)
+        txt.insert("end", f"{r['daler']:>8,}", "gold")
+        txt.insert("end", f"   {r['city']:<15}", "val")
+        txt.insert("end", f"{r['sell']:>4} ea", "cycle")
+        txt.insert("end", f"  x{r['units']}", "num")
+        if r["units"] < r["stock"]:
+            txt.insert("end", f" of {r['stock']}", "dim")
+        txt.insert("end", "\n")
+        notes = []
+        if r["cured"]:
+            notes.append(f"{r['cured']} cured in "
+                         f"{pretty_name(r['cured_bldg'])}")
+        if r["feeds"]:
+            notes.append("feeds " + " + ".join(
+                pretty_name(b) for b in r["feeds"]))
+        if r["consumed"]:
+            notes.append(f"settlers eat {r['consumed']}/tick")
+        if r["material"]:
+            notes.append("build material")
+        if notes:
+            txt.insert("end", "                 " + " · ".join(notes)
+                       + "\n", "dim")
+
+    def _render_sell_plan(self, txt, state):
+        """The Goods tab's default view: what the spare goods are worth
+        and where to take them. Replaced the per-city grid on 2026-08-23
+        - that was 183 lines of mostly weak demand, and the question it
+        never answered was the only one being asked: what makes the most
+        daler."""
+        rows = sell_plan(state, self.hold_goods)
+        sellable = [r for r in rows if not r["held"]]
+        held = [r for r in rows if r["held"]]
+        txt.insert("end", "Best sells", "sec")
+        if sellable:
+            txt.insert("end", f"   {sum(r['daler'] for r in sellable):,}"
+                              f" daler on the table", "gold")
+        txt.insert("end", "\n")
+        if not sellable:
+            txt.insert("end", "  Nothing sellable - no stock, or every"
+                              " market that wants it is filled.\n", "dim")
+        for r in sellable:
+            self._sell_row(txt, r)
+        if held:
+            txt.insert("end", "\nHolding back", "sec")
+            txt.insert("end", "   (setting: trade_hold_goods)\n", "dim")
+            for r in held:
+                self._sell_row(txt, r)
+        self._render_standing_sells(txt, state)
+
+    # Trading with a city raises standing there, and Midgard is the one
+    # hold that runs no missions - selling to it is the only lever on
+    # that standing, so its best rows are worth showing even when the
+    # money is better elsewhere.
+    STANDING_HOLD = 0
+    STANDING_TOP = 3
+
+    def _render_standing_sells(self, txt, state):
+        rows = [r for r in sell_plan(state, self.hold_goods,
+                                     hid=self.STANDING_HOLD)
+                if not r["held"]][:self.STANDING_TOP]
+        if not rows:
+            return
+        city = HOLD_NAMES.get(self.STANDING_HOLD,
+                              "Hold %s" % self.STANDING_HOLD)
+        txt.insert("end", f"\nBest at {city}", "sec")
+        note = standing_note(state, self.STANDING_HOLD)
+        txt.insert("end", "   for standing" + (f" · {note}" if note
+                                               else "") + "\n", "dim")
+        for r in rows:
+            self._sell_row(txt, r)
 
     def _render_good_focus(self, txt, holds, good):
         """One good across every city: where to buy it cheapest and

@@ -7187,7 +7187,8 @@ class MudClient:
             on_close=self._viking_closed,
             walk_cb=self.viking_walk_to,
             geometry=self.profiles_data.get("settings", {}).get(
-                "viking_geometry"))
+                "viking_geometry"),
+            hold_goods=self.setting("trade_hold_goods"))
         self.viking_win.update_state(self.viking_state)
         if self.viking_skills:          # restore the last-read skill costs
             self.viking_win.set_vskills(self.viking_skills)
