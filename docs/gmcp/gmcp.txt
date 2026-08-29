@@ -1,0 +1,76 @@
+  ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+                          Topic: Client Protocols                       
+  ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+Modern mud clients can receive extra, structured data from 3S
+alongside the normal game text: your vitals, who is attacking you,
+room and map data for mappers, chat lines, and guild status. None of
+it changes gameplay - it exists so your client can draw gauges, maps,
+and status windows. Clients that do not speak these protocols see the
+same text as always.
+
+Everything here is negotiated automatically by the client. There is
+nothing to turn on in the game itself.
+
+GMCP
+
+GMCP is the standard most clients support (Mudlet, TinTin++,
+Mushclient, Blightmud, and others). Your client subscribes to the
+data it wants with Core.Supports, using either a root name
+("Char 1", "Room 1") or an exact package ("Char.Vitals 1"). The
+server answers with Core.Supported, listing every package it
+can send and whether you are subscribed. All packages are version 1.
+
+  Char.Vitals     { hp, maxhp, sp, maxsp, enc, coffin, coffin_max,
+                    guild, qp, qp_required }
+                  Your health and spell points, encumbrance as a
+                  percentage of what you can carry, and your morgue
+                  coffin's corpse count and capacity (0/0 without one).
+
+  Char.Combat     { attacker, attacker_hp, rounds, target }
+                  Who is attacking you, their health percentage, how
+                  long they have fought, and who they are attacking:
+                  the literal string "you" when that is you, otherwise
+                  that victim's name. When combat ends one empty
+                  snapshot arrives and the stream goes quiet.
+
+  Room.Info       { num, name, area, exits }
+                  The room you are in, for mappers. Hidden exits are
+                  not included.
+
+  Room.Contents   { items: [ name, type, count, ... ] }
+                  What you can see in the room, stacked with counts.
+                  A monster's health and target appear only if your
+                  skills would show them in the normal look text.
+
+  Room.Map        { kind, w, h, rows, legend, up, down, enter }
+                  A glyph grid of the surroundings. Below cartography
+                  skill 1 it is a small compass of the room's exits;
+                  with the skill trained it is the line-of-sight map.
+
+  Comm.Channel    Comm.Channel.Text { channel, talker, text }
+                  Chat lines, tells, and souls, delivered after the
+                  same filters as the text you see.
+More: 0-53(76) : [q,b,<cr>] 
+
+  Guild.Info / Guild.State / Guild.Extra
+                  Guild identity and rank, live resources, lingers and
+                  cooldowns, and guild-specific data, where your guild
+                  provides them.
+
+Two things worth knowing: packages only flow while you are subscribed,
+and only when their values actually change. The Room packages are sent
+when you enter a room - 'look' does not resend them.
+
+MXP and Pueblo
+
+Clients with MXP (or the older Pueblo) get clickable room exits and
+clickable web links. This too is negotiated automatically.
+
+The 3K Client
+
+The old 3K client uses its own protocol (MIP) for the same kind of
+data. GMCP is the modern route and carries everything MIP does.
+
+For setting up gauges, mappers, or scripts around this data, see your
+client's own GMCP documentation.

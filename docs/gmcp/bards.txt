@@ -1,0 +1,86 @@
+--======================================================================--
+-- Bard Info: GMCP
+--======================================================================--
+
+  GMCP is a way for your client to receive guild information as
+  structured data instead of as text on your screen.  If your client
+  supports it, it can draw its own karma and voice bars, list your
+  songs as buttons, or show your active effects in a side panel.
+
+  Nothing here is new information.  Everything the guild sends is
+  something you can already see with hp, gs, gs2,
+  info, songs, spells or powers.
+
+  Turning it on
+
+  Your client subscribes by sending:
+
+      Core.Supports.Set ["Guild 1"]
+
+  That gets you every package below.  If your client only wants one,
+  it can name it exactly, for example ["Guild.State 1"].
+
+  What gets sent
+
+  Guild.State      Karma, voice, smiles, and whether thunderous
+                    bellow and defensive harmony are ready.
+                    Sent every combat round.
+  Guild.Song       The song you are performing and how many
+                    rounds are left.  Sent every combat round.
+  Guild.Actives    Your active effects, the same ones the
+                    hp bar shows in [[ brackets ]].
+                    Sent every combat round.
+  Guild.Progress   Guild level, GXP, GXP to spend, and progress
+                    to the next level.  Sent about every 15 seconds.
+  Guild.Skills     Your eleven skills with their current value,
+                    maximum, and training cost.  Sent about every 15
+                    seconds.
+  Guild.Info       Career, title, guild age, when you joined,
+                    who recruited you.  Sent about every 15 seconds.
+  Guild.Assets     Donations, songbook colours, and your panic,
+                    bandage and mystic guardian settings.  Sent about
+                    once a minute.
+  Guild.Songs      Every song you can currently perform.  Sent
+                    about every five minutes.
+  Guild.Spells     Every spell you can currently cast.  Sent
+                    about every five minutes.
+  Guild.Abilities  Every ability you can currently use.  Sent
+                    about every five minutes.
+
+  Your hit points and spell points are not in these packages.
+  They are sent separately as Char.Vitals, along with your quest
+  points, so that there is only ever one source for them.
+
+  For client authors
+
+  The first message for each package carries full: 1 and every
+  key.  After that only changed keys are sent, with no 'full'
+  key at all, so you must merge each message into the picture you
+  are holding rather than replacing it.  When nothing changes,
+  nothing is sent -- silence is normal, not a lost message.
+
+  Nothing at all is sent, for any package, while you are disabled,
+  dead, or idle for more than 20 seconds -- the same conditions that
+  blank your hp bar.  A quiet connection under those
+  conditions is expected, not a dropped message.
+
+  A few values use -1 where the game displays a word instead of a
+  number:
+
+    Guild.Song       rounds -1    the song has a variable duration
+    Guild.Songs      duration -1  varies;  0 means instantaneous
+    Guild.Skills     cost -1      the skill is maxed
+    Guild.Abilities  cost -1      the cost varies
+    Guild.Actives    rounds 0     no duration is shown for that effect
+    Guild.Assets     bandage tier 1 minor, 2 normal, 3 major
+    Guild.Assets     pct 1        the value is a percentage, not hit points
+
+  Song voice costs are given as a percentage of your maximum
+  voice, which is exactly what the songs command prints -- as a
+  decimal number, not a whole number.
+
+  A long list may arrive split across several messages carrying
+  page and pages.  When the same key appears on more than one
+  page, append the pieces together -- do not overwrite.
+
+  See also: help protocols

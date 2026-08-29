@@ -1,0 +1,126 @@
+-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+> gh gmcp
+> -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+                        -<*>- GMCP -<*>-
+
+Aes Sedai of legendary Warders that have achieved rank 80 can assist 
+with channeling the devistating Balefire. Even further, a Warder can 
+develop their own skill in Balefire, lending to their Aes Sedai's resolve 
+while channeling the One Power, mastering the destructive nature if their 
+assist.
+
+GMCP data is sent out of band data sent alongside traditional MUD 
+output. In order to take advantage of GMCP, your client must support 
+and some amount of setup is required by the player. See documentation 
+for your client for more details.
+
+GMCP data is sent as a series of 'packages' formatted as JSON. Warder 
+guild data is sent in three (3) packages: Guild.Info, Guild.State,
+and Guild.Extra. The data sent with each package is documented 
+below.
+
+Guild.State
+The Guild.State package contains the current guild state of the warder and
+his/her Aes Sedai. Basic information such as guild level, salute status, guild
+donates, and warder and Aes Sedai talent and skill levels are included.
+
+Example full Guild.State data set
+{
+  "guild": "warders",
+  "glvl": 1,
+  "darkfriends_killed": 0,
+  "salutes": "You have saluted many of your foes.",
+  "treasury": 42,
+  "box": 1024,
+  "talents": {
+    "aligner": 0,
+    "artificier": 0,
+    "blade": 0,
+    "blocking": 0,
+    "counter": 0,
+    "dodge": 0,
+    "gameplayer": 0,
+    "gleeman": 0,
+    "sniffer": 0,
+    "taveren": 0,
+    "whitecloak": 0,
+    "sedai_defense": 0,
+    "sedai_finesse": 0,
+    "sedai_healing": 0,
+    "sedai_offense": 0,
+    "sedai_strength": 0,
+  },
+  "skills": {
+    "blade": 0,
+    "blocking": 0,
+    "dodge": 0,
+    "counter": 0,
+    "speed": 0,
+    "endurance": 0,
+    "mind": 0,
+    "dedication": 0,
+    "sedai_strength": 0,
+    "sedai_finesse": 0,
+    "sedai_offense": 0,
+    "sedai_defense": 0,
+    "sedai_healing": 0,
+  }
+}
+
+Guild.Info
+The Guild.Info package for Warders contains the statistics that change
+most often for the warder. Information such as the current Baijan mode,
+combat strategy set, wards set, varous guild experience totals, and
+boils/voids are sent.
+
+Example full Guild.Info data set
+{
+        "baijan": "Je",
+        "cstrat": "None",
+        "pwards": "F*W*A*E*S",
+        "boils": {
+            "current": 5,
+            "max": 8,
+        },
+        "voids": {
+            "current": 2,
+            "max": 3,
+        },
+        "gxp": {
+            "total": 280891053,
+            "gtnl": 0,
+            "to_spend": 14829642,
+            "spent": 1024567,
+        },
+        "cgpx": {
+            "to_spend": 1249824,
+            "spent": 31006900,
+        },
+        "tgxp": {
+            "to_spend": 148292642,
+            "spent": 0,
+        },
+        "next_reset": 94,
+   }
+
+Guild.Extra
+The Guild.Extra includes Warder secondary skill level data.
+
+Example full Guild.Extra data set
+{
+  "character": {
+      "aiel": 18,
+      "borderlander": 17,
+      "gleeman": 15,
+      "seafolk": 15,
+      "sheepherder": 15,
+      "tinker": 15,
+   }
+}
+
+
+Also: mip
+
+-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-

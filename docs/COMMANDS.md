@@ -47,7 +47,7 @@ the `#`.
 | `#separator <char>` | Change the command separator (default `;`). Single non-alphanumeric character, not `#`. Doubled = literal. |
 | `#histmin <n>` | Only keep commands longer than *n* characters in the input history. |
 | `#tellsound <path.wav\|beep\|off>` | Sound played on an incoming tell. |
-| `#help` | Print the built-in short help in the client. |
+| `#help` | Print the built-in command help in the client. Settings > Command Help... shows the same text in a detached, scrollable panel. |
 
 ## Aliases, triggers, gags
 

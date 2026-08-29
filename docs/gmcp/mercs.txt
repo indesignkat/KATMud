@@ -1,0 +1,43 @@
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+-~*                          Gmcp                         *~-
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-
+
+GMCP is the modern way your client can display mercenary information. Where the older MIP integration sends one fixed block of numbers, GMCP sends five separate packages that your client subscribes to individually.
+
+  [ TURNING IT ON ]
+  Most clients have a GMCP settings page where you tick the packages you want. If yours takes the raw command, subscribing to all five looks like this:
+  Core.Supports.Set ["Merc 1"]
+  Or subscribe to just one, if that is all your interface needs:
+  Core.Supports.Set ["Merc.Skills 1"]
+  The quotes and brackets matter -- the value is a list of text items. Package names themselves are not case sensitive. Nothing is sent to a client that has not asked, so a plain telnet session costs nothing.
+
+  [ THE FIVE PACKAGES ]
+  Merc.Vitals - what changes in a fight: hp, stamina, ap, their maximums and regeneration rates, your target and its health percentage, the abilities currently running, and dormancy seconds remaining.
+  Merc.Info - who the mercenary is: class, theme, gender, state, damage type, cost per round, whether it is following, and permanent, instance and effective levels with their caps.
+  Merc.Stats - progression and money: xp and xp needed for both level tracks, unspent skill points, fund balance, what you have spent on rounds, training and specialization, and damage, healing, rounds and ability counters for this boot and for the mercenary lifetime.
+  Merc.Skills - your thirteen trained skills, each with the raw value you paid for and the effective value after instance scaling. Also unspent points, allocations made, and the price of the next one.
+  Merc.Talents - ability specialization: points spent per ability, the effective amount after scaling, and the level each ability unlocks at.
+
+  [ WHEN THEY ARRIVE ]
+  Only what actually changed is sent, so an idle mercenary puts nothing on the wire.
+  * Vitals arrives every combat beat.
+  * Info arrives every few beats, and immediately whenever the mercenary changes state.
+  * Stats arrives every fifth beat.
+  * Skills and Talents are quiet: they arrive shortly after you summon, switch or reconnect, and again when you train a skill, specialize an ability, or gain a level.
+
+  [ WHICH MERCENARY ]
+  Every package carries a merc field naming the mercenary it describes. If you own several and switch between them, that field is how your client knows the numbers belong to the one now at your side rather than the one you just put away.
+
+  [ COLLAPSE AND RECOVERY ]
+  When your mercenary runs out of stamina it collapses where it stands and recovers over five minutes. During that time Info reports the dormant state and Vitals counts the remaining seconds down, so your display shows the recovery rather than freezing on the last frame of the fight.
+
+  [ GMCP AND MIP TOGETHER ]
+  Both run at once and neither interferes with the other. If you use the 3Klient and its mercenary window works today, it keeps working exactly as before -- GMCP is an addition for clients that prefer it, not a replacement.
+
+  [ RELATED HELP ]
+  merc help client - the older MIP integration and its data layout
+  merc help resources - understanding stamina and ap
+  merc help skills - what the thirteen skills do
+  merc help specialize - spending specialization points
+
+-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-~*~-

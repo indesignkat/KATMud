@@ -1,0 +1,102 @@
+==============================================================
+  Elemental Guild Info : GMCP
+==============================================================
+
+GMCP data is sent out of band data sent alongside traditional MUD
+output. In order to take advantage of GMCP, your client must support
+and some amount of setup is required by the player. See documentation
+for your client for more details.
+
+GMCP data is sent as a series of 'packages' formatted as JSON. Warder
+guild data is sent in three (3) packages:@ Guild.Info, Guild.State,
+and@ Guild.Extra. The data sent with each package is documented below.
+
+Guild.State
+The Guild.State package contains the current guild state of the elemental,
+including title, size, and skill levels, maximums, and costs.
+
+Example full Guild.State data set
+{
+    "form": "Fire",
+    "size": 100,
+    "guild_title": "the red dragon's breath",
+    "current_vortex": 0,
+    "max_vortex": 50,
+    "vortex_cost": 500,
+    "current_control": 0,
+    "max_control": 100,
+    "control_cost": 150,
+    "current_manifestation": 0,
+    "max_manifestation": 2,
+    "manifestation_cost": 1500,
+    "current_continuance": 0,
+    "max_continuance": 50,
+    "continuance_cost": 100,
+    "current_control": 0,
+    "max_control": 100,
+    "control_cost": 150,
+    "current_resistance": 0
+    "max_resistance": 10,
+    "resistance_cost": 2500,
+    "current_resolve": 0,
+    "max_resolve": 51,
+    "resolve_cost": 500,
+    "current_intensity": 0,
+    "max_intensity": 5,
+    "intensity_cost": 2500,
+    "current_efficacy": 0,
+    "max_efficacy": 12,
+    "efficacy_cost": 2500,
+    "current_blast": 0,
+    "max_blast": 8,
+    "blast_cost": 1500,
+    "current_elucidation": 0,
+    "max_elucidation": 10,
+    "elucidation_cost": 450,
+    "current_vinculum": 0,
+    "max_vinculum": 5,
+    "vinculum_cost": 2500,
+    "current_equipollence": 0,
+    "max_equipollence": 21,
+    "equipollence_cost": 250,
+    "current_focus": 0,
+    "max_focus": 10,
+    "focus_cost": 250,
+    "current_finesse": 0,
+    "max_finesse": 0,
+    "finesse_cost": 0,
+    "current_manipulation": 0,
+    "max_manipulation": 10,
+    "manipulation_cost": 500,
+}
+
+Guild.Info
+The Guild.Info package contains the current guild energy data.
+
+Example full Guild.Info data set
+{
+    "used_energy": 3072663,
+    "energy_to_spend": 9372648,
+    "lifetime_energy": 9372648,
+    "link_energy": 8044838,
+    "reset": "50.2",
+}
+
+Guild.Extra
+The Guild.State package contains the guild ability data.
+
+Example full Guild.Extra data set
+{
+    "waves": 4,
+    "engulfs": 6,
+    "shrouds": 4,
+    "blasts": 2,
+    "eshield_remaining": 2,
+    "panic_action": "",
+    "panic_hp": 0,
+    "emit": 11,
+    "consistency": 2.5,
+    "resolve_type": "radiation",
+    "resolve_efficiency": 50,
+    "prismatic_emission": "Inactive",
+}

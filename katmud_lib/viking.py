@@ -277,26 +277,36 @@ def reassemble_chunks(state, upd):
     pieces in order reconstructs the original text byte-for-byte (splits
     land mid-word, e.g. 'bre' + 'ad').
 
-    Partial bursts are buffered per key in state['_frag'] across calls;
-    once the final piece (n==m) arrives the fragment keys in `upd` are
-    replaced by the plain KEY, so every existing decoder - including the
-    merge_tgoods/merge_vmapl multi-chunk paths - works unchanged. Pieces
-    that arrive out of order (e.g. we connected mid-burst) are dropped
-    rather than concatenated into a corrupt value."""
+    Pieces are collected per key in state['_frag'] as {n: text} and the
+    plain KEY is written into `upd` once all m are held, so every
+    existing decoder - including the merge_tgoods/merge_vmapl
+    multi-chunk paths - works unchanged.
+
+    Collection is order-agnostic because the MUD stopped finishing one
+    push before starting the next: the 2026-08-29 capture
+    (mip_20260829_154701.log) interleaves TGOODS as ...68, 1-4, 69-72,
+    5-8, 73, 9..., which the old strict-successor buffer could never
+    complete - piece 1 wiped the in-flight push and piece 69 then
+    dropped it, so the Goods tab never got a TGOODS value at all. A
+    completed set is cleared, so a key emits once per push and not on
+    every following packet; a change in m (72 -> 73 on the last
+    expansion) discards what we hold rather than blending payloads.
+    Splicing pieces from two overlapping pushes can garble the one
+    record that straddles the seam - parse_tgoods and friends skip
+    malformed entries."""
     frags = state.setdefault("_frag", {})
     for k in [k for k in upd if _FRAG_RE.match(k)]:
         key, n, m = _FRAG_RE.match(k).groups()
         n, m = int(n), int(m)
-        val = upd.pop(k)
-        if n == 1:
-            frags[key] = (1, val)
-        elif frags.get(key, (0, ""))[0] == n - 1:
-            frags[key] = (n, frags[key][1] + val)
+        total, pieces = frags.get(key, (m, {}))
+        if total != m:
+            pieces = {}
+        pieces[n] = upd.pop(k)
+        if sorted(pieces) == list(range(1, m + 1)):
+            upd[key] = "".join(pieces[i] for i in range(1, m + 1))
+            frags.pop(key, None)
         else:
-            frags.pop(key, None)        # lost a piece - drop the burst
-            continue
-        if n == m:
-            upd[key] = frags.pop(key)[1]
+            frags[key] = (m, pieces)
 
 
 # --- mip_city decoders (City tab) -------------------------------------
@@ -3055,7 +3065,14 @@ class VikingStatus(tk.Toplevel):
                 if g[0] == good:
                     rows.append((HOLD_NAMES.get(hid, f"Hold {hid}"),)
                                 + g[1:])
-        txt.insert("end", pretty_name(good) + "\n\n", gtag)
+        txt.insert("end", pretty_name(good), gtag)
+        # Warehouse stock beside the name - the first thing asked of
+        # a good's page is how much is on hand. Only once WSTOCK has
+        # arrived; before that an absent good means unknown, not zero.
+        if self.state_data.get("WSTOCK"):
+            held = stock_totals(self.state_data).get(good, 0)
+            txt.insert("end", f" ({held:,})", "num")
+        txt.insert("end", "\n\n")
         if not rows:
             txt.insert("end", "  No market data for this good yet.\n",
                        "dim")

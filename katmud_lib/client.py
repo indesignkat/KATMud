@@ -216,6 +216,7 @@ class MudClient:
         self.vperf = False              # #vperf: time the BBE hot path
         self.vperf_stats = {}           # rolling window accumulator
         self.viking_win = None
+        self.help_win = None
         self.viking_spells = ""         # active-spell status line
         self.viking_skills = None       # last parsed `vskills` (skill costs)
         self._vskills_capture = False   # arming flag while reading `vskills`
@@ -808,6 +809,9 @@ class MudClient:
         m_set.add_checkbutton(label="Web dashboard (phone)",
                               variable=self.web_dashboard_var,
                               command=self._toggle_web_dashboard)
+        m_set.add_separator()
+        m_set.add_command(label="Command Help...",
+                          command=self.open_help_window)
         menubar.add_cascade(label="Settings", menu=m_set)
         m_tools = tk.Menu(menubar, tearoff=0)
         m_tools.add_command(label="Aliases && Triggers...",
@@ -7174,6 +7178,33 @@ class MudClient:
             except tk.TclError:
                 pass
 
+    def open_help_window(self):
+        """Detached, scrollable panel showing the same HELP_TEXT that
+        `#help` prints - one source, two views."""
+        if self.help_win is not None and self.help_win.winfo_exists():
+            self.help_win.deiconify()
+            self.help_win.lift()
+            return
+        win = tk.Toplevel(self.root)
+        win.title("KatMUD Command Help")
+        win.configure(bg="#0c0c12")
+        win.geometry("760x780")
+        txt = tk.Text(win, bg="#101014", fg="#cccccc", wrap="none",
+                      font=self.small_font, padx=8, pady=6,
+                      insertbackground="#cccccc")
+        ysb = tk.Scrollbar(win, orient="vertical", command=txt.yview)
+        xsb = tk.Scrollbar(win, orient="horizontal", command=txt.xview)
+        txt.configure(yscrollcommand=ysb.set, xscrollcommand=xsb.set)
+        xsb.pack(side="bottom", fill="x")
+        ysb.pack(side="right", fill="y")
+        txt.pack(side="left", fill="both", expand=True)
+        txt.insert("1.0", HELP_TEXT)
+        txt.configure(state="disabled")
+        win.protocol("WM_DELETE_WINDOW",
+                     lambda: (win.destroy(),
+                              setattr(self, "help_win", None)))
+        self.help_win = win
+
     def open_viking_status(self):
         if self.viking_win is not None and \
                 self.viking_win.winfo_exists():
@@ -10126,7 +10157,13 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
   #trigmode /regex/ = party|noparty|always | #party [on|off]
   #gag /pattern/ | #gags | #keys
   #chatgag /pattern/ | #chatgags   (filter the chat/tell pane only)
+  #guild                          (active guild + its layer file path)
   #deadman <minutes|off> | #mip | #mipraw | #markers | #vperf
+  #combat [clear] | #hpbar | #chartdebug   (state debug: #combat reports
+      the in_combat/enemy/Run flags ('#combat clear' forces it off);
+      #hpbar dumps the raw + stripped FFF I/J bars; #chartdebug traces the
+      charting gate - each pump/arrival/edge, so wrong-room edges and
+      stalls are visible)
       (#vperf: time the Viking BBE feed - packet rate, merge vs render
       cost, per-tab render breakdown; reports every 5s)
       (#markers: report room mob(italic)/player(underline) marker lines -
@@ -10136,6 +10173,15 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
       landmarks; #go <name> walks there, or click the Map tab)
   VN <id> <start> <dest>          (Vikings: run a newbie fetch errand -
       accept <id>, walk to <start>, fetch, walk to <dest>, submit)
+  Corpse | Corpse [solo] <cmds> | Corpse party <cmds> | Corpse off
+      (on-kill loot routine: bare Corpse shows the solo/party commands,
+      their source layer and which is active. Separate commands with '/',
+      NOT ';' - 'Corpse bury corpse/glance' is stored as
+      'bury corpse;glance'. Saved to the character layer.)
+  Reminder <time> <text> | Reminder every <time> <text> | Reminder |
+      Reminders | Reminder clear [id|all]   (timer shared across muds and
+      characters, e.g. 'Reminder 5m buff wore off', 'Reminder 1h30m
+      reboot soon'. Bare Reminder/Reminders lists what is pending.)
   Track <name> [low] | Untrack <name> | Track   (Necro: watch a power/
       reagent count in the info pane; dim-red when below <low>. Counts
       refresh from 'powers' / 'gs' readouts. Bladesinger: Track a skill
@@ -10181,7 +10227,10 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
       that glance. Both keywords are
       single words. Works with the mapless and <dir> forms too:
       'Hunt mapless einherjer eihwaz', 'Hunt north einherjer eihwaz'.)
-  Chaossea | Chaossea fight | Chaossea off  (Sea of Chaos: builds a
+  Hunt debug | Bot debug   (toggle per-room reporting: ready time, trigger,
+      mob/player flags, decision.)
+  Chaossea | Chaossea fight | Chaossea resume | Chaossea clear |
+      Chaossea off  (Sea of Chaos: builds a
       session-local fake-room map from directions taken (no roomid - that
       zone shares one vnum and regenerates per visit). Movement always
       dives a 'down' exit on sight, else prefers unexplored directions,
@@ -10193,12 +10242,15 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
       ('retreat from the sea') and stops once you have both. Chaossea
       fight: kills every mutant it meets and ignores all drops, no stop
       condition besides deadman/manual off. Deadman trip stops either mode
-      in place - no verified path home.)
-  Run <bot> [loop] | Run | Run off   (fixed-route path bot from muds/<mud>/
-      bots/*.json: walks the route; kills target mobs (whole-line match, or a
-      keyword via "contains"); loots via after_kill; skips rooms with a
-      non-party player or a skip_phrase; loops or returns to start. Bare Run
-      lists bots / shows progress.)
+      in place - no verified path home. 'Chaossea clear' wipes the temp map
+      and re-seeds from this room without restarting.)
+  Run <bot> [loop] [step] | Run resume | Run | Run off   (path bot from
+      muds/<mud>/bots/*.json: walks the route; kills target mobs (whole-
+      line match, or a keyword via "contains"); loots via after_kill;
+      skips rooms with a non-party player or a skip_phrase; loops or
+      returns to start. Bare Run
+      lists bots / shows progress; 'Run resume' restarts the last bot from
+      its in-memory step index.)
   Explore | Explore off    (auto-chart the current area's open stubs: probes
       each unmapped exit through the charting gate, filling the map outward.
       Only cardinal/ordinal exits are auto-walked; up/down/enter/out etc. are
@@ -10217,7 +10269,7 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
   Mapwipe [confirm]   (DELETE all rooms+exits of the current area for a clean
       re-chart - the area name is kept, inbound doors become stubs. Bare
       Mapwipe previews; 'Mapwipe confirm' does it. Stop Explore first.)
-  Agent [on|hunt|explore|off|debug]   (autonomous assistant: phased - charts
+  Agent [on|hunt|explore|status|off|debug]   (autonomous assistant: charts
       the whole area (Explore) then sweeps it (Hunt), healing/fleeing via the
       active guild's profile, with a safety gate (area top class vs your best
       kill) before hunting. hunt/explore = that phase only. Deadman walks home
@@ -10249,13 +10301,14 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
   #landmark add <name> [desc] | #landmark del <name>
   #map here | on | off | rate | new   (mapping mode & room info;
       'new' bootstraps a blank map from the current room)
-  #clearchat                      (clear the chat/tell pane)
+  #clearchat | #chatclear         (clear the chat/tell pane)
   speedwalk: line starts with ';' -> ;15el8esr(open gate)q
       letters from cascading 'speedwalk' map (see global.json);
       anything unmapped goes in (); counts apply to either
   #record [scope]                 (record next observed edge; tin maps)
-  #mapfix <dir> cmd|setup|return|wait <value> | <dir> clear
-      (sqlite maps: special exits)
+  #mapfix <dir> cmd|setup|return|wait <value> | <dir> relink <vnum|clear>
+      | <dir> clear    (sqlite maps: special exits; relink repoints the
+      exit's destination)
   Chart                  (sqlite: toggle map-building mode - location is
       proven by the room packet and input is gated one move at a time;
       Esc clears the queue. Following mode otherwise tracks you live.)
@@ -10264,7 +10317,8 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
       the entry room's rated area), then return to start and report. 'simple' =
       compass exits only; optional <return> cmd for an asymmetric entry. Pauses
       in combat, stops on deadman/#stop - supervise it.)
-  Maproom | Mapnote <text> | Mapnote clear     (room details / notes)
+  Maproom | Maprerate | Mapnote <text> | Mapnote clear   (room details
+      / notes; Maprerate re-sends the rating request for this room)
   Maplink <dir> [command] <destvnum> | Mapunlink <dir>|<command>
       (manually fix an exit; bare Go/Landmark/Mapfix/Chart/Map* work
       without the #; lowercase passes through to the MUD)

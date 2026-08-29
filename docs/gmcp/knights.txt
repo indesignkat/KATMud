@@ -1,0 +1,63 @@
+==============================================================================
+                @,-'-,-'--- -=:{ KNIGHTS GUILD }:=- ---'-,-'-,@
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+                         KNIGHTS GUILD: GMCP DATA FEED
+
+GMCP ("Generic MUD Communication Protocol") lets a mud client receive your
+guild information as structured data instead of screen text, for building
+HUDs, overlays and third-party tools. It is entirely optional -- everything
+still works exactly the same for you if your client does not use it.
+
+If your client supports GMCP, subscribe with:
+
+    Core.Supports.Set ["Guild 1"]
+
+That single line turns on all eight of the guild's data packages below. A
+client that wants only one can ask for it by name instead, e.g.
+Core.Supports.Set ["Guild.State 1"], but there is no way to list the
+package names from inside the protocol itself -- this help file, and the
+comment block at the top of gobj/includes/gmcp.h in the mudlib
+source, are the only places they are written down.
+
+The eight packages:
+
+  Guild.State       Your live HUD row -- stamina, strain, second wind,
+                     stance, morale, guild level, class, banners, mount
+                     status. Updates every game beat.
+  Guild.Techniques  Your specials and protections, with whether each
+                     is currently available and enabled. Updates every
+                     few seconds.
+  Guild.Info        Your order, fellowship rank, teachers, guild age,
+                     suspensions and channel blocks -- what gs2/gs3 show.
+                     Guild level and class live in Guild.State, not here.
+  Guild.Progress    Your guild-experience economy -- gxp, bonuses,
+                     the bury-donation tier -- what gs/gs2/gs3 show.
+  Guild.Stats       Your combat statistics -- what cstat/cs2/
+                     cs3 show.
+  Guild.Assets      Charges and cooldowns -- sharpening stones,
+                     esquires, jousts, campfire, oaths, shine. Your
+                     banner count lives in Guild.State, not here.
+  Guild.Skills      Every skill from the skills command, with level
+                     and whether it is unlocked.
+  Guild.Honors      Every honor from the honors command.
+
+A package only sends data when something in it changes; if nothing has
+changed, no message arrives at all. Silence means nothing changed -- it
+does not mean your connection dropped or your client missed something.
+
+The first message for a package after you subscribe (or after you
+reconnect) carries its whole current picture. Every message after that
+carries only the fields that changed since the last one. Your client must
+keep its own copy of each package and update it field by field as these
+messages arrive -- never throw away the fields a message did not mention;
+they simply have not changed.
+
+If you go idle for more than twenty minutes, your guild stops sending any
+data at all until you act again -- the same rule that pauses your guild
+heartbeat generally, not something specific to GMCP.
+
+None of this changes anything about how the guild looks or plays if your
+client does not use it. See knight abilities, knight general and
+knight combat for the guild as everyone sees it.
