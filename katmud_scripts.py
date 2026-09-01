@@ -73,6 +73,8 @@ def _psdebug(client, msg):
 
 
 def on_command(client, cmd):
+    if _sf2_command(client, cmd):
+        return False                      # ours - never send it to the mud
     # Manual psummon also marks the portal open (optimistically; the
     # arrival lines confirm, the denial line corrects).
     if _portal_guild(client) and cmd.strip().startswith("psummon"):
@@ -312,6 +314,7 @@ def _bot_evaluate_room(client, bot, now):
 
 
 def on_line(client, text):
+    _sf2_line(client, text)
     # Portal-use allowance: read P:n/m wherever it shows up.
     m = _PORTAL_USES_RE.search(text)
     if m:
@@ -347,7 +350,234 @@ def on_line(client, text):
         _psdebug(client, "MUD says portal already open")
 
 
+# ------------------------------------------------- Street Fighter II
+#
+# The SFII arcade (3s) is a menu-driven gauntlet, not a place you walk:
+#
+#     enter cabinet -> select <difficulty> -> choose <fighter>
+#     then per opponent:  enter <name> -> challenge <name> -> kill <name>
+#     ...and you are teleported back to the hub when they die.
+#
+# Run it with     sf2 hard guile            (difficulty, then fighter)
+#                 sf2 deadly ryu
+# Stop it with    sf2 off
+# Status          sf2
+#
+# `progress` is the ONLY source of truth. The script never remembers who it
+# has beaten, so the area's mid-run reset bug needs no detection: the names
+# simply reappear as [ ] and get fought again. That also means a fight that
+# somehow does not register just gets repeated rather than skipped.
+SF2_PROGRESS_WINDOW = 2.0     # seconds to collect the `progress` reply
+SF2_FIGHT_TIMEOUT = 180.0     # give up on one opponent after this long
+SF2_STEP_DELAY = 2.0          # one 3s combat round between sends
+
+# `progress` lists an opponent as "  [X] CHUN-LI" (beaten) or "  [ ] KEN".
+SF2_ENTRY_RE = re.compile(r"^\s*\[([ Xx])\]\s*(\S.*?)\s*$")
+SF2_HEADER = "=== TOURNAMENT PROGRESS ==="
+
+# Only M. Bison's name is inconsistent: `progress` prints him as M_BISON in
+# one section and "M. BISON - CHAMPION!" in the other, while the commands
+# want `enter m-bison` and `challenge m bison`. Rather than try to match
+# every spelling, just look for "bison" anywhere in the listed name.
+# Everyone else works exactly as listed, lowercased (chun-li, e-honda, ...).
+SF2_ALIASES = (("bison", ("m-bison", "m bison")),)
+
+_sf2 = {"on": False, "state": "idle", "difficulty": "", "fighter": "",
+        "target": "", "until": 0.0, "lines": [], "last_target": "",
+        "repeats": 0, "deadline": 0.0, "hub": None}
+
+
+def _sf2_names(listed):
+    """progress name -> (enter name, challenge name)."""
+    low = listed.strip().lower()
+    for needle, cmds in SF2_ALIASES:
+        if needle in low:
+            return cmds
+    return low, low
+
+
+def _sf2_stop(client, why, colour="#aa88cc"):
+    _sf2.update(on=False, state="idle", target="", lines=[])
+    client.vars["sf2"] = "off"
+    client.write_local("[sf2] " + why, colour)
+
+
+def _sf2_line(client, text):
+    """Collect the `progress` reply while the read window is open."""
+    if not _sf2["on"] or _sf2["state"] != "read":
+        return
+    if SF2_HEADER in text:
+        _sf2["lines"] = []
+        return
+    m = SF2_ENTRY_RE.match(text)
+    if m:
+        _sf2["lines"].append((m.group(1).strip() == "", m.group(2)))
+
+
+def _sf2_pending(entries):
+    """First opponent still to beat, or None. `entries` is [(pending, name)].
+    Order is the mud's own: world warriors first, then each boss as it
+    unlocks, so 'first pending' is always the right next fight."""
+    for pending, name in entries:
+        if pending:
+            return name
+    return None
+
+
+def _sf2_command(client, cmd):
+    """`sf2 <difficulty> <fighter>` | `sf2 off` | `sf2`. Returns True if this
+    was ours, so on_command can swallow it instead of sending it to the mud."""
+    parts = cmd.strip().split()
+    if not parts or parts[0].lower() != "sf2":
+        return False
+    args = [a.lower() for a in parts[1:]]
+    if not args:
+        if _sf2["on"]:
+            client.write_local(
+                "[sf2] running: %s / %s - state %s%s"
+                % (_sf2["difficulty"], _sf2["fighter"], _sf2["state"],
+                   (", on " + _sf2["target"]) if _sf2["target"] else ""),
+                "#aa88cc")
+        else:
+            client.write_local("[sf2] not running. Usage: "
+                               "sf2 <difficulty> <fighter> | sf2 off",
+                               "#aa88cc")
+        return True
+    if args[0] in ("off", "stop", "0"):
+        if _sf2["on"]:
+            _sf2_stop(client, "stopped")
+        else:
+            client.vars["sf2"] = "off"
+            client.write_local("[sf2] not running.", "#aa88cc")
+        return True
+    if len(args) != 2:
+        client.write_local("[sf2] usage: sf2 <difficulty> <fighter>, "
+                           "e.g. 'sf2 hard guile'", "#ff5555")
+        return True
+    client.vars["sf2"] = " ".join(args)
+    return True
+
+
+def _sf2_tick(client):
+    name = str(client.vars.get("sf2", "") or "").strip().lower()
+    if name in ("", "0", "off"):
+        if _sf2["on"]:
+            _sf2.update(on=False, state="idle", target="", lines=[])
+        return
+    now = time.time()
+
+    if not _sf2["on"]:
+        parts = name.split()
+        if len(parts) != 2:
+            _sf2_stop(client, "usage: #var sf2 = <difficulty> <fighter>, "
+                              "e.g. 'hard guile'", "#ff5555")
+            return
+        _sf2.update(on=True, state="init", difficulty=parts[0],
+                    fighter=parts[1], target="", lines=[], last_target="",
+                    repeats=0, until=now)
+        client.write_local("[sf2] starting: %s / %s" % (parts[0], parts[1]),
+                           "#aa88cc")
+        return
+
+    if now < _sf2["until"]:
+        return
+
+    st = _sf2["state"]
+
+    if st == "init":
+        # Sent as three separate lines rather than one chain so a refusal is
+        # visible in the log against the command that caused it.
+        client.send_line("enter cabinet")
+        client.send_line("select " + _sf2["difficulty"])
+        client.send_line("choose " + _sf2["fighter"])
+        _sf2.update(state="ask", until=now + SF2_STEP_DELAY * 3)
+        return
+
+    if st == "ask":
+        # We are standing in the hub whenever we can run `progress`, so this
+        # is the moment to learn which room "back at the start" means. Each
+        # difficulty has its own hub (Hard is 49666).
+        if getattr(client, "room_vnum", None):
+            _sf2["hub"] = client.room_vnum
+        client.send_line("progress")
+        _sf2.update(state="read", lines=[],
+                    until=now + SF2_PROGRESS_WINDOW)
+        return
+
+    if st == "read":
+        entries = list(_sf2["lines"])
+        if not entries:
+            _sf2_stop(client, "no `progress` output - are we in the hub?",
+                      "#ff5555")
+            return
+        nxt = _sf2_pending(entries)
+        if nxt is None:
+            _sf2_stop(client, "tournament complete - %d opponent(s) beaten"
+                      % len(entries), "#66cc66")
+            return
+        # Spin guard: the same opponent twice running means the fight is not
+        # registering (dead but not credited, wrong name, refused entry).
+        if nxt == _sf2["last_target"]:
+            _sf2["repeats"] += 1
+            if _sf2["repeats"] >= 2:
+                _sf2_stop(client, "stuck on %s - it never registers as beaten"
+                          % nxt, "#ff5555")
+                return
+        else:
+            _sf2["repeats"] = 0
+        _sf2.update(target=nxt, last_target=nxt, state="enter",
+                    until=now)
+        return
+
+    if st == "enter":
+        ent, _chal = _sf2_names(_sf2["target"])
+        client.write_local("[sf2] next: %s" % _sf2["target"], "#aa88cc")
+        client.send_line("enter " + ent)
+        _sf2.update(state="challenge", until=now + SF2_STEP_DELAY)
+        return
+
+    if st == "challenge":
+        _ent, chal = _sf2_names(_sf2["target"])
+        client.send_line("challenge " + chal)
+        _sf2.update(state="kill", until=now + SF2_STEP_DELAY)
+        return
+
+    if st == "kill":
+        _ent, chal = _sf2_names(_sf2["target"])
+        client.send_line("kill " + chal)
+        # `until` paces the poll; `deadline` bounds the whole fight. Setting
+        # until to the timeout would have parked the script for the full
+        # SF2_FIGHT_TIMEOUT before it ever looked at whether the fight ended.
+        _sf2.update(state="fight", until=now + SF2_STEP_DELAY,
+                    deadline=now + SF2_FIGHT_TIMEOUT)
+        return
+
+    if st == "fight":
+        # The fight is over when the mud TELEPORTS US BACK to the hub - the
+        # room where `progress` and `enter <fighter>` work. That is the
+        # authoritative signal: `in_combat` going false would also fire if we
+        # fled or the kill never registered, leaving us stranded in the
+        # opponent's room sending `progress` at nothing.
+        if now >= _sf2["deadline"]:
+            _sf2_stop(client, "%s took longer than %ds - stopping"
+                      % (_sf2["target"], int(SF2_FIGHT_TIMEOUT)), "#ff5555")
+            return
+        hub, here = _sf2["hub"], getattr(client, "room_vnum", None)
+        if hub is not None and here is not None:
+            back = (here == hub)
+        else:                       # no room data - fall back to combat state
+            back = not client.in_combat
+        # Still hold for the guild's post-kill routine (corpse cascade, mw,
+        # revalrie) so `progress` does not interleave with it.
+        if not back or client._post_kill_holding():
+            _sf2["until"] = now + SF2_STEP_DELAY
+            return
+        _sf2.update(state="ask", until=now + SF2_STEP_DELAY)
+        return
+
+
 def on_tick(client):
+    _sf2_tick(client)
     name = str(client.vars.get("bot", "") or "").strip().lower()
     if name in ("", "0", "off"):
         if _bot["name"]:

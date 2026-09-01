@@ -113,18 +113,24 @@ class MapPane(tk.Canvas):
         for (x, y), info in self.graph.items():
             px, py = cx + x * cell, cy + y * cell
             stubs = info.get("stubs") or ()
+            links = info.get("links") or {}
             for d in info["exits"]:
                 off = self.DIRS.get(d.lower())
                 if not off:
                     continue
                 tx, ty = x + off[0], y + off[1]
-                if (tx, ty) in self.graph:
+                nb = self.graph.get((tx, ty))
+                if nb is not None and links.get(d) == nb["rid"]:
+                    # a real charted link to the room actually drawn there
                     self.create_line(px, py, px + off[0] * cell,
                                      py + off[1] * cell,
                                      fill="#445566", width=2)
-                elif d.lower() in stubs:
+                elif d.lower() in stubs and nb is None:
                     # known exit, destination not mapped yet: a short
                     # dashed spoke pointing the way, with no room box.
+                    # Suppressed when that cell already holds a room - the
+                    # spoke would touch it and read as a connection, which
+                    # is exactly how 1191's `sw` looked joined to 272.
                     self.create_line(px, py, px + off[0] * cell * 0.5,
                                      py + off[1] * cell * 0.5,
                                      fill="#665544", width=1, dash=(3, 3))

@@ -21,10 +21,22 @@ OPT_ECHO, OPT_EOR, OPT_GMCP = 1, 25, 201
 HOST, PORT = "172.232.4.129", 3200
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
-# Root names from docs/gmcp/gmcp.txt + docs/gmcp/mercs.txt. Roots pull
-# every package under them; the server lists the real surface back in
-# Core.Supported, which is the point of the probe.
-ROOTS = ["Char 1", "Room 1", "Comm 1", "Guild 1", "Merc 1"]
+# Root names from docs/gmcp/gmcp.txt + docs/gmcp/mercs.txt, plus Craft and
+# Mud, which no doc mentions: the 2026-08-29 elemental capture's
+# Core.Supported listed Craft.State/Info/Extra and Mud.Status and we had
+# never asked for them. Mud.Status is the candidate home for the reboot
+# and uptime feeds MIP currently owns alone. Roots pull every package
+# under them; the server lists the real surface back in Core.Supported,
+# which is the point of the probe.
+ROOTS = ["Char 1", "Room 1", "Comm 1", "Guild 1", "Merc 1",
+         "Craft 1", "Mud 1"]
+
+
+def stamp():
+    """Wall-clock prefix. GMCP lines carry one so a capture can answer
+    'how long was the feed silent' - the 2026-08-29 capture could not,
+    because only the filename was timestamped."""
+    return datetime.datetime.now().strftime("[%H:%M:%S.%f")[:-3] + "]"
 
 
 def gmcp(payload):
@@ -131,7 +143,7 @@ def main():
                 log.flush()
             for g in gmcps:
                 print("\nGMCP> " + g)
-                log.write("GMCP " + g + "\n")
+                log.write(stamp() + " GMCP " + g + "\n")
                 log.flush()
         print("\n[probe] connection closed")
         try:
@@ -146,6 +158,11 @@ def main():
     try:
         for line in sys.stdin:
             sock.sendall(line.rstrip("\n").encode("utf-8") + b"\n")
+            # Anchor for the idle question: WHEN you acted, never what
+            # you typed. Idle timeouts run from the last input, so a
+            # capture needs this to tell "nothing changed" from "away".
+            log.write(stamp() + " # input\n")
+            log.flush()
     except KeyboardInterrupt:
         pass
     finally:

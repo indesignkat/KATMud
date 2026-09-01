@@ -16,6 +16,7 @@ the v7 config cascade:
     [House] rooms scoped to the character (6.2.1)
 """
 
+import json
 import os
 import queue
 import random
@@ -86,7 +87,7 @@ RUN_ATTACKING_RE = re.compile(
 TRIGGER_RECURSION_LIMIT = 10
 
 DEFAULT_VITALS = [
-    {"label": "HP", "cur": "hp", "max": "hpmax", "color": "#33aa33",
+    {"label": "HP", "cur": "hp", "max": "hpmax", "color": "#2a7d2a",
      "width": 190, "warn": [[0.25, "#cc3333"], [0.5, "#cc9933"]]},
     {"label": "SP", "cur": "sp", "max": "spmax", "color": "#3366cc",
      "width": 190},
@@ -130,6 +131,16 @@ DEFAULT_RATING_SWALLOW = [
 # which is why some rooms got an area and others stayed NULL.
 AREA_LINE_RE = re.compile(r"^[\s>]*AREA NAME:\s*(.+?)\s*$")
 RATING_LINE_RE = re.compile(r"^[\s>]*AREA RATING\s*->")
+# The THIRD reply shape. An area that EXISTS but was never rated answers
+# with this and NO 'AREA NAME:' line at all - wire-captured 2026-08-30 in
+# room 49639 (Street Fighter II Arcade). It used to match nothing, so the
+# rating stalled for the full RATING_TIMEOUT before resolving exactly like
+# overland. Two causes per the player: a new area whose wiz has not written
+# a .rating yet, and 25-year-old areas nobody visits so nobody ever asked
+# for one (on 3k a new wiz MUST build a small area before they can do
+# anything else, so there is a long tail of abandoned starter areas).
+# GMCP cannot rescue these either - Room.Info reports "area": "Unknown".
+NO_RATING_RE = re.compile(r"^[\s>]*This area has no rating\.", re.I)
 RATING_TIMEOUT = 5.0
 
 REVERSE_DIR = {"n": "s", "s": "n", "e": "w", "w": "e",
@@ -205,11 +216,23 @@ class MudClient:
         self.vitals = {}
         self.frozen = False
         self.status_text = "disconnected"
+        self.enc = None                 # Char.Vitals encumbrance %
+        self.gmcpraw = False            # #gmcpraw echo, mirrors #mipraw
+        # Blur/portal recharge % from GMCP Guild.State - exact (2/27 per
+        # round), unlike the integer percent in the hpbar text. None until a
+        # packet arrives, and on MIP-only the hpbar value is used as before.
+        self.blur_reset_pct = None
+        self.portal_reset_pct = None
+        # From Room.Info; captured but not yet consumed (stage 1).
+        self.gmcp_room_area = None
+        self.gmcp_exit_dests = {}
+        self._gmcp_superseded = set()   # MIP tags GMCP has taken over
         self.stat1 = ""
         self.stat2 = ""
         self.room_vnum = None
         self.mipraw = False
         self.mipraw_buf = []
+        self.gmcpraw_buf = []
         self.markers_debug = False      # #markers: report italic/underline
                                         # lines (mob/player room markers)
         self.viking_state = {}          # merged BBE feed (guild MIP)
@@ -283,21 +306,33 @@ class MudClient:
         self.blade_skill_costs = {}
         self.blade_available = None
         self.blade_glvl = None
-        # Blur-reset duration estimator (Part C): anchor a (pct, time) sample
-        # at the start of a reset cycle and extrapolate the full 0->100 time.
-        self._blur_anchor = None        # (pct, t) | None
-        self.blur_reset_secs = None     # learned full reset duration (sec)
+        # Blur reset length: a KNOWN constant (blade.BLUR_RESET_SECS, derived
+        # from the GMCP `reset` step - see blade.py), not something we watch
+        # the hpbar and guess at. Overridable per character.
+        self.blur_reset_secs = blade.BLUR_RESET_SECS
         # Auto-blur (Part D): fire the FIRST blur late in a reset cycle so all
         # `max` charges get spent before the reset refills them - an unused
         # charge at refill is wasted GXP + defense. The fade trigger ("...
         # disintegrates into nothingness" -> blur) chains the rest, so only the
-        # kickoff needs deciding. secs_per_charge = self-measured wall time to
-        # burn one charge while fighting (interval between successive B-count
-        # drops); kickoff threshold% = 100*(1 - max*secs_per_charge/reset_secs)
-        # - margin, i.e. start just early enough for all charges to cycle.
+        # kickoff needs deciding. Both inputs are now KNOWN constants measured
+        # off the GMCP reset counter (blade.py), not learned at runtime:
+        # 1350 rounds a cycle, 48 rounds a blur.
+        #
+        #   kickoff threshold% = 100*(1 - (max-1)*BLUR_DURATION_SECS
+        #                                       /BLUR_RESET_SECS) - margin
+        #
+        # It is (max-1), not max: you cannot cast blur while one is already
+        # running, so the chain needs max-1 full burns to fit, and the last
+        # charge only has to be CAST before the refill - it may run past it.
+        # For max=8: 7*48 = 336 rounds, so fire with ~405 rounds left = 70%.
+        #
+        # This assumes continuous combat, which is the only case that can be
+        # scheduled for: the reset deadline advances every 2s tick whether or
+        # not you fight (wire-proven - the cycle wrapped through 12 idle
+        # minutes), but a blur only burns in combat ROUNDS. Idle long enough
+        # and no kickoff time can save the charges, because the client cannot
+        # fight on your behalf.
         self.blur_auto = True              # master switch (Toggle blur)
-        self.blur_secs_per_charge = None   # learned single-blur lifetime (sec)
-        self._blur_last_drop = None        # (n, t) of the last B-count decrement
         self._blur_auto_last = 0.0         # cooldown stamp for the kickoff send
         self.blur_auto_pct_eff = None      # last computed threshold (pane hint)
         self.status_notes = []          # one-time status-pane warnings
@@ -752,10 +787,18 @@ class MudClient:
         # inheriting stale entries (e.g. blade's iron runes leaking onto necro).
         self.tracked = dict(self.setting(self._tracked_key(), {}) or {})
         self.necro_guard = bool(self.setting("necro_guard", True))
-        self.blur_reset_secs = self.setting("blur_reset_secs")
+        # OFF by default. Negotiating GMCP coincided with MIP going silent
+        # once (2026-08-30); cause still unproven, so this stays opt-in.
+        self.gmcp_on = bool(self.setting("gmcp", False))
+        self.blur_reset_secs = (self.setting("blur_reset_secs")
+                                or blade.BLUR_RESET_SECS)
         self.blur_auto = bool(self.setting("blur_auto", True))
-        self.blur_secs_per_charge = self.setting("blur_secs_per_charge")
         # MIP registry: built ONCE at startup (spec 5). tag -> decl.
+        # Rooms the map audits must not treat as faults (see mud.json):
+        # deliberately non-Euclidean Chaos geometry, and stateful rooms whose
+        # exits change. Charted correctly; they simply break the "a reverse
+        # exit exists and names where I came from" assumption.
+        self.irregular_rooms = set(c.get("irregular_rooms", []) or [])
         self.mip_registry = dict(c.get("mip", {}) or {})
         char_layer = c.layers.get("character") or {}
         self.vitals_max = dict(char_layer.get("seen_max", {}))
@@ -1278,6 +1321,16 @@ class MudClient:
         return "break"
 
     # ------------------------------------------------ status line
+    def _with_enc(self, text):
+        """Append the GMCP encumbrance reading to the status line. The game
+        only ever says this in words ("you are encumbered"), so the number is
+        worth carrying; it is a percentage of what you can carry. None until
+        the first Char.Vitals arrives, and on a mud that does not speak GMCP
+        it simply never appears."""
+        if self.enc is None:
+            return text
+        return f"{text}    Enc: {self.enc:g}%"
+
     def show_status(self):
         if self.frozen:
             return
@@ -1285,17 +1338,18 @@ class MudClient:
         # status bar under the hpbars instead of the (redundant) connection
         # text - the connection state lives in the title bar + topbar anyway.
         if self.guild.lower() == "changelings" and self.changeling_status:
-            self.status.configure(text=self.changeling_status)
+            text = self.changeling_status
         elif self.guild.lower() == "bladesingers" and self.blade_status:
-            self.status.configure(text=self.blade_status)
+            text = self.blade_status
         elif self.guild.lower() == "necromancers" and self.necro_status:
-            self.status.configure(text=self.necro_status)
+            text = self.necro_status
         elif self.stat1 or self.stat2:
-            self.status.configure(text=f"{self.stat1}    {self.stat2}")
+            text = f"{self.stat1}    {self.stat2}"
         elif self.viking_spells:
-            self.status.configure(text=self.viking_spells)
+            text = self.viking_spells
         else:
-            self.status.configure(text=self.status_text)
+            text = self.status_text
+        self.status.configure(text=self._with_enc(text))
 
     BP_RE = re.compile(
         r"B:\s*(\d+)/(\d+)\s*\((\d+)%\)\s+P:\s*(\d+)/(\d+)\s*\((\d+)%\)")
@@ -1313,14 +1367,14 @@ class MudClient:
             m = self.BLADE_STATUS_RE.search(clean)
             if m:
                 bn, bm, bp = int(m.group(3)), int(m.group(4)), int(m.group(5))
-                self._estimate_blur_reset(bp)
-                self._blur_measure_charge(bn)
-                rt = (f"  reset ~{blade.fmt_secs(self.blur_reset_secs)}"
-                      if self.blur_reset_secs else "")
+                if self.blur_reset_pct is not None:
+                    bp = self.blur_reset_pct
+                rt = f"  reset {blade.fmt_secs(self.blur_reset_secs)}"
                 at = (f"  auto@{self.blur_auto_pct_eff}%"
                       if self.blur_auto and self.blur_auto_pct_eff is not None
                       else "")
-                self.blur_portal = f"Blur: {bn}/{bm} ({bp}%)" + rt + at
+                self.blur_portal = (f"Blur: {bn}/{bm} ({bp:.0f}%)"
+                                    + rt + at)
                 self.vars.update(blur_n=bn, blur_max=bm, blur_pct=bp,
                                  bp_t=time.time())
                 self._maybe_auto_blur(bn, bm, bp)
@@ -1333,15 +1387,19 @@ class MudClient:
             m = self.BP_RE.search(clean)
             if m:
                 bn, bm, bp, pn, pm, pp = (int(x) for x in m.groups())
-                self._estimate_blur_reset(bp)
-                self._blur_measure_charge(bn)
-                rt = (f"  reset ~{blade.fmt_secs(self.blur_reset_secs)}"
-                      if self.blur_reset_secs else "")
+                # GMCP carries this percentage exactly; the hpbar rounds it
+                # to a whole percent, which is 13.5 rounds of the cycle.
+                if self.blur_reset_pct is not None:
+                    bp = self.blur_reset_pct
+                if self.portal_reset_pct is not None:
+                    pp = self.portal_reset_pct
+                rt = f"  reset {blade.fmt_secs(self.blur_reset_secs)}"
                 at = (f"  auto@{self.blur_auto_pct_eff}%"
                       if self.blur_auto and self.blur_auto_pct_eff is not None
                       else "")
-                self.blur_portal = (f"Blurs: {bn}/{bm} ({bp}%)  "
-                                    f"Portals: {pn}/{pm} ({pp}%)" + rt + at)
+                self.blur_portal = (f"Blurs: {bn}/{bm} ({bp:.0f}%)  "
+                                    f"Portals: {pn}/{pm} ({pp:.0f}%)"
+                                    + rt + at)
                 self.vars.update(blur_n=bn, blur_max=bm, blur_pct=bp,
                                  portal_n=pn, portal_max=pm,
                                  portal_pct=pp, bp_t=time.time())
@@ -1351,64 +1409,22 @@ class MudClient:
             self.show_status()
         return changed
 
-    def _estimate_blur_reset(self, bp):
-        """Estimate the wall-clock length of one full blur reset (0->100%)
-        from the streaming B:n/m (bp%) samples. Anchor a (pct, time) at the
-        start of a cycle; once bp has climbed, extrapolate the full 100%
-        time. A drop in bp marks a completed/restarted cycle -> re-anchor.
-        The learned value is persisted so it survives relogs."""
-        now = time.time()
-        anchor = self._blur_anchor
-        if anchor is None or bp < anchor[0]:
-            # first sample, or the cycle wrapped (refill) -> start fresh
-            self._blur_anchor = (bp, now)
-            return
-        dp = bp - anchor[0]
-        dt = now - anchor[1]
-        if dp >= 3 and dt > 0:           # enough movement to be meaningful
-            est = int(dt / (dp / 100.0))
-            prev = self.blur_reset_secs
-            self.blur_reset_secs = est
-            # persist only on a meaningful change (>30s) to avoid writing
-            # the config on every combat prompt
-            if prev is None or abs(est - prev) > 30:
-                self.set_setting("blur_reset_secs", est)
-
-    def _blur_measure_charge(self, bn):
-        """Learn the wall-clock lifetime of ONE blur charge while fighting -
-        the interval between two successive B-count drops (each drop = a charge
-        spent in combat). Only fight-time intervals count: a refill (count
-        rises) or a steady count re-anchors/holds without measuring, so idle
-        time at full charges never inflates the estimate. EMA-smoothed +
-        persisted so the kickoff threshold survives relogs."""
-        now = time.time()
-        last = self._blur_last_drop
-        if last is None or bn > last[0]:        # first sample or refill -> anchor
-            self._blur_last_drop = (bn, now)
-            return
-        if bn < last[0]:                        # a charge was consumed
-            interval = (now - last[1]) / (last[0] - bn)
-            self._blur_last_drop = (bn, now)
-            if last[1] and interval > 0:
-                prev = self.blur_secs_per_charge
-                est = interval if prev is None else 0.5 * prev + 0.5 * interval
-                self.blur_secs_per_charge = est
-                if prev is None or abs(est - prev) > 2:
-                    self.set_setting("blur_secs_per_charge", int(est))
-
     def _blur_threshold(self, bm):
         """Reset% at which to fire the kickoff blur. Manual `blur_auto_pct`
-        (>0) wins; otherwise derive from the time to burn all `bm` charges vs
-        the full reset wall time, backed off by `blur_auto_margin_pct`. Returns
-        None when there isn't enough learned data yet (no fire)."""
+        (>0) wins; otherwise derive from the time to burn the charges vs the
+        full reset wall time, backed off by `blur_auto_margin_pct`. Only
+        `bm - 1` burns need to fit: the last charge merely has to be cast
+        before the refill, not finish. Returns None when the per-charge time
+        has not been measured yet (no fire)."""
         manual = self.setting("blur_auto_pct", 0) or 0
         if manual > 0:
             return max(1, min(99, int(manual)))
-        per = self.setting("blur_duration_secs", 0) or self.blur_secs_per_charge
+        per = (self.setting("blur_duration_secs", 0)
+               or blade.BLUR_DURATION_SECS)
         if not (self.blur_reset_secs and per):
             return None
         margin = self.setting("blur_auto_margin_pct", 5) or 0
-        pct = 100.0 * (1 - (bm * per) / self.blur_reset_secs) - margin
+        pct = 100.0 * (1 - ((bm - 1) * per) / self.blur_reset_secs) - margin
         return max(5, min(95, int(round(pct))))
 
     def _maybe_auto_blur(self, bn, bm, bp):
@@ -1441,8 +1457,13 @@ class MudClient:
         self.password_sent = False
         self._logged_in = False
         self.guild_login_sent = False
+        # Read fresh every connect: telnet options are negotiated once, at
+        # connect, so `Toggle gmcp` only takes effect here. Both transports
+        # then run at the same time (see TelnetFilter and docs/gmcp/port.md);
+        # GMCP is opt-in, not a trade against MIP.
         self.conn = MudConnection(self.host, self.port, self.queue,
-                                  self.mip_pin)
+                                  self.mip_pin,
+                                  gmcp=self.gmcp_on)
         self.conn.start()
 
     def disconnect(self):
@@ -1489,6 +1510,13 @@ class MudClient:
                 if not err else f"[password store failed: {err}]",
                 "#557755" if not err else "#cc6666")
         self._pending_store_pw = None
+        # Prime the readouts, every mud and every character. Nothing
+        # backfills on connect: GMCP only sends a package when its value
+        # CHANGES (a subscribed package can stay silent indefinitely - see
+        # docs/gmcp/port.md), and the blur/portal charge counts n/m are
+        # text-only in the hpbar with no packet equivalent at all. One `hp`
+        # fills them in rather than waiting for the first thing to move.
+        self.send_line("hp", manual=True)
 
     AUTH_FAIL_RE = re.compile(r"wrong password|incorrect password|"
                               r"password incorrect", re.IGNORECASE)
@@ -2040,6 +2068,19 @@ class MudClient:
             self._sql_rating_pending = False
             self.sql_finish_room(area, coder)
             return True
+        if NO_RATING_RE.match(clean):
+            # Resolve immediately instead of stalling. Deliberately does NOT
+            # set _sql_rate_overland: this room is IN an area, we just cannot
+            # learn its name, and Explore uses that flag to tell a genuine
+            # overland border from a capture miss.
+            if self._sql_rating_pending:
+                self._sql_rating_pending = False
+                v = self._sql_cur_vnum
+                self.write_local(
+                    "[map] room %s is in an area the mud has never rated - "
+                    "it stays unnamed (not overland)" % v, "#cc9933")
+                self.sql_finish_room(area="", coder="")
+            return True
         if RATING_LINE_RE.match(clean):
             # AREA RATING with no AREA NAME first = overland, area unknown. The
             # overland marker is 'AREA RATING -> Caution is Advised [Mud]' - note
@@ -2167,10 +2208,18 @@ class MudClient:
             if here and row is None:
                 # current room not charted yet: no charted exits exist,
                 # so show the live MIP exits as spokes and flag it 'new'.
-                exits, stubs = list(self.exits or []), []
+                exits, stubs, links = list(self.exits or []), [], {}
             else:
                 ex_rows = self.mapdb.iter_exits(vn)
                 exits = [e["direction"] for e in ex_rows]
+                # Where each charted exit actually LEADS. The pane used to
+                # draw a solid connector whenever the neighbouring cell was
+                # occupied, without checking the exit went to that room - so
+                # 1191's dangling `sw` stub rendered as a real link into 272
+                # Banana Tree Street, which merely happened to sit southwest
+                # of it.
+                links = {e["direction"]: e["to_vnum"] for e in ex_rows
+                         if e["to_vnum"] is not None}
                 vn_row = self.mapdb.get_room(vn)
                 vn_area = vn_row["area_id"] if vn_row is not None else None
                 # A foreign-area border room (placed only for connection
@@ -2183,7 +2232,7 @@ class MudClient:
                          [e["direction"] for e in ex_rows
                           if e["to_vnum"] is None])
             payload[(x, y)] = {
-                "rid": vn, "exits": exits, "stubs": stubs,
+                "rid": vn, "exits": exits, "stubs": stubs, "links": links,
                 "here": here, "collide": (x, y) in collisions,
                 "house": here and self._sql_in_house,
                 "new": here and row is None,
@@ -2311,10 +2360,19 @@ class MudClient:
         if not tag:
             self.write_local("Usage: #go <landmark>", "#cc6666")
             return
+        # Landmarks win, so a landmark that happens to be named with digits
+        # keeps working; a bare vnum is the fallback. Handy for chasing a
+        # room the map audits name by number ("Go 530") without having to
+        # landmark it first.
         dst = self.mapdb.resolve_landmark(tag)
+        if dst is None and tag.isdigit() and self.mapdb.has_room(int(tag)):
+            dst = int(tag)
         if dst is None:
-            self.write_local(f"No landmark '{tag}'. #landmark list to "
-                             "see them.", "#cc6666")
+            if tag.isdigit():
+                self.write_local(f"Room {tag} isn't on the map.", "#cc6666")
+            else:
+                self.write_local(f"No landmark '{tag}'. #landmark list to "
+                                 "see them, or Go <vnum>.", "#cc6666")
             return
         cur = self._sql_cur_vnum
         if cur is None:
@@ -2338,8 +2396,13 @@ class MudClient:
                and isinstance(v, str)}
         body = mapsql.speedrun_string(edges, rev.get)
         sep = self.setting("command_separator", ";")
+        label = tag
+        if tag.isdigit():
+            row = self.mapdb.get_room(dst)
+            if row is not None and row["short_desc"]:
+                label = f"{tag} ({row['short_desc']})"
         self.write_local(
-            f"[Go {tag}: {len(edges)} steps -> {sep}{body}]", "#aa88cc")
+            f"[Go {label}: {len(edges)} steps -> {sep}{body}]", "#aa88cc")
         steps, err = self.expand_speedwalk(body)
         if err:
             self.write_local(f"[speedwalk] {err}", "#cc6666")
@@ -2479,6 +2542,8 @@ class MudClient:
                           self._toggle_mapdetail),
             "flat": ("Hunt skips up/down exits", self.hunt_flat,
                      self._toggle_hunt_flat),
+            "gmcp": ("GMCP feed (reconnect to apply)", self.gmcp_on,
+                     self._toggle_gmcp),
         }
         if self.guild.lower() == "necromancers":
             reg["necroguard"] = ("auto con/protection/veil",
@@ -2551,6 +2616,21 @@ class MudClient:
             f"[blur {'on' if self.blur_auto else 'off'}"
             " - auto-fire the kickoff blur before a reset wastes charges]",
             "#44aaff")
+
+    def _toggle_gmcp(self):
+        """Telnet options are negotiated once, at connect - so unlike every
+        other Toggle this one cannot take effect on the running session. Say
+        so, or it looks broken."""
+        self.gmcp_on = not self.gmcp_on
+        self.set_setting("gmcp", self.gmcp_on)
+        self.write_local(
+            f"[gmcp {'on' if self.gmcp_on else 'off'}"
+            " - takes effect on the NEXT connect, not this one]", "#44aaff")
+        if self.gmcp_on:
+            self.write_local(
+                "  MIP went silent last time GMCP was on. If the hpbars "
+                "read 0, check the scrollback for '[MIP handshake sent'"
+                " and try #mip before blaming GMCP.", "#cc9933")
 
     def _toggle_trigger(self, name):
         new = not self.trigger_toggles.get(name, True)
@@ -6080,6 +6160,8 @@ class MudClient:
 
         # same-direction collisions (with adjudication verdict)
         for d, t, froms in self.mapdb.same_dir_collisions(area_id):
+            if self._is_irregular(t, *froms):
+                continue        # known chaos-realm geometry, not a fault
             issues += 1
             rd = REVERSE_DIR.get(d)
             rev = self.mapdb.get_exit(t, rd) if rd else None
@@ -6096,6 +6178,8 @@ class MudClient:
 
         # dupe-target exits (same room, 2+ dirs -> one room)
         for fv, tv, rows in self.mapdb.dupe_target_exits(area_id):
+            if self._is_irregular(fv, tv):
+                continue
             issues += 1
             dirs = ",".join(r["direction"] for r in rows)
             self.write_local(f"  DUPE #{fv}: {dirs} all -> #{tv}", "#ff6666")
@@ -6103,6 +6187,8 @@ class MudClient:
         # reverse contradictions (informational; collisions above name the fix)
         rc = self.mapdb.reverse_contradictions(area_id)
         for a, d, b, c in rc:
+            if self._is_irregular(a, b, c):
+                continue
             issues += 1
             self.write_local(
                 f"  REVERSE #{a} {d}->#{b}, but #{b} {REVERSE_DIR.get(d)}->#{c}",
@@ -6306,6 +6392,16 @@ class MudClient:
         self._explore_flagged.update(keys)
         self.write_local(f"[explore] REVIEW {msg}", "#ffaa44")
 
+    def _is_irregular(self, *vnums):
+        """True if any of these rooms is a known map-audit exception (see
+        mud.json): deliberately non-Euclidean Chaos geometry, or a stateful
+        room like the Silicon Wraiths lift whose exits change with a button.
+        Their asymmetry is real, so an audit finding involving one is not a
+        fault - and acting on it is actively harmful:
+        the w->1745 collision resolves to 1791, so Explore's auto-fix would
+        re-stub 1744's west exit even though the mud states 1744 {w:1745}."""
+        return any(v in self.irregular_rooms for v in vnums if v is not None)
+
     def _explore_audit_fix(self):
         """Detect & correct the maze mischarts Explore can adjudicate from
         room-ids + exit topology alone (short descs are never consulted):
@@ -6318,6 +6414,8 @@ class MudClient:
         # (1) same room, two+ exits -> one target
         for from_v, to_v, rows in \
                 self.mapdb.dupe_target_exits(self._explore_area_id):
+            if self._is_irregular(from_v, to_v):
+                continue        # real mud geometry - never "repair" it
             dirs = ",".join(r["direction"] for r in rows)
             cardinals = [r for r in rows
                          if r["direction"] in self.CARDINAL_DIRS]
@@ -6337,6 +6435,8 @@ class MudClient:
         # (2) two+ rooms reach one target via the same direction
         for d, to_v, froms in \
                 self.mapdb.same_dir_collisions(self._explore_area_id):
+            if self._is_irregular(to_v, *froms):
+                continue        # real mud geometry - never "repair" it
             rd = REVERSE_DIR.get(d)
             rev = self.mapdb.get_exit(to_v, rd) if rd else None
             winner = rev["to_vnum"] if rev else None
@@ -6693,6 +6793,8 @@ class MudClient:
                                 self._chaossea_on_prompt()
                 elif kind == "mip":
                     self.handle_mip(item[1], item[2])
+                elif kind == "gmcp":
+                    self.handle_gmcp(item[1])
                 elif kind == "status":
                     self.set_status(item[1])
                 elif kind == "event":
@@ -6730,6 +6832,353 @@ class MudClient:
             self.write_local(f"[MIP handshake sent, pin "
                              f"{self.mip_pin}]", "#557755")
 
+    GMCP_MSG_RE = re.compile(r"^\s*([A-Za-z][\w.]*)\s*(.*)$", re.S)
+
+    # Roots we subscribe to. A root pulls every package beneath it; the
+    # server reports the real surface back in Core.Supported.
+    #
+    # EVERY package with a gmcp_* handler needs its root here or the handler
+    # is dead code - Guild.State shipped subscribed to nothing and silently
+    # never fired. test_gmcp_feeds::RootsCoverHandlersTest guards that now.
+    # Room is subscribed deliberately AHEAD of any handler, so Room.Info /
+    # Room.Map / Room.Contents land in #log and #raw for the BAD/DDD
+    # comparison without yet changing behaviour.
+    GMCP_ROOTS = ("Char 1", "Comm 1", "Mud 1", "Guild 1", "Room 1")
+
+    # GMCP package -> the MIP tags it FULLY replaces. Both transports run at
+    # once on 3s (confirmed 2026-08-30), so without this every chat line
+    # would render twice. Listed only where GMCP carries everything the tag
+    # did: Char.Vitals is deliberately absent, because FFF also carries the
+    # guild pools, enemy, round and the login/setup triggering - GMCP only
+    # refines hp/sp there, so FFF must keep running.
+    #
+    # The hand-off happens on the package's FIRST PACKET, never on
+    # Core.Supported saying we are subscribed. Subscribed does not mean it
+    # will ever arrive: Mud.Status was subscribed in two captures and sent
+    # 2 packets in 4.6 min in one, but ZERO in 38.6 min in the other.
+    # Retiring a MIP tag on subscription alone therefore trades a working
+    # feed for one that may never come - which is how uptime/reboot went to
+    # "?" on the first live run. Waiting for real data costs at most one
+    # duplicated line at the moment of hand-over.
+    GMCP_SUPERSEDES = {
+        "Comm.Channel.Text": ("CAA", "BAB", "BAG"),
+        "Mud.Status": ("AAF", "AAC"),
+        "Room.Info": ("BAD", "DDD"),
+    }
+
+    # Guild.State field -> the vitals key it feeds, per guild. Keyed by the
+    # packet's own `guild` field (singular: "bladesinger", not the client's
+    # plural "bladesingers"). Guild.State is guild-specific by nature - there
+    # is no shared schema - so this grows one capture at a time.
+    #
+    # Bladesinger: nekra is the prompt's NE pool, sokra its SO, matching the
+    # FFF E/F/G/H fields the bars already read. ADDITIVE, like Char.Vitals:
+    # FFF still carries enemy, round and the login/setup triggering, so it
+    # keeps running and Guild.State only sharpens the pools.
+    GMCP_GUILD_POOLS = {
+        "bladesinger": {"nekra": "gp1", "nekra_max": "gp1max",
+                        "sokra": "gp2", "sokra_max": "gp2max"},
+    }
+
+    def _gmcp_subscribe(self):
+        """The server offered option 201 and we accepted. Announce ourselves
+        and subscribe. Only "Char 1" for now - encumbrance is a Char.Vitals
+        field and MIP carries no equivalent, which is the whole reason GMCP
+        is wired up at all. Roots pull every package beneath them."""
+        if not self.conn:
+            return
+        self.conn.send_gmcp('Core.Hello { "client": "katmud", '
+                            '"version": "1.0" }')
+        roots = ", ".join('"' + r + '"' for r in self.GMCP_ROOTS)
+        self.conn.send_gmcp("Core.Supports.Set [" + roots + "]")
+        self.write_local("[GMCP on, subscribed to " + ", ".join(
+            r.split()[0] for r in self.GMCP_ROOTS) + "]", "#557755")
+
+    def handle_gmcp(self, msg):
+        """One GMCP message: a package name, then an optional JSON body.
+
+        Dispatches to gmcp_<package_lowercased_with_underscores>. A
+        malformed or unexpected body must never take the connection down -
+        this runs on every packet - hence the guards."""
+        if self.gmcpraw:
+            self.gmcpraw_buf.append(msg)
+            self.write_local("GMCP> " + msg, "#55aacc")
+        if self.log_file:
+            try:
+                self.log_file.write("GMCP " + msg + "\n")
+            except (OSError, ValueError):
+                pass
+        m = self.GMCP_MSG_RE.match(msg or "")
+        if not m:
+            return
+        pkg, body = m.group(1), m.group(2).strip()
+        try:
+            data = json.loads(body) if body else None
+        except ValueError:
+            return
+        handler = getattr(self, "gmcp_" + pkg.replace(".", "_").lower(), None)
+        if handler:
+            handler(data)
+            self._gmcp_take_over(pkg)
+        self.call_hook("on_gmcp", pkg, data)
+
+    def gmcp_core_supported(self, data):
+        """The server's list of packages and whether we are subscribed (1)
+        or not (0). Informational only - subscription does NOT retire a MIP
+        tag, because a subscribed package may never send anything (see
+        GMCP_SUPERSEDES). Surfaced so a missing package is visible."""
+        if not isinstance(data, dict):
+            return
+        want = set(self.GMCP_SUPERSEDES)
+        missing = sorted(p for p in want if not data.get(p))
+        if missing:
+            self.write_local("[GMCP: not subscribed to " + ", ".join(missing)
+                             + " - MIP keeps those feeds]", "#cc9933")
+
+    def _gmcp_take_over(self, pkg):
+        """Hand the MIP tags this package replaces over to GMCP, once, on
+        real data arriving."""
+        tags = self.GMCP_SUPERSEDES.get(pkg)
+        if not tags:
+            return
+        new = set(tags) - self._gmcp_superseded
+        if not new:
+            return
+        self._gmcp_superseded |= new
+        self.write_local("[GMCP now owns: " + ", ".join(sorted(new)) + "]",
+                         "#557755")
+
+    def gmcp_char_vitals(self, data):
+        """hp/sp and encumbrance. ADDITIVE - FFF still owns everything else,
+        so this only sharpens what FFF already writes. The win beyond enc is
+        maxhp/maxsp: FFF never sends them, so vitals_max is a high-water
+        guess there and a max that DROPS (lost equipment, a drained level)
+        can never be seen. Here it is stated outright."""
+        if not isinstance(data, dict):
+            return
+        upd, dirty = {}, False
+        for key in ("hp", "sp"):
+            v = data.get(key)
+            if isinstance(v, (int, float)):
+                upd[key] = v
+        for src, dst in (("maxhp", "hp"), ("maxsp", "sp")):
+            v = data.get(src)
+            if isinstance(v, (int, float)) and self.vitals_max.get(dst) != v:
+                self.vitals_max[dst] = v
+                dirty = True
+        if upd:
+            self.vitals.update(upd)
+        if dirty:
+            self._maxes_dirty = True
+        enc = data.get("enc")
+        if isinstance(enc, (int, float)) and enc != self.enc:
+            self.enc = enc
+            self.show_status()
+        if upd or dirty:
+            self.update_vitals()
+
+    @staticmethod
+    def _fmt_duration(secs):
+        """Seconds -> '8d3h' / '3h05m' / '45m'. blade.fmt_secs tops out at
+        hours and would render an 8-day uptime as '195h41m'."""
+        secs = int(secs)
+        d, rem = divmod(secs, 86400)
+        h, _ = divmod(rem, 3600)
+        if d:
+            return str(d) + "d" + str(h) + "h"
+        return blade.fmt_secs(secs)
+
+    # Room ids the viking guild map COLLAPSES - one id standing for many
+    # genuinely different rooms. sql_on_bad detects the biome by sniffing the
+    # raw BAD string for the [50960] prefix, so a synthesized string has to
+    # carry it too, and every collapsed id has to synthesize the same prefix
+    # or the map charts one room with several identities.
+    #
+    # 50960 is the overland biome, known from MIP. 50961 is new, and only
+    # GMCP could have shown it: in logs/gmcp_20260831_211329.log a single
+    # walk reports 50960 under five terrain names (Dense northern forest,
+    # Rugged mountain terrain, Rolling hills, Windswept plains, Frozen
+    # tundra) and 50961 under three DIFFERENT city entrances - Eiriksby,
+    # Hafrfjord and Imaird. Charting 50961 would have produced one room with
+    # exits into three separate cities. Every other Midgard id in that walk
+    # (50943 Great Hall, 50947 vestibule, 50950 courtyard, 50951 training
+    # grounds, 50957 outer gate) carries exactly one name and charts fine.
+    VIKING_COLLAPSED_VNUMS = (50960, 50961)
+    VIKING_BIOME_VNUM = 50960
+
+    def gmcp_room_info(self, data):
+        """Rooms and exits, replacing BAD + DDD.
+
+        Rather than reimplement any mapping logic, this rebuilds the two MIP
+        strings and feeds them to the existing handlers. sql_reconcile_chart
+        and sql_follow_* are the subtlest code in the project and they work;
+        Room.Info is a strict superset of what those strings carry, so the
+        synthesis is lossless and only the QUALITY of the input changes, not
+        the format. Measured on logs/din-20260830.log, that quality is better
+        in three ways:
+
+          * completeness - 22 Room.Info against 15 BAD over the same walk,
+            i.e. MIP silently dropped 32% of rooms during fast movement;
+          * no phantom rooms - `look`/`glance` emits a lone DDD on MIP but
+            nothing at all here, so "did I actually move?" stops being a
+            guess (this is what the glance/skip-debt workarounds exist for);
+          * no packet on a failed move ("You cannot go west.").
+
+        num matched the BAD vnum in every paired case and the exit sets were
+        identical in all 15, so this is a like-for-like swap.
+
+        `area` and the exits' destination vnums are captured but NOT consumed
+        yet - they are new data with no MIP equivalent and each deserves its
+        own change.
+        """
+        if not isinstance(data, dict):
+            return
+        num = data.get("num")
+        if not isinstance(num, int) or num <= 0:
+            # 0 is not a room id. The live map already carries one orphan
+            # "A dark room" charted as vnum 0 with a stray u->1920 edge, and
+            # `isinstance(0, int)` is True - so without this the same junk
+            # row gets recreated the moment the mud reports num 0 (dark rooms
+            # appear to withhold their id, like Da Void does).
+            return
+        name = str(data.get("name") or "")
+        exits = data.get("exits") or {}
+        if not isinstance(exits, dict):
+            exits = {}
+        dirs = list(exits.keys())
+
+        # New data, stored for later stages - deliberately unused here.
+        # "Unknown" is a REAL value meaning "not inside a named area" (realm
+        # overland), not missing data: across 35 rooms the db knew an area
+        # for, GMCP agreed every time and never said Unknown where the db had
+        # one. It maps to NULL, never to an area literally called "Unknown".
+        area = data.get("area")
+        self.gmcp_room_area = None if area in (None, "Unknown") else str(area)
+        self.gmcp_exit_dests = {d: v for d, v in exits.items()
+                                if isinstance(v, int) and v}
+
+        # sql_on_bad reads the biome flag straight off the string's prefix,
+        # and decides whether to chart from it - so the prefix must survive.
+        prefix = ("[%d]" % self.VIKING_BIOME_VNUM
+                  if num in self.VIKING_COLLAPSED_VNUMS else "")
+        bad = "%s%s (%s) [%d]~%d" % (prefix, name, ",".join(dirs), num, num)
+        ddd = "~".join(dirs + [str(num)])
+        self.mip_room(bad, None)        # dispatches to sql_on_bad on sqlite
+        self.mip_exits(ddd, None)       # dispatches to sql_on_ddd on sqlite
+
+    def gmcp_guild_state(self, data):
+        """Guild pools, and the blur/portal recharge at full precision.
+
+        Guild.State is a delta feed after its first full:1 packet, so this
+        merges rather than replaces - self.vitals.update does that naturally.
+
+        The pools (bladesinger NE/SO) are ADDITIVE over FFF, same reasoning
+        as Char.Vitals: FFF still owns enemy, round and the login/setup
+        triggering. The gain is stated maxima instead of high-water guesses.
+
+        The bigger win is `reset`. The auto-blur kickoff currently decides on
+        the INTEGER percent scraped from the "B:n/m (pct)" hpbar text, and
+        one percent of the blur cycle is 13.5 rounds - so the kickoff could
+        land most of a blur's duration late. GMCP sends the same quantity as
+        an exact 2/27-per-round value. Charge counts n/m are NOT in GMCP, so
+        the hpbar stays the source for those; this only sharpens the pct."""
+        if not isinstance(data, dict):
+            return
+        pools = self.GMCP_GUILD_POOLS.get(str(data.get("guild") or "").lower())
+        if pools:
+            upd = {}
+            for src, dst in pools.items():
+                v = data.get(src)
+                if isinstance(v, (int, float)):
+                    upd[dst] = v
+            if upd:
+                self.vitals.update(upd)
+                for f in ("gp1", "gp2"):
+                    if f in upd and upd[f] > self.vitals_max.get(f, 0):
+                        self.vitals_max[f] = upd[f]
+                        self._maxes_dirty = True
+                self.update_vitals()
+        for src, attr in (("reset", "blur_reset_pct"),
+                          ("portal_reset", "portal_reset_pct")):
+            v = data.get(src)
+            if isinstance(v, (int, float)):
+                setattr(self, attr, float(v))
+
+    def gmcp_char_combat(self, data):
+        """Char.Combat ends every fight with one empty snapshot (attacker "",
+        target "", rounds 0). That is an explicit end-of-combat marker MIP
+        never had, and it is the fix for a long-standing psummon leak.
+
+        self.rounds is zeroed in exactly ONE place otherwise: a kill-text
+        match. Every other way a fight can end - you flee, you outrun it, it
+        wanders off, someone else kills it - leaves the counter stale at
+        whatever it reached. The next incidental fight then begins at
+        "round 12 against a 100% enemy", and katmud_scripts rule 1
+        (rounds >= 5 and a fresh enemy) fires a psummon on its FIRST round.
+        That is the sprint-home-past-an-aggro-mob case: a wasted usage and a
+        portal abandoned in a corridor.
+
+        Deliberately does NOT touch in_combat. Char.Combat reports who is
+        attacking YOU, so a passive mob you are killing may never appear in
+        it at all - clearing in_combat here could end a fight that is still
+        going. Zeroing rounds is safe in the other direction: the worst case
+        is that a psummon is delayed by a few rounds, never wrongly fired."""
+        if not isinstance(data, dict):
+            return
+        if not str(data.get("attacker") or "") and self.rounds:
+            self.rounds = 0
+
+    def gmcp_mud_status(self, data):
+        """Replaces AAF (uptime) and AAC (reboot eta). MIP sent these
+        pre-formatted; GMCP sends raw seconds, so format them here to keep
+        the topbar reading the same. `lag` is deliberately ignored - the
+        mudlag readout is unwanted."""
+        if not isinstance(data, dict):
+            return
+        up = data.get("uptime")
+        if isinstance(up, (int, float)):
+            self.uptime = self._fmt_duration(up)
+        left = data.get("reboot_left")
+        if isinstance(left, (int, float)):
+            self.reboot_eta = self._fmt_duration(left)
+
+    def gmcp_comm_channel_text(self, data):
+        """Replaces CAA (chat), BAB (tell) and BAG (social) at once.
+
+        Strictly better than the three MIP handlers it retires: the payload
+        is structured rather than ~-split, and direction is an explicit
+        `outgoing` flag instead of BAB's empty-vs-nonempty FLAG convention -
+        which BAG could not express at all, so mip_social had to guess
+        direction from whether the text began with "you ". `prefix` is the
+        mud's own rendering ("Din@3k tells you:", "Call <Gossip>:"), so the
+        sentence no longer has to be reassembled here."""
+        if not isinstance(data, dict):
+            return
+        chan = str(data.get("channel") or "?")
+        text = str(data.get("text") or "")
+        talker = str(data.get("talker") or "")
+        prefix = str(data.get("prefix") or "")
+        outgoing = bool(data.get("outgoing"))
+        if prefix:
+            line = (prefix + " " + text).strip()
+        elif talker:
+            line = "[" + chan + "] " + talker + ": " + text
+        else:
+            line = "[" + chan + "] " + text
+        if self.chat_is_gagged(line) or self.chat_is_gagged(text):
+            return
+        if chan == "tell":
+            if not outgoing:
+                play_sound(self.setting("tell_sound", "beep"))
+                self._push_ntfy_tell(line)
+            self._web_tells.append({"t": time.time(), "line": line,
+                                    "incoming": not outgoing})
+            colour = "#ffdd88"
+        else:
+            self._web_record(self._web_chats, line)
+            colour = "#cc99ee"
+        self.write_local(self._chat_ts() + line, colour, widget=self.chat)
+
     def handle_event(self, ev):
         if ev == "CONNECTED":
             self.connected_at = time.time()
@@ -6745,6 +7194,8 @@ class MudClient:
             self.viking_spells = ""
             self.set_status("disconnected")
             self.write_local("*** Disconnected ***", "#cc6666")
+        elif ev == "GMCP_ON":
+            self._gmcp_subscribe()
         elif ev == "ECHO_OFF":
             self.echo_on = False
             self.entry.configure(show="*")
@@ -6774,6 +7225,11 @@ class MudClient:
                 self.log_file.write(f"MIP {tag} {data}\n")
             except (OSError, ValueError):
                 pass
+        if tag in self._gmcp_superseded:
+            # GMCP owns this feed now. Still teed to #mipraw and the log
+            # above so the two can be compared live, but handling it as well
+            # would double-render every line.
+            return
         decl = self.mip_registry.get(tag)
         if decl:
             handler = getattr(self, "mip_" +
@@ -8369,7 +8825,11 @@ class MudClient:
                 "to release. ***", "#ff5555")
 
         eta = self.reboot_eta
-        close = eta not in ("", "?") and "day" not in eta
+        # "d" covers GMCP's compact "2d13h"; "day" covers whatever
+        # preformatted string MIP's AAC sent. Without the "d" test a
+        # two-day eta reads as imminent and goes red.
+        close = (eta not in ("", "?")
+                 and "day" not in eta and "d" not in eta)
         self.tb["uptime"].configure(
             text=f"up {self.uptime}  reboot in {eta}",
             fg="#cc6666" if close else "#99aacc")
@@ -9458,6 +9918,28 @@ class MudClient:
                 except OSError as e:
                     self.write_local(f"MIP log save failed: {e}",
                                      "#cc6666")
+        elif name == "raw":
+            # The mirror of #mipraw. With both transports running, having
+            # the two raw streams side by side is how a ported feed gets
+            # verified against the MIP one it replaces.
+            self.gmcpraw = not self.gmcpraw
+            if self.gmcpraw:
+                self.gmcpraw_buf = []
+                self.write_local("GMCP raw display ON (toggle off with "
+                                 "#raw to save to log).", "#55aacc")
+            else:
+                fname = os.path.join(
+                    paths.LOGS_DIR,
+                    time.strftime("gmcp_%Y%m%d_%H%M%S.log"))
+                try:
+                    with open(fname, "w", encoding="utf-8") as f:
+                        f.write("\n".join(self.gmcpraw_buf))
+                    self.write_local(
+                        f"GMCP raw OFF - {len(self.gmcpraw_buf)} packets"
+                        f" saved to {fname}", "#55aacc")
+                except OSError as e:
+                    self.write_local(f"GMCP log save failed: {e}",
+                                     "#cc6666")
         elif name == "combat":
             a = arg.strip().lower()
             if a in ("clear", "reset", "off"):
@@ -10158,7 +10640,7 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
   #gag /pattern/ | #gags | #keys
   #chatgag /pattern/ | #chatgags   (filter the chat/tell pane only)
   #guild                          (active guild + its layer file path)
-  #deadman <minutes|off> | #mip | #mipraw | #markers | #vperf
+  #deadman <minutes|off> | #mip | #mipraw | #raw | #markers | #vperf
   #combat [clear] | #hpbar | #chartdebug   (state debug: #combat reports
       the in_combat/enemy/Run flags ('#combat clear' forces it off);
       #hpbar dumps the raw + stripped FFF I/J bars; #chartdebug traces the

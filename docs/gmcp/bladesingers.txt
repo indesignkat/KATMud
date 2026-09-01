@@ -1,0 +1,183 @@
+--======================================================================--
+-- Bladesinger Info: GMCP
+--======================================================================--
+
+  PROVENANCE - READ FIRST
+
+  This file is NOT an in-game help scrape. Unlike bards.txt,
+  elementals.txt, knights.txt, mercs.txt and warders.txt, which are
+  verbatim copies of what the mud prints, 3S publishes no GMCP help
+  for bladesingers. Everything below was reconstructed from a single
+  wire capture:
+
+      logs/gmcp_20260830_123436.log
+      3s, character Din, glevel 73, 2026-08-30, 12:34-12:59
+
+  Treat it as observed behaviour of one character over 25 minutes, not
+  as a specification. Field meanings marked (inferred) are our reading,
+  not the mud's word.
+
+  What arrives
+
+  Bladesingers are the plain three-package shape, not the ten-package
+  shape the bards get:
+
+  Guild.State      Blur and portal recharge, the nekra and sokra
+                   pools, guild XP, and the two panic settings.
+                   Sent every 2s tick, in combat or NOT - see the
+                   cadence section, it does not go quiet when idle.
+  Guild.Info       Regeneration rates, rune totals, guild level.
+                   Sent ONCE at login and then only on change; in
+                   25 minutes it arrived exactly once.
+  Guild.Extra      Declared, never sent. Not one message in 25
+                   minutes. Either blades do not populate it or
+                   nothing in the session triggered it.
+
+  Do not read Core.Supported as a guild manifest. Din's is
+  byte-identical to the elemental capture's - it lists Merc.*, Craft.*
+  and Mud.Status too. It is a static server-wide list and says nothing
+  about which packages your guild actually fills.
+
+  Guild.State
+
+    reset             blur recharge, percent
+    portal_reset      portal recharge, percent
+    nekra, nekra_max  the prompt's NE: pool
+    sokra, sokra_max  the prompt's SO: pool
+    gxp               guild experience
+    gtnl              gxp to next guild level
+    gxp_last_round    gxp gained last round (0 out of combat)
+    evade_cmd         panic command       (Din: "rejuvenate")
+    evade_hp          panic trigger hp    (Din: 400)
+    evade2_cmd        second panic command
+    evade2_var        what the second one watches (Din: "health")
+    evade2_level      second trigger level (Din: 4000)
+    guild             always "bladesinger"
+
+  Guild.Info
+
+    glevel                            guild level
+    gxp is NOT here - it is in Guild.State
+    hp_regen, hp_max_regen            hp regen and its cap
+    sp_regen, sp_max_regen            sp regen and its cap
+    nekra_regen, nekra_max_regen
+    sokra_regen, sokra_max_regen
+    runes_prepared, runes_inscribed   lifetime rune counters
+    guild                             always "bladesinger"
+
+  The blur and portal timers
+
+  This is the useful part, and it is exact.
+
+  Both counters climb by a fixed step, one step per combat round, and
+  wrap 100 -> 0. Across 474 consecutive samples there was no variation
+  in either step:
+
+    reset         2/27 % per round   ->  1350 rounds for 0->100
+    portal_reset  1/4  % per round   ->   400 rounds for 0->100
+
+  A round is 2.000 seconds, confirmed two ways: portal_reset wrapped
+  twice, 799.952s apart against 800s predicted, and Char.Combat.rounds
+  advanced at 2.011 s/round. So:
+
+    blur    1350 rounds = 45m 00s
+    portal   400 rounds = 13m 20s
+
+  A blur wrap predicted twenty minutes in advance from the 2/27 step
+  landed at 12:55:27.538 against 12:55:27 predicted.
+
+  Because the step is exactly 100/1350, the percentage is lossless -
+  the server is dividing an integer round counter, and you can recover
+  it:
+
+    rounds until blur refill    = (100 - reset)        * 13.5
+    rounds until portal refill  = (100 - portal_reset) * 4
+
+  How long a blur lasts: 48 rounds
+
+  The counter is also the cleanest way to time a blur, because it ticks
+  once per combat round - so the percentage it advances between the cast
+  and the fade IS the duration in rounds, with no clock involved.
+
+  Cast shows up as the hpbar's B-count dropping; the fade is the line
+  "The reflective shadow surrounding you disintegrates into nothingness."
+  Both blurs measurable in the capture:
+
+    cast 56.5926%  ->  fade 60.1481%   = 3.5556%  = 48.0 rounds
+    cast 76.4444%  ->  fade 80.0000%   = 3.5556%  = 48.0 rounds
+
+  3.5556% is 48/1350 exactly. Wall time was 95s and 96s, but that only
+  agrees because both windows were continuous combat (confirmed by the
+  player) - a blur does not tick down while idle, so ROUNDS is the real
+  unit and seconds are only a convenience.
+
+  So eight charges cover 384 of the cycle's 1350 rounds, and a blur
+  cannot be recast while one is still running.
+
+  Two things the wire does NOT tell you
+
+  1. The charge count. GMCP carries the recharge percentage but never
+     the "three of eight". That number is text only - the info readout
+     and the hpbar's B:n/m field. The cap of 8 is from that text, not
+     from the feed.
+
+  2. Whether blur is currently active. It appears in the info box's
+     "Guild Effects:" line and nowhere in GMCP. Guild.Extra, the
+     obvious home for it, never fires.
+
+  Cadence, and where the general doc does not apply
+
+  Guild.State is a metronome: 2.002s median interval, and across 25
+  minutes not one gap exceeded 5 seconds.
+
+  Combat is irrelevant to it. 368 Guild.State messages arrived after
+  the last Char.Combat packet, through twelve minutes with no combat at
+  all, and the blur cycle wrapped in the middle of them. The heartbeat
+  tracks the tick, not the fight.
+
+  It does stop when you go idle, and the cutoff is TWENTY MINUTES.
+  Measured: the last player input was 12:44:51 and the last Guild.State
+  arrived at 13:04:51, +1200.0s later, to the tenth of a second.
+
+  The "20 seconds" in bards.txt is a TYPO for 20 minutes (per the
+  player, and our measurement agrees exactly). knights.txt already says
+  20 minutes. Read the cutoff as 20 minutes everywhere - do not build a
+  client around a 20-second silence that will never happen.
+
+  The idle clock runs from your last INPUT, not from your last fight or
+  your last packet. Two packages behave differently either side of it:
+
+    Char.Vitals, Char.Combat   went quiet ~150s after the last input,
+                               but that is just combat ending - they
+                               are change-driven, and nothing was
+                               changing. Not the idle timer.
+    Comm.Channel.Text          keeps arriving long past the cutoff
+                               (13:13, +28 min). Chat is driven by
+                               other players, so it is not yours to
+                               go idle.
+
+  This matters for anything scheduling blur: the reset deadline is
+  wall-clock and runs whether or not you fight, but a blur charge is
+  spent in combat ROUNDS, so sitting idle does not burn charges. The
+  two clocks do not run together.
+
+  Core drift worth knowing (both differ from gmcp.txt)
+
+  Char.Vitals    sends all seven keys on every message with no `full`
+                 key at all, and does NOT carry the guild, qp and
+                 qp_required that gmcp.txt promises. Observed keys:
+                 hp, maxhp, sp, maxsp, enc, coffin, coffin_max.
+                 enc is encumbrance as a percent of capacity.
+  Char.Combat    behaves as documented: attacker, attacker_hp,
+                 rounds, target, and one empty snapshot per combat
+                 end (four fights, four empty snapshots).
+
+  For client authors
+
+  The first message of each package carries full: 1 and every key;
+  everything after is changed keys only, with no full key. Merge, do
+  not replace. Guild.State arrived as one message; the elemental
+  capture's split across page/pages, so be ready to append.
+
+  See also: gmcp.txt, and katmud_lib/blade.py BLUR_RESET_SECS, which
+  is derived from the numbers above.

@@ -20,6 +20,37 @@ GXP needed to raise a tracked skill = skill_cost - available (>=0).
 
 import re
 
+# One full blur reset, in seconds. NOT estimated - measured off the 3s GMCP
+# Guild.State feed (capture logs/gmcp_20260830_123436.log, 2026-08-30):
+# `reset` climbs by exactly 2/27 % per combat round across 474 consecutive
+# samples with zero variation, so 0->100% is 1350 rounds. The same feed's
+# `portal_reset` (1/4 % per round, 400 rounds) wrapped twice 799.952s apart
+# against 800s predicted, pinning one round at 2.000s - so the full cycle is
+# 2700s, accurate to well under a second across the whole 45 minutes.
+#
+# All `max` charges refill at the wrap and any unspent charge is LOST, so this
+# is the deadline the auto-blur kickoff counts back from. Measured on 3s; the
+# `blur_reset_secs` setting still overrides it if another mud differs.
+BLUR_RESET_SECS = 2700
+BLUR_RESET_ROUNDS = 1350
+BLUR_ROUND_SECS = 2.0
+
+# How long ONE blur lasts. Also measured, not guessed - and measured on the
+# reset counter itself rather than the clock, which is what makes it exact:
+# the counter ticks once per combat round, so the % it advances between the
+# cast and the fade IS the duration in rounds. Same capture, both blurs:
+#
+#   cast 56.5926% -> fade 60.1481%  = 3.5556% = 48.0 rounds
+#   cast 76.4444% -> fade 80.0000%  = 3.5556% = 48.0 rounds
+#
+# (cast = the hpbar B-count dropping, fade = "The reflective shadow
+# surrounding you disintegrates into nothingness.")  3.5556% is 48/1350
+# exactly. Wall time was 95s and 96s, but that only matches because combat
+# was near-continuous - the ROUND count is the real quantity, since a blur
+# does not tick down while idle.
+BLUR_DURATION_ROUNDS = 48
+BLUR_DURATION_SECS = BLUR_DURATION_ROUNDS * BLUR_ROUND_SECS   # 96
+
 # Guild-level cost table from supporting docs/bladesingers.txt. The doc
 # lists glvl 42 as "1,900,000" which is a clear typo (41=17M, 43=21M);
 # corrected here to 19,000,000 so the level-snap stays monotonic.

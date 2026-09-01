@@ -13,11 +13,27 @@ import threading
 # ==========================================================================
 IAC, DONT, DO, WONT, WILL, SB, SE, GA, EOR = \
     255, 254, 253, 252, 251, 250, 240, 249, 239
-OPT_ECHO, OPT_EOR = 1, 25
+OPT_ECHO, OPT_EOR, OPT_GMCP = 1, 25, 201
 
 
 class TelnetFilter:
-    def __init__(self):
+    """`gmcp` defaults False because GMCP is opt-in: `Toggle gmcp` turns it
+    on, and since telnet options are negotiated once at connect it only
+    takes effect on the next connect. Off, option 201 is refused exactly as
+    the pre-GMCP client did, byte for byte.
+
+    GMCP and MIP RUN AT THE SAME TIME - live-confirmed 2026-08-30, the
+    MIP-fed hpbars stayed populated while the GMCP-fed `Enc:` updated beside
+    them, which is what makes the port incremental (see docs/gmcp/port.md).
+    An earlier version of this docstring claimed the two were mutually
+    exclusive; that was a one-data-point inference from a session where MIP
+    went silent for an unrelated reason. When MIP goes quiet, suspect the
+    takeover-login handshake bug FIRST - the `3klient` handshake fires only
+    on an incoming line containing "elcome", which 3s does not print on a
+    takeover, so MIP never starts and `#mip` re-sends it."""
+
+    def __init__(self, gmcp=False):
+        self.gmcp = gmcp
         self.state = "data"
         self.pending_cmd = None
         self.sb_buffer = bytearray()
@@ -49,6 +65,9 @@ class TelnetFilter:
                         events.append("ECHO_OFF")
                     elif byte == OPT_EOR:
                         responses += bytes([IAC, DO, OPT_EOR])
+                    elif byte == OPT_GMCP and self.gmcp:
+                        responses += bytes([IAC, DO, OPT_GMCP])
+                        events.append("GMCP_ON")
                     else:
                         responses += bytes([IAC, DONT, byte])
                 elif cmd == WONT:
@@ -57,6 +76,9 @@ class TelnetFilter:
                         events.append("ECHO_ON")
                     else:
                         responses += bytes([IAC, DONT, byte])
+                elif cmd == DO and byte == OPT_GMCP and self.gmcp:
+                    responses += bytes([IAC, WILL, OPT_GMCP])
+                    events.append("GMCP_ON")
                 else:
                     responses += bytes([IAC, WONT, byte])
                 self.state = "data"
@@ -67,6 +89,10 @@ class TelnetFilter:
                     self.sb_buffer.append(byte)
             elif self.state == "sb_iac":
                 if byte == SE:
+                    if self.sb_buffer and self.sb_buffer[0] == OPT_GMCP:
+                        events.append(
+                            ("GMCP", bytes(self.sb_buffer[1:]).decode(
+                                "utf-8", "replace")))
                     self.state = "data"
                 else:
                     self.sb_buffer.append(byte); self.state = "sb"
@@ -329,13 +355,13 @@ def parse_composite(data):
 # Network thread
 # ==========================================================================
 class MudConnection(threading.Thread):
-    def __init__(self, host, port, out_queue, mip_pin):
+    def __init__(self, host, port, out_queue, mip_pin, gmcp=False):
         super().__init__(daemon=True)
         self.host, self.port = host, port
         self.out_queue = out_queue
         self.sock = None
         self.alive = False
-        self.telnet = TelnetFilter()
+        self.telnet = TelnetFilter(gmcp=gmcp)
         self.ansi = AnsiParser()
         self.mip = MipExtractor(mip_pin)
         self._linebuf = ""
@@ -368,12 +394,22 @@ class MudConnection(threading.Thread):
                     break
             text = clean_bytes.decode("utf-8", "replace")
             text, packets = self.mip.feed(text)
+            # GMCP FIRST, before the MIP packets from this same chunk. A
+            # ported feed retires its MIP tag on the GMCP package's first
+            # packet, and both transports usually deliver the same event in
+            # one chunk - so with MIP queued first, the very first chat line
+            # of a session rendered twice, once from CAA and once from
+            # Comm.Channel.Text, before the hand-off had happened. Ordering
+            # GMCP ahead of MIP means supersession is already in place when
+            # the MIP twin is dequeued.
+            for ev in events:
+                if isinstance(ev, tuple) and ev[0] == "GMCP":
+                    self.out_queue.put(("gmcp", ev[1]))
+                elif ev in ("ECHO_OFF", "ECHO_ON", "GMCP_ON"):
+                    self.out_queue.put(("event", ev))
             for tag, pdata in packets:
                 self.out_queue.put(("mip", tag, pdata))
             self._process(text, prompt=("GA" in events))
-            for ev in events:
-                if ev in ("ECHO_OFF", "ECHO_ON"):
-                    self.out_queue.put(("event", ev))
         self.alive = False
         try:
             self.sock.close()
@@ -401,6 +437,22 @@ class MudConnection(threading.Thread):
             except OSError:
                 return False
         return False
+
+    def send_gmcp(self, payload):
+        """Send one GMCP message as IAC SB 201 <payload> IAC SE. Unlike
+        send() this is not a line of player input: no CRLF, and any IAC
+        byte inside the payload must be doubled or it ends the
+        subnegotiation early."""
+        if not (self.alive and self.sock):
+            return False
+        body = payload.encode("utf-8", "replace").replace(
+            bytes([IAC]), bytes([IAC, IAC]))
+        try:
+            self.sock.sendall(
+                bytes([IAC, SB, OPT_GMCP]) + body + bytes([IAC, SE]))
+            return True
+        except OSError:
+            return False
 
     def stop(self):
         self.alive = False

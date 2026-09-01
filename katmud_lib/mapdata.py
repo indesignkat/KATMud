@@ -104,7 +104,12 @@ def norm_key(name, exits):
 
 NAME_EXITS_RE = re.compile(r"^(.*?)\s*\(([^()]*)\)\s*$")
 VNUM_SUFFIX_RE = re.compile(r"^(.*?)~(\d+)\s*$")
-AREA_CODER_RE = re.compile(r"^(.*?)\s*\[([^\]]*)\]\s*$")
+# GREEDY on the name so the LAST bracketed group is the coder, and the coder
+# itself may not contain brackets. Non-greedy matched the FIRST '[', which
+# mangled any area whose NAME contains one: 'MK ][ Machine [Steel]' became
+# name='MK ]' coder='Machine [Steel' - and that is exactly how it was stored
+# in the live 3s map.
+AREA_CODER_RE = re.compile(r"^(.*)\s*\[([^\[\]]*)\]\s*$")
 
 
 def split_name(full):

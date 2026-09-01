@@ -8,6 +8,15 @@
     "port": 3200,
     "mip": true
   },
+  "_irregular_rooms_note": "Rooms the map audits must NOT treat as faults. They are charted CORRECTLY; what they break is the audits' assumption that a reverse exit exists and names the room you came from. Two causes so far. (1) DELIBERATELY NON-EUCLIDEAN - the Chaos realm's theme is literally chaos: 1745/1791 (west goes back east, east continues on), 2905 (entered by north from BOTH 1914 and 2904, left by east/west to the other), 1920<->12210 (up from either leads to the other). Player confirmed 2026-08-30 that those are all of them in Chaos. (2) STATEFUL EXITS - 3255, the lift in Silicon Wraiths HQ, is ONE room whose north exit differs depending on whether you pushed the top or bottom button, so both 3250 and 3256 legitimately go south into it. Excluding these matters most for Explore's auto-fix, which would otherwise 'repair' correct data: the w->1745 collision resolves to 1791, so it would re-stub 1744's west exit even though the mud states 1744 {w:1745}.",
+  "irregular_rooms": [
+    1745,
+    1791,
+    2905,
+    1920,
+    12210,
+    3255
+  ],
   "mip": {
     "FFF": {
       "handler": "vitals_composite"
@@ -92,7 +101,6 @@
     "diabloback": ";(menu)(windows)nnowwnenww3e",
     "tounderdark": ";15elev8ev6szwsd",
     "underdarkback": ";ote6nq8wqwr15w",
-    "sf": "select %1;enter %1;challenge %1;kill %1",
     "odk": "get all;onward;doorway;kill angel"
   },
   "triggers": [
@@ -112,7 +120,9 @@
   "kill_patterns": [
     "dealt the killing blow to (.+?)\\.\\s*$"
   ],
-  "settings": { "map_backend": "sqlite" },
+  "settings": {
+    "map_backend": "sqlite"
+  },
   "keys": {
     "KP_0": "d",
     "KP_Decimal": "u"

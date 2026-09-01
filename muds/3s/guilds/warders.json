@@ -15,7 +15,7 @@
       "label": "HP",
       "cur": "hp",
       "max": "hpmax",
-      "color": "#33aa33",
+      "color": "#2a7d2a",
       "width": 200,
       "warn": [
         [

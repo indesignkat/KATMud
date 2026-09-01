@@ -37,7 +37,9 @@
   "aliases": {
     "sk": "Vskills",
     "af": "vmission accept %1;vmission fulfill %1",
-    "pullall": "vtrade refine salting transfer grade hard-cured;vtrade refine bakehouse transfer grade hardtack;vtrade refine furrier transfer grade trimmed;vtrade refine smelter transfer grade seax-grade;vtrade refine smithy transfer grade masterwork;vtrade refine mead transfer grade aged;vtrade refine weaponry transfer grade masterwork;vtrade refine armoury transfer grade warplate;vtrade refine goldsmith transfer grade regalia;vtrade refine weaver transfer grade broadcloth;iii smokehouse transfer grade hard-cured;iii creamery transfer grade vintage"
+    "pullall": "vtrade refine salting transfer grade hard-cured;vtrade refine bakehouse transfer grade hardtack;vtrade refine furrier transfer grade trimmed;vtrade refine smelter transfer grade seax-grade;vtrade refine smithy transfer grade masterwork;vtrade refine mead transfer grade aged;vtrade refine weaponry transfer grade masterwork;vtrade refine armoury transfer grade warplate;vtrade refine goldsmith transfer grade regalia;vtrade refine weaver transfer grade broadcloth;iii smokehouse transfer grade hard-cured;iii creamery transfer grade vintage",
+    "-pouchtrim": "vpouch discard blackhorn inkcap;vpouch discard blackhorn inkcap;vpouch discard blackhorn inkcap;vpouch discard blackhorn panthcap ergclaw flyspot ghostveil charknot;vpouch discard blackhorn panthcap ergclaw flyspot ghostveil charknot;vpouch discard blackhorn panthcap ergclaw flyspot ghostveil charknot;vpouch discard blackhorn panthcap ergclaw flyspot ghostveil charknot;vpouch discard blackhorn panthcap ergclaw flyspot ghostveil charknot;vpouch discard blackhorn panthcap ergclaw flyspot ghostveil charknot;vpouch discard blackhorn panthcap ergclaw flyspot ghostveil charknot;vpouch discard blackhorn panthcap ergclaw flyspot ghostveil charknot;vpouch discard chaga;vpouch discard chaga;vpouch discard chaga;vpouch discard chaga;vpouch discard chaga;vpouch discard chaga;vpouch discard cordspore ghostveil;vpouch discard cordspore ghostveil;vpouch discard cordspore ghostveil;vpouch discard cordspore ghostveil;vpouch discard cordspore ghostveil;vpouch discard cordspore ghostveil;vpouch discard cordspore ghostveil;vpouch discard cordspore ghostveil;vpouch discard ergclaw flyspot ghostveil ghostveil blackhorn;vpouch discard ergclaw flyspot ghostveil panthcap ghostveil;vpouch discard ergclaw flyspot ghostveil panthcap ghostveil;vpouch discard ergot;vpouch discard ergot;vpouch discard ergot;vpouch discard fly agaric;vpouch discard fly agaric;vpouch discard fly agaric;vpouch discard horn of plenty;vpouch discard horn of plenty;vpouch discard horn of plenty;vpouch discard horn of plenty;vpouch discard horn of plenty;vpouch discard horn of plenty;vpouch",
+    "-pouchtrim2": "vpouch discard blackhorn panthcap;vpouch discard blackhorn panthcap;vpouch discard blackhorn panthcap ergclaw flyspot ghostveil;vpouch discard blackhorn panthcap ergclaw flyspot ghostveil;vpouch discard blackhorn panthcap ergclaw flyspot ghostveil;vpouch discard ergclaw flyspot ghostveil;vpouch discard ergclaw flyspot ghostveil ghostveil;vpouch discard ergclaw flyspot ghostveil ghostveil;vpouch discard ergclaw flyspot ghostveil panthcap;vpouch"
   },
   "triggers": [],
   "gags": [],
@@ -52,7 +54,7 @@
       "label": "HP",
       "cur": "hp",
       "max": "hpmax",
-      "color": "#33aa33",
+      "color": "#2a7d2a",
       "width": 190,
       "warn": [
         [

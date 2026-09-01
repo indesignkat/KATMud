@@ -50,7 +50,7 @@
       "label": "HP",
       "cur": "hp",
       "max": "hpmax",
-      "color": "#33ff33",
+      "color": "#2a7d2a",
       "width": 220,
       "warn": [
         [
@@ -104,7 +104,7 @@
     "post_kill_resume_text": "Fully refreshed you end your revalrie.",
     "post_kill_resume_timeout": 40,
     "_post_kill_resume_timeout_note": "Raised 20->40 (2026-06-16): the hold now spans mw maintenance (async, several rounds on a breakable weapon) THEN revalrie, so 20s could resume mid-buff. Tune down if maintenance is always quick.",
-    "_blur_auto_note": "Auto-blur (Toggle 'blur'). Each reset gives `max` blur charges (Din: 8) and unused charges are WASTED at refill (lost GXP + defense). Rule: while still at MAX charges, once reset% reaches the threshold, fire ONE blur; the 'disintegrates into nothingness'->blur trigger chains the rest until charges run out, finishing just before the reset refills. Threshold is auto-derived: 100*(1 - max*blur_duration_secs/blur_reset_secs) - blur_auto_margin_pct. blur_reset_secs (~2700) and blur_duration_secs both SELF-MEASURE from the streaming B:n/m (pct) field (duration = wall time between charge drops while fighting), so the first cycle after a relog may not fire until they're learned. Override anytime: set blur_auto_pct>0 for a fixed reset%, or blur_duration_secs to seed the per-charge time. Shown in the blur pane as 'auto@NN%'.",
+    "_blur_auto_note": "Auto-blur (Toggle 'blur'). Each reset gives `max` blur charges (Din: 8) and unused charges are WASTED at refill (lost GXP + defense). Rule: while still at MAX charges, once reset% reaches the threshold, fire ONE blur; the 'disintegrates into nothingness'->blur trigger chains the rest until charges run out, finishing just before the reset refills. NOTHING HERE IS LEARNED ANY MORE - both inputs are constants in blade.py measured off the GMCP reset counter (capture 2026-08-30): BLUR_RESET_ROUNDS=1350 (45m, `reset` steps exactly 2/27% per round) and BLUR_DURATION_ROUNDS=48 (a blur spanned exactly 3.5556% of the counter, i.e. 48/1350, on both measured casts). The old _estimate_blur_reset and _blur_measure_charge learners are DELETED. Threshold = 100*(1 - (max-1)*blur_duration_secs/blur_reset_secs) - blur_auto_margin_pct; (max-1) because you cannot cast blur while one is running, so max-1 full burns must fit and the last charge only has to be CAST before the refill. For Din: 7*48=336 rounds, fires at 70%. Caveat: the reset deadline advances every 2s tick whether or not you fight, but a blur only burns in combat ROUNDS - the threshold assumes continuous combat, which is the only case that can be scheduled for. Override anytime: blur_auto_pct>0 for a fixed reset%, or blur_duration_secs to override the 96s. Shown in the blur pane as 'auto@NN%'.",
     "blur_auto": true,
     "blur_command": "blur",
     "blur_auto_pct": 0,

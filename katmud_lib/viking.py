@@ -204,13 +204,26 @@ def merge_vmapl(old, new):
     capture 2026-07-17: mip_20260717_082858.log), so the old
     last-chunk-wins merge kept only the tail - a lone mentor_jarl, which
     broke `Go <city>` and left the Map tab POI list nearly empty.
-    Entries merge by (type, name). A chunk carrying the capital entry
-    starts a fresh push (both captured pushes lead with it), dropping
-    POIs that no longer exist - player villages come and go. Order is
-    preserved (capital/lineage first, the MUD's push order)."""
+    Entries merge by (type, name); order is preserved (capital/lineage
+    first, the MUD's push order).
+
+    A capital-led chunk USED to reset the accumulation, on the reasoning
+    that both captured pushes led with the capital, so it marked the
+    start of a round and dropped player villages that no longer exist.
+    That is no longer true of the wire. The landmark push is three
+    pieces where the rest are four (2026-08-31,
+    mip_20260831_183058.log), so it completes in the three-piece group,
+    BEFORE the capital push completes in the four-piece group that
+    follows - and the reset then dropped every seer, blot and mentor
+    mark on every single round.
+
+    Nothing resets now, and nothing needs to. GAME FACT (user,
+    2026-08-31): villages are not razed. A mishap has shuffled them
+    around once or twice, and a move is merged in place because the
+    entry is keyed by (type, name) - so the vanishing POI the reset was
+    written for does not occur, while the marks it cost were gone every
+    round."""
     new_entries = [(e.split("|"), e) for e in new.split(";") if e]
-    if any(f[0] == "capital" for f, _e in new_entries if len(f) >= 4):
-        old = ""
     merged = {}
     for f, entry in [(e.split("|"), e) for e in old.split(";") if e] \
             + new_entries:
@@ -277,36 +290,51 @@ def reassemble_chunks(state, upd):
     pieces in order reconstructs the original text byte-for-byte (splits
     land mid-word, e.g. 'bre' + 'ad').
 
-    Pieces are collected per key in state['_frag'] as {n: text} and the
-    plain KEY is written into `upd` once all m are held, so every
-    existing decoder - including the merge_tgoods/merge_vmapl
-    multi-chunk paths - works unchanged.
+    A key can have SEVERAL pushes in flight at once, so state['_frag']
+    holds a LIST of them per key, each {"m": m, "pieces": {n: text}}. A
+    piece joins the earliest push of its chunk count that is still
+    missing that index, and starts a new push when every existing one
+    already has it. A push emits its plain KEY into `upd` the moment it
+    holds all m pieces and is then dropped, so every existing decoder -
+    including the merge_tgoods/merge_vmapl multi-chunk paths - works
+    unchanged, and a key emits once per push rather than on every
+    following packet.
 
-    Collection is order-agnostic because the MUD stopped finishing one
-    push before starting the next: the 2026-08-29 capture
-    (mip_20260829_154701.log) interleaves TGOODS as ...68, 1-4, 69-72,
-    5-8, 73, 9..., which the old strict-successor buffer could never
-    complete - piece 1 wiped the in-flight push and piece 69 then
-    dropped it, so the Goods tab never got a TGOODS value at all. A
-    completed set is cleared, so a key emits once per push and not on
-    every following packet; a change in m (72 -> 73 on the last
-    expansion) discards what we hold rather than blending payloads.
-    Splicing pieces from two overlapping pushes can garble the one
-    record that straddles the seam - parse_tgoods and friends skip
-    malformed entries."""
+    One slot per key was enough while pushes only OVERLAPPED at the
+    seam: the 2026-08-29 capture (mip_20260829_154701.log) interleaves
+    TGOODS as ...68, 1-4, 69-72, 5-8, 73, 9..., which order-agnostic
+    collection in a single slot still completed. It is not enough for
+    CONCURRENT pushes. VMAPL is now six of them - capital+lineage, four
+    batches of player villages, and a three-piece landmark batch - sent
+    INDEX-MAJOR (2026-08-31, mip_20260831_183058.log): every push's
+    piece 1, then every push's piece 2, and so on. Same-index pieces
+    overwrote each other in the single slot and the 4 <-> 3 chunk-count
+    switch wiped the collection on every crossing, so VMAPL completed
+    ZERO times in a whole session and the Map tab had no towns at all.
+
+    The list drains itself and needs no cap: a push that loses a piece
+    keeps the one index it is missing, so the next round's piece of that
+    index fills it and it completes - garbled across the seam, which
+    parse_tgoods and friends already tolerate by skipping malformed
+    entries - rather than sitting in the list for the rest of the
+    session."""
     frags = state.setdefault("_frag", {})
     for k in [k for k in upd if _FRAG_RE.match(k)]:
         key, n, m = _FRAG_RE.match(k).groups()
         n, m = int(n), int(m)
-        total, pieces = frags.get(key, (m, {}))
-        if total != m:
-            pieces = {}
-        pieces[n] = upd.pop(k)
-        if sorted(pieces) == list(range(1, m + 1)):
-            upd[key] = "".join(pieces[i] for i in range(1, m + 1))
-            frags.pop(key, None)
+        pushes = frags.setdefault(key, [])
+        for push in pushes:
+            if push["m"] == m and n not in push["pieces"]:
+                break
         else:
-            frags[key] = (m, pieces)
+            push = {"m": m, "pieces": {}}
+            pushes.append(push)
+        push["pieces"][n] = upd.pop(k)
+        if len(push["pieces"]) == m:
+            upd[key] = "".join(push["pieces"][i] for i in range(1, m + 1))
+            pushes.remove(push)
+        if not pushes:
+            frags.pop(key, None)
 
 
 # --- mip_city decoders (City tab) -------------------------------------

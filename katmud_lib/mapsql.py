@@ -571,7 +571,15 @@ class MapDB:
         the same direction (e.g. both #4165 and #8630 say n -> #4166). At most
         one can be right - the target can only be one direction away from one
         room - so this is a mischart. Returns
-        [(direction, to_vnum, [from_vnum, ...]), ...]. Timed exits excluded."""
+        [(direction, to_vnum, [from_vnum, ...]), ...]. Timed exits excluded.
+
+        COMPASS DIRECTIONS ONLY. The "one direction away from one room" rule
+        is a geometric one and simply does not hold for named exits: six
+        different rooms legitimately have a `portal` to the same place, four
+        `touch <n>` exits in the spider area reach one hall, and so on. Those
+        made up 8 of 15 findings on the live 3s map - pure noise, and the
+        adjudicator already refused to act on them (it requires a cardinal
+        direction), so filtering here only removes false reports."""
         rows = self.conn.execute(
             "SELECT e.from_vnum, e.direction, e.to_vnum FROM exits e "
             "JOIN rooms r ON e.from_vnum = r.vnum "
@@ -579,6 +587,8 @@ class MapDB:
             "AND e.wait_seconds = 0", (area_id,)).fetchall()
         groups = {}
         for row in rows:
+            if row["direction"] not in REVERSE_DIRS:
+                continue        # named/special exit - many->one is normal
             groups.setdefault((row["direction"], row["to_vnum"]), []).append(
                 row["from_vnum"])
         return [(d, t, fl) for (d, t), fl in groups.items() if len(fl) > 1]
@@ -710,14 +720,18 @@ class MapDB:
                 t_room = self.get_room(tgt)
                 if t_room is None:               # destination not charted
                     continue
-                # Only co-render rooms in the SAME area as the center. A NULL-
-                # area neighbour (an overland border, or a not-yet-rated room)
-                # is NOT this area, so it's skipped - otherwise it draws on the
-                # map AND the BFS follows its exits back into the area, colliding
-                # with our own rooms. (When the center itself is overland,
-                # c_area is None and the whole filter is off.)
-                if same_area_only and c_area is not None \
-                        and t_room["area_id"] != c_area:
+                # Only co-render rooms in the SAME area as the center, and
+                # NULL counts as an area in its own right - it is not "no
+                # filter". A new area is a new map: a room one step over a
+                # boundary is not drawn here at all.
+                #
+                # This used to place foreign rooms anyway "for border
+                # visibility" whenever the center was overland (c_area None).
+                # That merged them: from Forest #741, `742 -w-> 3642
+                # [A forest trail]` and `740 -n-> 7501 [The Old Hermit]` both
+                # resolve to cell (-1,-1), so two rooms in two DIFFERENT areas
+                # were drawn as one and handed reciprocal exits.
+                if same_area_only and t_room["area_id"] != c_area:
                     continue
                 nx, ny = x + off[0], y + off[1]
                 if radius is not None and (abs(nx) > radius
@@ -733,15 +747,6 @@ class MapDB:
                     continue
                 grid[(nx, ny)] = tgt
                 placed[tgt] = (nx, ny)
-                # A foreign-area room reached from an overland center (the
-                # filter above let it through for border visibility) is
-                # placed so the connection shows, but the BFS must not then
-                # walk on INTO that area - otherwise its whole interior (and
-                # every one of its open stubs) bleeds onto the overland pane,
-                # which is what's actually unexplored ground for THAT area,
-                # not this one.
-                if c_area is None and t_room["area_id"] is not None:
-                    continue
                 q.append(tgt)
         return grid, collisions
 
@@ -983,6 +988,19 @@ def _selftest():
         assert gscope.get((1, 0)) == 101, gscope
         assert 102 not in gscope.values(), "overland border must not draw"
         assert 103 not in gscope.values(), "foreign room must not draw"
+        # ...and symmetrically, standing IN an unrated/overland room, a named
+        # area one step away is a different map and must not be drawn here.
+        # Two such neighbours used to land in one cell and be merged.
+        db.upsert_room(104, "overland b")               # area_id NULL
+        db.upsert_room(105, "other area", area_id=other)
+        db.link_exit(102, "e", 104)
+        db.link_exit(102, "w", 103)        # into a named area
+        db.link_exit(102, "n", 105)        # into another named area
+        gover, _ = db.neighborhood(102, radius=3)
+        assert gover.get((1, 0)) == 104, gover
+        assert 103 not in gover.values(), "named area must not draw on overland"
+        assert 105 not in gover.values(), "nor a second one"
+        assert 100 not in gover.values(), "nor the area room we came from"
         # center is always placed, even for an uncharted current room
         g2, c2 = db.neighborhood(987654)
         assert g2 == {(0, 0): 987654} and c2 == set()
