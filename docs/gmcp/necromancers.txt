@@ -1,0 +1,197 @@
+Necromancer GMCP feed (3s)
+==========================
+
+Capture: logs/gmcp_20260903_172942.log (895 packets), against
+logs/mip_20260903_172943.log and the interleaved session log
+logs/dru-20260903.log. Character Dru, Reaper subguild.
+
+Necros are the first guild ported that had NO guild MIP tag at all. Their
+data rode the mud-wide FFF feed plus THREE TYPED READOUTS the player had to
+ask for - `powers`, `gs` and `inv`. So nothing here enters GMCP_SUPERSEDES;
+the port is additive by construction, and what it retires is the typing.
+
+
+What arrives
+------------
+
+Ten packages. FOUR ARE UNDECLARED - Core.Supported listed only
+Guild.Extra, Guild.Info and Guild.State for this character, yet
+Guild.Powers, Guild.Combat, Guild.Undead and Guild.Kills all streamed.
+Same lesson as the eight Viking Guild.* packages: Core.Supported is a
+floor, not the surface.
+
+  Char.Vitals   399   hp/sp/maxhp/maxsp/enc/qp + necro coffin, coffin_max
+  Char.Combat   233   the empty-snapshot fight-over signal
+  Guild.State   144   repower_pct, np, hp_gain, globes_freeing, reagents
+  Guild.Powers   20   PAGINATED - the memorized table, live
+  Guild.Combat    8   enemy, enemy_condition
+  Guild.Info      5   circle_pct
+  Guild.Undead    1   corpses
+  Guild.Kills     1   kill history
+  Guild.Extra     0   subscribed, NEVER FIRES
+
+`guild` is "necromancer", singular, as GMCP_GUILD_POOLS expects.
+
+
+Guild.Powers - the prize
+------------------------
+
+Paginated, 4 pages: page 1 carries the scalars and no rows, pages 2..n
+carry `memorized` rows of {name, amount, tier}. `amount` is remaining uses
+(the number the player tracks); `tier` is the globe cost per use, equal to
+the `(n)` the powers table prints for all 25 powers - verified, unused.
+
+Buffered until the last page lands. _necro_powers_apply reads a power's
+ABSENCE as "depleted to 0", so publishing a half-arrived sweep would zero
+every power not yet sent.
+
+FIVE COMPLETE SWEEPS in the capture while `powers` was typed only TWICE -
+so three arrived unprompted, at a dead-regular 4 repower_pct ticks apart.
+All five carried all 25 powers, and the last agrees with the `powers` table
+the player typed at the end of the session, 25/25. test_necro_gmcp replays
+both.
+
+NO TRUNCATION. This was the expected risk - Guild.State cuts elementals at
+32 of 48 fields on an alphabetical page boundary, and NECRO_POWERS has 34
+entries - but powers do not ride Guild.State. Pagination is the Viking
+sweep shape, not the elemental truncation shape.
+
+
+Why POWER_FIRE was deleted, not kept
+------------------------------------
+
+necro.POWER_FIRE mapped a cast's message to a power and subtracted ONE. It
+existed only because there was no live feed. It is now deleted, and the
+reason is correctness, not tidiness.
+
+A power has MANY rotating flavour messages, and POWER_FIRE knew one.
+`dream` fired nine times in the capture, across four distinct lines, and
+the user supplied a fifth the capture did not contain:
+
+  3  (VI)You grasp the earth with your skeletal talon and heal yourself.
+  3  (VI)Silvery strands of mystic darkness sooth your soul.
+  2  (VI)Red shadows of darkness dance around your soul, reviving it.
+  1  (VI)Mystic shadows of death and darkness heal your mind and body.
+  -  (VI)You make contact with the darkness and heal yourself.
+
+Nine lines, and the sweeps show nine uses (dream 890 -> 888 -> 886 -> 883
+-> 881). So the rate IS one use per line here - but POWER_FIRE held only
+the fourth message, so it would have logged 1 of 9. The variant set is
+open-ended; collecting it by hand was never going to converge.
+
+THE `(VI)` PREFIX (user, 2026-09-03: "see the pattern?"). Every dream
+message carries it, and it is the only stable thing about them. In the
+whole session there are exactly NINE `(VI)` lines, all dream, matching the
+nine uses 1:1, and no other roman-numeral prefix appears anywhere.
+
+So a prefix match WOULD be a reliable dream detector where the prose never
+could be. It is still not worth building: Guild.Powers is exact for all 25,
+and an estimator shadowing an authoritative feed can only disagree with it.
+And critically, `(VI)` does NOT generalise - drain's line carries no prefix
+at all ("The energized mist returns to you with a revival of life energy!"),
+so the pattern misses the one power the player most needs accurate.
+
+What `VI` MEANS is unknown. It is not the globe cost (dream is tier 3) and
+not the number of usages spent (nine lines, nine uses).
+
+(An earlier draft of this file blamed the undercount on multi-use casts.
+That was wrong for this capture; the four-message split is the actual
+cause. The multi-use mechanic below is real and independently breaks a
+subtract-one estimator, but it is not what happened here.)
+
+GAME FACT (user, 2026-09-03): `dream` takes a count of trailing z's -
+`dream zz` consumes two usages on one line - and the higher your tier the
+more you can spend at once. It also appears to clamp to what you need.
+
+So maintaining POWER_FIRE means hand-collecting every flavour message for
+every power AND solving the multi-use problem. That is the treadmill
+Guild.Powers removes: it reports all 25 exactly, unprompted.
+
+drain fired once and moved 868 -> 867, so the estimator was 1:1 there - but
+that is a single sample, its full message set is UNKNOWN, and whether drain
+accepts the same z-suffix is UNCONFIRMED.
+
+The player's priority (2026-09-03) is drain, not dream: running out of
+dream costs attack frequency, running out of drain is probably death. That
+argues FOR the deletion. Guild.Powers reports all 25 exactly and
+unprompted, so `Track drain 30` now has a count it can trust between
+readouts, which it never did before.
+
+
+Guild.State
+-----------
+
+A delta feed - most packets carry one or two fields - so every read is
+conditional and nothing is cleared by absence.
+
+  repower_pct     WIRE-CONFIRMED to be the prompt's r%. Session log line
+                  667 sends repower_pct 47; the prompt at line 718 reads
+                  Status[w125%|pON|vON|r47%]. It is also the `powers`
+                  screen's "N will free in X%". Feeds self.vars["reset"],
+                  live, instead of only when a prompt happens to print.
+  np              -> gp1, same as the text prompt's NP[]. No maximum is
+                  sent; the prompt remains the source for npmax.
+  globes_freeing  the "N will free" count. Observed, not consumed.
+  hp_gain         per-tick hp delta, ranging -130..+55. UNCONSUMED - its
+                  purpose is not established.
+  reagents        all eight, ONE packet in the capture. Keys are singular
+                  and underscored where `gs` prints them plural and spaced,
+                  so necro.GMCP_REAGENTS maps them explicitly rather than by
+                  a transform: spider_web -> "spider web" needs no plural,
+                  black_pearl -> "black pearls" does, and only a table tells
+                  them apart. Unknown keys are DROPPED, never guessed, so a
+                  mud-side rename shows as a missing reagent rather than a
+                  bogus tracker row. Deliberately NOT fed into the
+                  `Reagents` restock command: that clears its buffer, sends
+                  `gs` and buys target-have on a timer, so a second writer
+                  with an unknown trigger (ONE reagents packet in a 30-tick
+                  capture) could overwrite fresh counts with staler ones and
+                  spend the difference. `gs` stays its only source.
+
+
+Guild.Undead
+------------
+
+{corpses: N}, pushed on change. Matches the `inv` footer's trailing Nc and
+the prompt's NP[..|Nc]: the capture sent corpses 1 seconds after the Syrup
+Guard kill, against the player's own `Encumberance [368/2000|18%|  1c]`.
+
+GAME FACT (user, 2026-09-03): necros preserve corpses to make them
+lightweight and non-rotting, then consume them to restore hp/sp/np. The
+`inv` footer's last two lines are encumbrance and the carried-corpse count.
+
+
+Observed but NOT consumed
+-------------------------
+
+Filed the way gmcp_room_area and gmcp_exit_dests were - visible on the
+wire, no consumer, no handler. None of these was asked for.
+
+  Guild.Info.circle_pct   the string "209.25", DECREASING across all five
+                          packets (209.25, 209.21, 209.16, 209.11, 209.05).
+                          Over 100, sent as a string, and matches nothing in
+                          the prompt - not w125%, not Cr[]. UNEXPLAINED.
+                          gmcp_guild_info stays gated to elementals until it
+                          is understood.
+  Guild.Kills             {total, logged, kills:[{index, time, class, name}]}
+                          with a unix timestamp. One packet.
+  Guild.Combat            {enemy, enemy_condition}, and an empty snapshot at
+                          fight end. FFF already carries enemy.
+  Char.Vitals.coffin      coffin / coffin_max, both 0 all session.
+
+
+Not answered by this capture
+----------------------------
+
+  * Whether `drain` accepts the z-suffix multi-use that `dream` does, and
+    what its full set of flavour messages is.
+  * What `(VI)` means. It prefixes every dream message and nothing else in
+    the session - not per-message, not the globe cost, not the usage count.
+    If it is a per-power id, drain should carry its own numeral somewhere.
+  * What circle_pct measures, and why it decreases.
+  * What hp_gain is for.
+  * The sweep interval in wall-clock seconds. It is a dead-regular 4
+    repower_pct ticks, but the logs carry no timestamps and the session
+    length was not recorded.
+  * Guild.Extra never fired. Subscribed-but-silent, same shape as
+    Mud.Status and Merc.* - see port.md.

@@ -263,20 +263,51 @@ def format_status_bar(v):
     return out
 
 
-# --- power-firing lines (decrement remaining uses between `powers`) ----
-# Substring signature -> power. Decrement is an ESTIMATE between `powers`
-# readouts (which resync the truth), so pick a once-per-cast line. Seeded
-# from the user's drain/dream samples; extend as more powers are sampled.
-POWER_FIRE = {
-    "energized mist returns to you": "drain",
-    "shadows of death and darkness heal your mind and body": "dream",
+# --- GMCP (2026-09-03 capture, logs/gmcp_20260903_172942.log) ----------
+# Necros have no guild MIP tag - the readouts above are TYPED. GMCP sends
+# the same data unprompted, so these decoders retire those round-trips.
+#
+# Guild.State.reagents keys are singular and underscored, where the `gs`
+# screen prints them plural and spaced. Mapped explicitly rather than by a
+# transform: `spider_web`->`spider web` needs no plural, `black_pearl`->
+# `black pearls` does, and only a table can tell them apart.
+GMCP_REAGENTS = {
+    "ginseng": "ginseng",
+    "black_pearl": "black pearls",
+    "spider_web": "spider web",
+    "goldenrod": "goldenrod",
+    "mandrake": "mandrake",
+    "pine_needle": "pine needles",
+    "nightshade": "nightshade",
+    "bloodmoss": "bloodmoss",
 }
 
 
-def power_fired(line):
-    """Power whose fire-signature appears in this line, or None."""
-    low = line.lower()
-    for sig, power in POWER_FIRE.items():
-        if sig in low:
-            return power
-    return None
+def gmcp_reagents(data):
+    """Guild.State.reagents -> {gs-screen name: count}. Unknown wire keys are
+    dropped rather than guessed at, so a mud-side rename shows up as a
+    missing reagent, never as a bogus tracker entry."""
+    out = {}
+    if not isinstance(data, dict):
+        return out
+    for key, val in data.items():
+        name = GMCP_REAGENTS.get(key)
+        if name and isinstance(val, int):
+            out[name] = val
+    return out
+
+
+def gmcp_powers(rows):
+    """Guild.Powers.memorized rows -> {power: remaining_uses}.
+
+    `tier` is the globe cost per use, matching the `(n)` the powers table
+    prints - verified equal for all 25 powers in the capture - and is
+    dropped here because nothing consumes it yet."""
+    out = {}
+    for row in rows or ():
+        if not isinstance(row, dict):
+            continue
+        name, amt = row.get("name"), row.get("amount")
+        if isinstance(name, str) and isinstance(amt, int):
+            out[name.strip().lower()] = amt
+    return out

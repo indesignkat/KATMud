@@ -117,7 +117,71 @@ def _try_psummon(client, reason):
     _portal_open(client)
 
 
+def _age_guild(client):
+    """`evoke age` is a 3s ELEMENTAL ability. on_vitals is global, so without
+    this gate it would be sent by every character of every guild - the same
+    bug the portal gate below exists to prevent."""
+    return (str(getattr(client, "mud", "")).lower() == "3s"
+            and str(getattr(client, "guild", "")).lower() == "elementals")
+
+
+def evoke_age_rearm(client, _v=None):
+    """Fight over -> arm the once-per-fight evoke again.
+
+    A client hook, called from the GMCP Char.Combat empty snapshot - the
+    one explicit end-of-fight marker MIP never had.
+
+    GAME FACT (user, 2026-09-03): `evoke age` costs 1,000 LINK ENERGY -
+    against a balance of 162 MILLION, so a second cast in one fight is
+    effectively spam rather than waste. That inverts the usual caution: the
+    failure worth avoiding is MISSING a fight, not repeating one. Hence the
+    enemy-change re-arm below, which would be reckless for a genuinely
+    expensive ability.
+
+    Note link energy is the elementals' LETHAL-at-0 pool (see
+    elemental.info_lines), so this is cheap, not free. Deliberately NOT
+    gated on a link-energy floor: at the observed balance that guard would
+    never fire, and GMCP Guild.Info carries the live figure if it ever
+    needs adding.
+    """
+    client.vars["_age_armed"] = True
+
+
+def _try_evoke_age(client):
+    """ONE `evoke age` per fight, as early in it as possible.
+
+    Hung off in_combat rather than "did I attack", so it covers a fight you
+    did not start and one you are not tanking - in_combat is set from the
+    FFF enemy field either way.
+
+    ONE attempt, success or not (user's choice, 2026-09-03): a failed cast
+    is lost for that fight rather than retried. That needs no success signal
+    to stop it and so cannot spam, which a retry loop could if the mob
+    simply cannot be aged.
+    """
+    if not _age_guild(client) or not client.evoke_age_auto:
+        return
+    if not client.in_combat:
+        evoke_age_rearm(client)
+        return
+    # A DIFFERENT enemy means a different fight, even if in_combat never
+    # dropped in between - back-to-back aggro would otherwise leave the
+    # second fight un-aged. Safe to be eager here only because a redundant
+    # cast costs 1,000 link energy out of millions; see evoke_age_rearm.
+    enemy = str((client.vitals or {}).get("enemy") or "")
+    if enemy and enemy != client.vars.get("_age_enemy"):
+        client.vars["_age_enemy"] = enemy
+        evoke_age_rearm(client)
+    if not client.vars.get("_age_armed", True):
+        return
+    client.vars["_age_armed"] = False
+    client.write_local("[auto: evoke age]", "#aa88cc")
+    client.send_line("evoke age")   # deadman-respecting: NOT manual
+
+
 def on_vitals(client, v):
+    _try_evoke_age(client)
+
     if not _portal_guild(client):
         return                            # not a 3s bladesinger: no portals
     if not client.in_combat:

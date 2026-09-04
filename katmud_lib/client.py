@@ -31,8 +31,8 @@ from tkinter import font as tkfont
 from tkinter import simpledialog
 
 from . import (bard, blade, changeling, config, credentials, dialogs,
-               mapdata, mapparse, mapsql, mobdb, necro, paths, picker,
-               profiles, viking)
+               elemental, mapdata, mapparse, mapsql, mobdb, necro, paths,
+               picker, profiles, viking)
 from .protocol import (MudConnection, parse_composite,
                        strip_mip_colors, tag_to_style)
 from .widgets import MapPane, VitalsBar
@@ -227,6 +227,34 @@ class MudClient:
         self.gmcp_room_area = None
         self.gmcp_exit_dests = {}
         self._gmcp_superseded = set()   # MIP tags GMCP has taken over
+        # Vitals whose MAXIMUM GMCP has stated outright. FFF never sends
+        # maxima, so vitals_max is a high-water guess there - and some
+        # things take you OVER max (an elemental's 'evoke corpse drain'
+        # routinely does, sp 747 against a real max of 526), which
+        # ratchets that guess up and never comes back down. marten's
+        # stored seen_max sp was 1491 against 526, so the bar read ~35%
+        # at full. A stated max wins; the guess only fills the gap.
+        self._gmcp_max_keys = set()
+        self._elem_negation = None      # last NEG: coverage seen
+        self.elem_extra = {}            # merged GMCP Guild.Extra
+        self.elem_defs = {}             # merged GMCP Guild.State.defs
+        self.elem_info = {}             # merged GMCP Guild.Info
+        self.elem_score = {}            # scraped `guild score` / `skills`
+        self.elem_win = None            # detached Elemental Status panel
+        self.blade_win = None           # detached Bladesinger Status panel
+        self.blade_flags = {}           # prompt [CoCsBlMsRvFl] -> active effects
+        self.blade_skills = []          # ordered `skills` rows, for the panel
+        self.blade_total_spent = None
+        self._blade_skills_capture = None   # accumulator during a `skills` read
+        # #roomrefresh probe: monotonic time the request went out, and the
+        # Room.* packages that came back. None = no request outstanding.
+        # While it IS outstanding, gmcp_room_info reports and charts NOTHING
+        # (see there) - a solicited Room.Info is indistinguishable from a
+        # move, and charting one would lay a spurious edge.
+        self._room_refresh_at = None
+        self._room_refresh_seen = []
+        self._room_refresh_info_due = False
+        self._gmcp_supported = {}       # last Core.Supported, for #gmcpsub
         self.stat1 = ""
         self.stat2 = ""
         self.room_vnum = None
@@ -235,7 +263,18 @@ class MudClient:
         self.gmcpraw_buf = []
         self.markers_debug = False      # #markers: report italic/underline
                                         # lines (mob/player room markers)
-        self.viking_state = {}          # merged BBE feed (guild MIP)
+        self.viking_state = {}          # merged BBE feed (guild MIP+GMCP)
+        # The Viking feed also arrives on GMCP as structured JSON. Keys
+        # GMCP has delivered at least once are dropped from the MIP BBE
+        # packet - per-KEY supersession, because BBE is a single tag
+        # carrying every feed, so the usual whole-tag retirement in
+        # GMCP_SUPERSEDES cannot express it.
+        self._viking_gmcp_keys = set()  # BBE keys GMCP has taken over
+        self._viking_gmcp_rows = {}     # key -> {group: {identity: rec}}
+        self._viking_gmcp_sweep = {}    # package -> rows buffered mid-sweep
+        self._viking_map_dims = None    # (cols, rows) the cache was saved at
+        self._viking_map_saved = None   # last wall set written to disk
+        self._load_viking_map()
         self.vperf = False              # #vperf: time the BBE hot path
         self.vperf_stats = {}           # rolling window accumulator
         self.viking_win = None
@@ -282,6 +321,7 @@ class MudClient:
         self.tracked = {}
         self.necro_counts = {}
         self._necro_powers_capture = None   # accumulator during a `powers` read
+        self._necro_gmcp_sweep = None       # accumulator during a Guild.Powers sweep
         self._necro_auto_last = {}          # auto-command cooldown timestamps
         # `Reagents` restock: while _reagents_target is set we capture the
         # fresh `gs` reagent counts, then buy each up to the target.
@@ -787,6 +827,7 @@ class MudClient:
         # inheriting stale entries (e.g. blade's iron runes leaking onto necro).
         self.tracked = dict(self.setting(self._tracked_key(), {}) or {})
         self.necro_guard = bool(self.setting("necro_guard", True))
+        self.evoke_age_auto = bool(self.setting("evoke_age_auto", True))
         # OFF by default. Negotiating GMCP coincided with MIP going silent
         # once (2026-08-30); cause still unproven, so this stays opt-in.
         self.gmcp_on = bool(self.setting("gmcp", False))
@@ -864,6 +905,12 @@ class MudClient:
         if self.guild.lower() == "vikings":
             m_tools.add_command(label="Viking Status...",
                                 command=self.open_viking_status)
+        if self.guild.lower() == "elementals":
+            m_tools.add_command(label="Elemental Status...",
+                                command=self.open_elemental_status)
+        if self.guild.lower() == "bladesingers":
+            m_tools.add_command(label="Bladesinger Status...",
+                                command=self.open_bladesinger_status)
         m_tools.add_separator()
         m_tools.add_command(label="Reload cascade",
                             command=self.reload_cascade)
@@ -1014,6 +1061,7 @@ class MudClient:
                 f"Available: {avail}", "#cc6666")
             return
         self.guild = canonical
+        self._load_viking_map()         # no-op unless swapping TO vikings
         self.cascade.guild = canonical
         self.cascade.reload()
         self.load_layers()
@@ -1381,6 +1429,11 @@ class MudClient:
                 self.update_info()
         elif clean.startswith("[") and "] [" in clean:
             self.stat1 = clean.strip(); changed = True
+            if self.guild.lower() == "bladesingers":
+                flags = blade.parse_flags(clean)
+                if flags is not None and flags != self.blade_flags:
+                    self.blade_flags = flags
+                    self.update_info()
         elif clean.startswith("G2N:"):
             self.stat2 = clean.strip(); changed = True
         elif clean.startswith("HP:"):
@@ -1457,6 +1510,24 @@ class MudClient:
         self.password_sent = False
         self._logged_in = False
         self.guild_login_sent = False
+        # Supersession is per-CONNECTION. It is established by a package's
+        # first packet, so it must not survive into a connection that may
+        # never negotiate GMCP at all - a reconnect where the mud does not
+        # offer option 201 would otherwise keep MIP's chat, room and exit
+        # tags retired with nothing replacing them, silently (observed
+        # 2026-08-31: DDD stayed superseded across a reconnect and every
+        # room packet was dropped unread).
+        self._gmcp_superseded = set()
+        # Per-KEY Viking supersession is per-connection for the same reason,
+        # and the buffers behind it are too: a sweep half-collected when the
+        # link dropped must not be completed by the next connection's pages.
+        self._viking_gmcp_keys = set()
+        self._viking_gmcp_rows = {}
+        self._viking_gmcp_sweep = {}
+        # A stated maximum is only authoritative while GMCP is actually
+        # running: a reconnect that never negotiates it must fall back to
+        # the high-water guess rather than freeze on a stale number.
+        self._gmcp_max_keys = set()
         # Read fresh every connect: telnet options are negotiated once, at
         # connect, so `Toggle gmcp` only takes effect here. Both transports
         # then run at the same time (see TelnetFilter and docs/gmcp/port.md);
@@ -2551,6 +2622,9 @@ class MudClient:
         if self.guild.lower() == "bladesingers":
             reg["blur"] = ("auto-blur before reset wastes charges",
                            self.blur_auto, self._toggle_blurauto)
+        if self.guild.lower() == "elementals":
+            reg["evokeage"] = ("one `evoke age` per fight",
+                               self.evoke_age_auto, self._toggle_evoke_age)
         for name in sorted(set(self.trigger_toggle_of.values())):
             pats = [p for p, n in self.trigger_toggle_of.items()
                     if n == name]
@@ -2608,6 +2682,13 @@ class MudClient:
         self.write_local(
             f"[necroguard {'on' if self.necro_guard else 'off'}"
             " - auto con/protection/veil]", "#44aaff")
+
+    def _toggle_evoke_age(self):
+        self.evoke_age_auto = not self.evoke_age_auto
+        self.set_setting("evoke_age_auto", self.evoke_age_auto)
+        self.write_local(
+            f"[evokeage {'on' if self.evoke_age_auto else 'off'}"
+            " - one `evoke age` per fight]", "#44aaff")
 
     def _toggle_blurauto(self):
         self.blur_auto = not self.blur_auto
@@ -5083,7 +5164,21 @@ class MudClient:
                 f"pkwait={self._chaossea_post_kill_wait} "
                 f"loot={self._chaossea_pending_loot} "
                 f"wr={self._chaossea_waiting_room} "
-                f"rr={self._chaossea_room_ready}", "#888888")
+                f"rr={self._chaossea_room_ready} "
+                # charting routes DDD to sql_reconcile_chart INSTEAD of
+                # sql_follow_ddd, and only sql_follow_ddd calls
+                # _chaossea_on_room_packet - so with charting on the bot
+                # never learns the room displayed, rr stays False forever
+                # and the tick re-glances every safety window.
+                f"charting={self._sql_charting} "
+                f"skip_ddds={self._chaossea_skip_ddds} "
+                f"got_ddd={self._chaossea_got_ddd} "
+                # The two remaining ways a good DDD never reaches the bot:
+                # mip_exits only calls _chaossea_on_room_packet on the
+                # sqlite branch, and a superseded tag is dropped before any
+                # handler runs at all.
+                f"backend={self.map_backend} "
+                f"superseded={sorted(self._gmcp_superseded)}", "#888888")
         if not (self.conn and self.conn.alive):
             self._chaossea_stop("disconnected"); return
         if self.deadman_tripped:
@@ -5190,6 +5285,13 @@ class MudClient:
                 f"done={self._chaossea_room_done} "
                 f"idx={self._chaossea_mob_idx}/{self._chaossea_room_mobs} "
                 f"exits={self.exits}", "#888888")
+            # WHICH lines were counted as mutants, not just how many - a
+            # friendly that renders in the mob slot (own warband, merc)
+            # inflates the count, and every whiffed `kill mutant` ends in a
+            # rescan-and-glance, which is what glance spam looks like.
+            self.write_local(
+                "[cs-mobs] " + " | ".join(self._chaossea_mob_lines
+                                          or ["(none)"]), "#888888")
         if self._chaossea_pre_move_room is not None:
             unchanged = not self._chaossea_got_ddd
             self._chaossea_pre_move_room = None
@@ -6736,6 +6838,8 @@ class MudClient:
                             self.blade_scan_line(clean)
                         elif self.guild.lower() == "changelings":
                             self.changeling_scan_line(clean)
+                        elif self.guild.lower() == "elementals":
+                            self.elemental_scan_line(clean)
                         elif self.guild.lower() == "vikings":
                             self.viking_scan_line(clean)
                             self._vtradeprices_scan_line(clean)
@@ -6863,7 +6967,15 @@ class MudClient:
     GMCP_SUPERSEDES = {
         "Comm.Channel.Text": ("CAA", "BAB", "BAG"),
         "Mud.Status": ("AAF", "AAC"),
-        "Room.Info": ("BAD", "DDD"),
+        # BAD only, NOT DDD. Room.Info is a superset of both for MOVEMENT,
+        # but the mud sends NOTHING in reply to look/glance - and glance is
+        # the Bot/Chaossea room-refresh command, whose DDD reply is the only
+        # "the room displayed" signal those bots have. Superseding DDD threw
+        # that reply away unread: 2026-08-31, Chaossea sent 11 glances, 13
+        # DDDs were dropped, 1 Room.Info arrived (at login), room_ready never
+        # flipped and the bot glance-spammed until stopped, with the map
+        # losing its exit lines for the same reason. So DDD stays on MIP.
+        "Room.Info": ("BAD",),
     }
 
     # Guild.State field -> the vitals key it feeds, per guild. Keyed by the
@@ -6916,9 +7028,22 @@ class MudClient:
             data = json.loads(body) if body else None
         except ValueError:
             return
+        if self._room_refresh_at is not None and pkg.startswith("Room."):
+            ms = int((time.monotonic() - self._room_refresh_at) * 1000)
+            self._room_refresh_seen.append(pkg)
+            # The body matters as much as the arrival: Room.Contents and
+            # Room.Map have no gmcp_* handler, so nothing else would print
+            # them and the probe would answer "a packet came back" when the
+            # question is what is in it.
+            self.write_local(f"[roomrefresh +{ms}ms {pkg}] "
+                             + (body[:400] or "(no body)"), "#55aacc")
         handler = getattr(self, "gmcp_" + pkg.replace(".", "_").lower(), None)
         if handler:
             handler(data)
+            # Note this fires for a #roomrefresh reply too, so the first probe
+            # of a session hands BAD over to Room.Info. That is deliberate:
+            # the rule is "retire on real data, never on Core.Supported", and
+            # a reply IS real data - proof the package arrives.
             self._gmcp_take_over(pkg)
         self.call_hook("on_gmcp", pkg, data)
 
@@ -6929,6 +7054,29 @@ class MudClient:
         GMCP_SUPERSEDES). Surfaced so a missing package is visible."""
         if not isinstance(data, dict):
             return
+        # The whole surface, not just the superseded three. The warning below
+        # fires only for packages in GMCP_SUPERSEDES, so a login said nothing
+        # at all about Room.* - and the surface MOVES: the Aug 31 captures
+        # list 18 packages with no Guild.Settlement/Trade/Voyage/Fleet/
+        # Market/Livestock/City/Roster, yet all eight arrived on Sep 3. There
+        # is no substitute for reading the current one.
+        self._gmcp_supported = dict(data)
+        on = sorted(k for k, v in data.items() if v)
+        off = sorted(k for k, v in data.items() if not v)
+        if not on:
+            # 3s sends one all-zero Core.Supported at the password prompt and
+            # the real one after character login. Reporting the first in full
+            # announced "MIP keeps those feeds" a line before GMCP took them
+            # over - a false alarm, so say it briefly and wait for the real
+            # one. Still said out loud: an all-zero surface AFTER login would
+            # be a genuine fault and must not be silent.
+            self.write_local("[GMCP: nothing subscribed yet]", "#888888")
+            return
+        self.write_local("[GMCP subscribed: " + ", ".join(on) + "]",
+                         "#557755")
+        if off:
+            self.write_local("[GMCP offered but not subscribed: "
+                             + ", ".join(off) + "]", "#888888")
         want = set(self.GMCP_SUPERSEDES)
         missing = sorted(p for p in want if not data.get(p))
         if missing:
@@ -6948,6 +7096,77 @@ class MudClient:
         self.write_local("[GMCP now owns: " + ", ".join(sorted(new)) + "]",
                          "#557755")
 
+    # #roomrefresh probe. Room.Refresh is the one package the CLIENT sends
+    # (docs/gmcp/gmcp.txt): it re-sends Room.Info/Room.Contents/Room.Map for
+    # the room you are standing in, whether or not anything changed - a GMCP
+    # 'look'. Nothing about it has been seen on this wire yet, so this is a
+    # read-only probe, not a feature: it answers whether Room.Contents really
+    # comes back (port.md files it as entry-ONLY, which if wrong retires the
+    # whole glance apparatus), how long the round trip is, and whether a
+    # rate-limited request is dropped in silence.
+    ROOM_REFRESH_PKGS = {"info": "Room.Info", "contents": "Room.Contents",
+                         "map": "Room.Map"}
+    # Long enough for any plausible round trip, short enough that the
+    # no-charting window (see gmcp_room_info) barely outlives the request.
+    # Closed by tick(), so the real window is this plus up to a second.
+    ROOM_REFRESH_TIMEOUT = 2.0
+
+    def cmd_roomrefresh(self, arg):
+        """#roomrefresh [info|contents|map ...] - ask for the Room packages
+        again and report what comes back, with latency. Charts nothing."""
+        if not (self.conn and self.conn.alive):
+            self.write_local("#roomrefresh: not connected.", "#cc6666")
+            return
+        if not self.gmcp_on:
+            self.write_local("#roomrefresh: GMCP is off - 'Toggle gmcp', "
+                             "then reconnect.", "#cc6666")
+            return
+        want = []
+        for word in arg.replace(",", " ").split():
+            key = word.strip().lower()
+            if key.startswith("room."):
+                key = key[5:]
+            pkg = self.ROOM_REFRESH_PKGS.get(key)
+            if not pkg:
+                self.write_local("#roomrefresh: unknown package %r - use "
+                                 "info, contents or map." % word, "#cc6666")
+                return
+            want.append(pkg)
+        if self._room_refresh_at is not None:
+            self._room_refresh_expire(force=True)
+        payload = "Room.Refresh"
+        if want:
+            payload += " " + json.dumps({"packages": want})
+        self._room_refresh_at = time.monotonic()
+        self._room_refresh_seen = []
+        self._room_refresh_info_due = not want or "Room.Info" in want
+        if not self.conn.send_gmcp(payload):
+            self._room_refresh_at = None
+            self._room_refresh_info_due = False
+            self.write_local("#roomrefresh: send failed.", "#cc6666")
+            return
+        self.write_local("[roomrefresh sent: " + payload + "]", "#55aacc")
+
+    def _room_refresh_expire(self, force=False):
+        """Close the probe window and report. Called every tick; the
+        no-reply case is the point, since that is what a dropped
+        rate-limited request looks like."""
+        if self._room_refresh_at is None:
+            return
+        if not force and (time.monotonic() - self._room_refresh_at
+                          < self.ROOM_REFRESH_TIMEOUT):
+            return
+        seen, self._room_refresh_seen = self._room_refresh_seen, []
+        self._room_refresh_at = None
+        self._room_refresh_info_due = False
+        if seen:
+            self.write_local("[roomrefresh: replied with " + ", ".join(seen)
+                             + "]", "#55aacc")
+        else:
+            self.write_local("[roomrefresh: NO reply within %gs - dropped "
+                             "silently]" % self.ROOM_REFRESH_TIMEOUT,
+                             "#cc9933")
+
     def gmcp_char_vitals(self, data):
         """hp/sp and encumbrance. ADDITIVE - FFF still owns everything else,
         so this only sharpens what FFF already writes. The win beyond enc is
@@ -6963,9 +7182,14 @@ class MudClient:
                 upd[key] = v
         for src, dst in (("maxhp", "hp"), ("maxsp", "sp")):
             v = data.get(src)
-            if isinstance(v, (int, float)) and self.vitals_max.get(dst) != v:
-                self.vitals_max[dst] = v
-                dirty = True
+            if isinstance(v, (int, float)):
+                # Record it as STATED even when unchanged - that is what
+                # stops the high-water guess raising it again on the next
+                # overmax reading.
+                self._gmcp_max_keys.add(dst)
+                if self.vitals_max.get(dst) != v:
+                    self.vitals_max[dst] = v
+                    dirty = True
         if upd:
             self.vitals.update(upd)
         if dirty:
@@ -7057,14 +7281,34 @@ class MudClient:
         self.gmcp_exit_dests = {d: v for d, v in exits.items()
                                 if isinstance(v, int) and v}
 
+        if self._room_refresh_info_due:
+            # Solicited by #roomrefresh. The chart path rests on "a Room.Info
+            # means you moved, full stop" (docs/gmcp/port.md), and a refresh
+            # reply carries no field saying otherwise - feeding it to
+            # sql_on_bad could lay an edge from the previous room, or a
+            # self-loop. Cost of guessing wrong this way is one dropped room
+            # that the next move recovers; the other way it is map damage.
+            #
+            # Cleared by the FIRST Room.Info rather than by the window
+            # closing, so suppression lasts the round trip and not the full
+            # timeout: a real move inside the window loses BAD (superseded)
+            # as well as this, and two quick steps would lose both rooms.
+            self._room_refresh_info_due = False
+            self.write_local("[roomrefresh Room.Info num=%d %r area=%r "
+                             "exits=%s - NOT charted]"
+                             % (num, name, area,
+                                exits if exits else "{}"), "#55aacc")
+            return
+
         # sql_on_bad reads the biome flag straight off the string's prefix,
         # and decides whether to chart from it - so the prefix must survive.
         prefix = ("[%d]" % self.VIKING_BIOME_VNUM
                   if num in self.VIKING_COLLAPSED_VNUMS else "")
         bad = "%s%s (%s) [%d]~%d" % (prefix, name, ",".join(dirs), num, num)
-        ddd = "~".join(dirs + [str(num)])
+        # Only the half this package actually supersedes. The live MIP DDD
+        # still arrives and still drives sql_on_ddd - synthesizing one here
+        # too would run the follow/chart path twice for every move.
         self.mip_room(bad, None)        # dispatches to sql_on_bad on sqlite
-        self.mip_exits(ddd, None)       # dispatches to sql_on_ddd on sqlite
 
     def gmcp_guild_state(self, data):
         """Guild pools, and the blur/portal recharge at full precision.
@@ -7084,6 +7328,24 @@ class MudClient:
         the hpbar stays the source for those; this only sharpens the pct."""
         if not isinstance(data, dict):
             return
+        # Guild.State carries a THIRD shape for elementals: `defs`, the
+        # defensive states (dissipate/barrier/siphon/diffuse/wave/engulf/
+        # eshield). A delta like the rest, so merge.
+        defs = data.get("defs")
+        if isinstance(defs, dict) and self.guild.lower() == "elementals":
+            self.elem_defs.update(defs)
+            self.update_info()
+            self._refresh_elem_win()
+        # Necromancers ride Guild.State too, with their own field names.
+        # repower_pct is WIRE-CONFIRMED to be the prompt's r% (capture
+        # 2026-09-03: repower_pct 47 at log line 667, the prompt at line 718
+        # reads r47%), so it feeds the same self.vars["reset"] - but live,
+        # instead of only when the player happens to see a prompt.
+        if self.guild.lower() == "necromancers":
+            self._necro_gmcp_state(data)
+        # Guild.State is also the Viking STFX carrier (fx.stfx), so it goes
+        # through the viking path too - which no-ops for every other guild.
+        self._viking_gmcp("Guild.State", data)
         pools = self.GMCP_GUILD_POOLS.get(str(data.get("guild") or "").lower())
         if pools:
             upd = {}
@@ -7103,6 +7365,214 @@ class MudClient:
             v = data.get(src)
             if isinstance(v, (int, float)):
                 setattr(self, attr, float(v))
+
+    # --- Viking guild feed over GMCP -----------------------------------
+    # Undeclared and undocumented: none of these packages appears in
+    # Core.Supported or gmcp.txt, but all of them stream (captured
+    # 2026-09-03). They carry the same feeds as MIP's BBE tag, as JSON.
+    # viking.gmcp_bbe_* rebuilds the BBE strings the tabs already parse -
+    # see the SYNTHESIZE, DON'T REIMPLEMENT note there - so the renderers
+    # are untouched and only the keys GMCP can supply LOSSLESSLY move.
+    def gmcp_guild_extra(self, data):
+        """Elemental ability state: charges, resolve/prism damage types,
+        the equipollent toggle and the panic settings.
+
+        A DELTA feed - `full: 1` marks a snapshot and later packets carry
+        only what changed (94 full against 94 in one capture), so merge,
+        never replace. Half the package's traffic is a mud-side debug
+        stub, `{"full": 1, "guild": "elemental", "test": "test"}`, which
+        must not land in the state."""
+        if not isinstance(data, dict) or self.guild.lower() != "elementals":
+            return
+        upd = {k: v for k, v in data.items()
+               if k not in elemental.EXTRA_SKIP}
+        if not upd:
+            return
+        self.elem_extra.update(upd)
+        self.update_info()
+        self._refresh_elem_win()
+
+    def gmcp_guild_info(self, data):
+        """Elemental guild energy. Only link_energy is rendered - it is a
+        second death condition (see elemental.info_lines); the rest is
+        currency bookkeeping. Vikings send Guild.Info too, as
+        {guild, age}, hence the guild gate."""
+        if not isinstance(data, dict) or self.guild.lower() != "elementals":
+            return
+        upd = {k: v for k, v in data.items()
+               if k not in elemental.EXTRA_SKIP}
+        if not upd:
+            return
+        self.elem_info.update(upd)
+        self.update_info()
+        self._refresh_elem_win()
+
+    # --- Necromancer guild feed over GMCP ------------------------------
+    # Undeclared, like the Viking packages: Core.Supported lists only
+    # Guild.Extra/Info/State for a necro, yet Guild.Powers, Guild.Combat,
+    # Guild.Undead and Guild.Kills all stream (capture 2026-09-03). Nothing
+    # here is superseded - necros have NO guild MIP tag, so this is additive
+    # by construction. What it retires is the TYPED round-trips: `powers`,
+    # the `gs` reagent counts and the `inv` corpse count.
+    def _necro_gmcp_state(self, data):
+        """Guild.State for necromancers: the repower cycle, NP and reagents.
+
+        A delta feed - most packets carry one or two fields - so every read
+        is conditional and nothing is cleared by absence."""
+        pct = data.get("repower_pct")
+        if isinstance(pct, int):
+            self.vars["reset"] = pct
+            # No _necro_autostatus() here: repower_pct cannot change worth,
+            # protection or veil, so the auto-commands have nothing to act
+            # on. The prompt and hpbar paths stay their only triggers.
+            self.necro_status = necro.format_status_bar(self.vars)
+            self.show_status()
+            self.update_info()
+        np = data.get("np")
+        if isinstance(np, int):
+            self.vitals["gp1"] = np
+            if np > self.vitals_max.get("gp1", 0):
+                self.vitals_max["gp1"] = np
+                self._maxes_dirty = True
+            self.update_vitals()
+        reagents = necro.gmcp_reagents(data.get("reagents"))
+        if reagents:
+            changed = False
+            for name, val in reagents.items():
+                if self.necro_counts.get(name) != val:
+                    self.necro_counts[name] = val
+                    if name in self.tracked:
+                        changed = True
+            # Deliberately NOT fed into the `Reagents` restock. That
+            # command clears _reagents_have, sends `gs` and buys
+            # target-have on a timer; a second writer whose trigger is
+            # unknown (ONE reagents packet in a 30-tick capture) could
+            # overwrite the fresh gs counts with staler ones and spend
+            # money on the difference. `gs` stays its only source.
+            if changed:
+                self.update_info()
+
+    def gmcp_guild_powers(self, data):
+        """Memorized powers, live - the whole point of this port.
+
+        PAGINATED (4 pages in the capture), same shape as the Viking sweeps:
+        page 1 carries the scalars and no rows, pages 2..n carry the rows.
+        Buffered and published only when the last page lands, because
+        _necro_powers_apply reads absence as "depleted to 0" - so a
+        half-arrived sweep would zero every power not yet sent.
+
+        Sweeps arrive unprompted every 4 repower_pct ticks (5 sweeps in the
+        capture, `powers` typed only twice), and they track casts: `dream`
+        ran 890 -> 888 -> 886 -> 883 -> 881 across them. That is what
+        replaced the per-cast POWER_FIRE estimator, which only ever covered
+        drain and dream and is now deleted."""
+        if not isinstance(data, dict) or self.guild.lower() != "necromancers":
+            return
+        page, pages = data.get("page"), data.get("pages")
+        if not isinstance(page, int) or not isinstance(pages, int):
+            return
+        if page == 1:
+            self._necro_gmcp_sweep = {}
+        if self._necro_gmcp_sweep is None:
+            return          # joined mid-sweep: wait for the next page 1
+        self._necro_gmcp_sweep.update(necro.gmcp_powers(data.get("memorized")))
+        if page >= pages:
+            cap = self._necro_gmcp_sweep
+            self._necro_gmcp_sweep = None
+            self._necro_powers_apply(cap)
+
+    def gmcp_guild_undead(self, data):
+        """Corpses carried. The same number as the `inv` footer's trailing
+        `Nc` and the prompt's `NP[..|Nc]` (capture: Guild.Undead corpses 1
+        against `Encumberance [368/2000|18%|  1c]`), but pushed on change
+        instead of waiting for the player to type `inv`."""
+        if not isinstance(data, dict) or self.guild.lower() != "necromancers":
+            return
+        n = data.get("corpses")
+        if isinstance(n, int) and self.necro_counts.get("corpses") != n:
+            self.necro_counts["corpses"] = n
+            self.vars["corpses"] = n
+            self.update_info()
+
+    def gmcp_guild_fleet(self, data):
+        self._viking_gmcp("Guild.Fleet", data)
+
+    def gmcp_guild_trade(self, data):
+        self._viking_gmcp("Guild.Trade", data)
+
+    def gmcp_guild_voyage(self, data):
+        self._viking_gmcp("Guild.Voyage", data)
+
+    def gmcp_guild_city(self, data):
+        self._viking_gmcp("Guild.City", data)
+
+    def gmcp_guild_settlement(self, data):
+        self._viking_gmcp("Guild.Settlement", data)
+
+    def gmcp_guild_livestock(self, data):
+        self._viking_gmcp("Guild.Livestock", data)
+
+    def gmcp_guild_roster(self, data):
+        self._viking_gmcp("Guild.Roster", data)
+
+    def _viking_gmcp(self, pkg, data):
+        """One Viking GMCP package -> synthesized BBE keys.
+
+        The list feeds are PAGINATED - `page` of `pages`, two or three
+        records each - so a sweep is buffered and published whole. Half-drawn
+        sweeps would make the Raids tab flicker between two ships and six
+        on every pass, and a sweep that never finishes must not half-replace
+        a key that MIP is no longer feeding."""
+        if not isinstance(data, dict) or self.guild.lower() != "vikings":
+            return
+        upd = viking.gmcp_bbe_values(pkg, data)
+        rows = viking.gmcp_bbe_rows(pkg, data)
+        page, pages = data.get("page"), data.get("pages")
+        if isinstance(page, int) and isinstance(pages, int) and pages > 1:
+            buf = self._viking_gmcp_sweep.get(pkg, {}) if page > 1 else {}
+            for key, rs in rows.items():
+                buf.setdefault(key, []).extend(rs)
+            if page < pages:
+                self._viking_gmcp_sweep[pkg] = buf
+                self._viking_gmcp_apply(upd)   # scalars need no sweep
+                return
+            self._viking_gmcp_sweep.pop(pkg, None)
+            rows = buf
+        for key, rs in rows.items():
+            store = self._viking_gmcp_rows.setdefault(key, {})
+            # Replace only the groups this sweep carried. SHIPS and ROUTES
+            # arrive whole (group ""), so the sweep replaces the key; the
+            # livestock market arrives ONE LINEAGE at a time, so replacing
+            # everything would leave LMARKET holding a single lineage.
+            for group in {g for g, _i, _r in rs}:
+                store[group] = {}
+            for group, ident, rec in rs:
+                store[group][ident] = rec
+            upd[key] = viking.join_rows(key, store)
+        self._viking_gmcp_apply(upd)
+
+    def _viking_gmcp_apply(self, upd):
+        """Merge synthesized keys into viking_state exactly as mip_viking
+        would, and retire the MIP key on the first packet that carries it -
+        the same "retire on real data, never on a declaration" rule the
+        rest of the port uses."""
+        if not upd:
+            return
+        new = set(upd) - self._viking_gmcp_keys
+        if new:
+            self._viking_gmcp_keys |= new
+            self.write_local("[GMCP now owns viking " + ", ".join(sorted(new))
+                             + "]", "#557755")
+        self.viking_state.update(upd)
+        vit = viking.vitals_from_state(upd)
+        if vit:
+            self.vitals.update(vit)
+            self.update_vitals()
+        if "STFX" in upd or "DALER" in upd:
+            self.viking_spells = viking.active_spells(self.viking_state)
+            self.show_status()
+        if self.viking_win is not None and self.viking_win.winfo_exists():
+            self.viking_win.update_state(self.viking_state, upd)
 
     def gmcp_char_combat(self, data):
         """Char.Combat ends every fight with one empty snapshot (attacker "",
@@ -7125,8 +7595,11 @@ class MudClient:
         is that a psummon is delayed by a few rounds, never wrongly fired."""
         if not isinstance(data, dict):
             return
-        if not str(data.get("attacker") or "") and self.rounds:
-            self.rounds = 0
+        if not str(data.get("attacker") or ""):
+            # Same snapshot re-arms the elementals' once-per-fight evoke.
+            self.call_hook("evoke_age_rearm")
+            if self.rounds:
+                self.rounds = 0
 
     def gmcp_mud_status(self, data):
         """Replaces AAF (uptime) and AAC (reboot eta). MIP sent these
@@ -7278,10 +7751,7 @@ class MudClient:
                 upd["gp2max"] = 100.0
             upd.pop("gp1max", None)
         self.vitals.update(upd)
-        for f in ("hp", "sp", "gp1", "gp2"):
-            if f in upd and upd[f] > self.vitals_max.get(f, 0):
-                self.vitals_max[f] = upd[f]
-                self._maxes_dirty = True
+        self._raise_seen_max(upd)
         if self.guild.lower() == "necromancers" and "gp2" in upd:
             # 3k necros have no 2nd guild pool; the FFF G field (parsed as gp2)
             # carries the guild RESET % instead. 3k sends no hpbar1 I-field
@@ -7300,6 +7770,8 @@ class MudClient:
             # inflating the NEXT fight's displayed/recorded round count
             # since it's never reset to 0 except by a kill-text match.
             if len(self.vitals.get("enemy", "") or "") > 1:
+                self._rounds_watch(upd["round"], "FFF round=%r" % (
+                    upd.get("round"),), data)
                 self.rounds = upd["round"]
                 self.in_combat = True
         if "enemy" in upd:
@@ -7540,15 +8012,28 @@ class MudClient:
         state dict and refresh the status window if it's open."""
         t_start = time.perf_counter() if self.vperf else 0.0
         upd = viking.parse_bbe(data)
+        if self._viking_gmcp_keys:
+            # base_key, because a long value arrives as SHIPS_1of3 and a
+            # plain-name test would let every piece through.
+            upd = {k: v for k, v in upd.items()
+                   if viking.base_key(k) not in self._viking_gmcp_keys}
         if not upd:
             return
         viking.reassemble_chunks(self.viking_state, upd)
         viking.accumulate_colony(self.viking_state, upd)
+        for k in [k for k in upd if k in self._viking_gmcp_keys]:
+            # reassemble_chunks emits a completed KEY into upd, so a push
+            # that was already in flight when GMCP took the key over would
+            # land here after the filter above.
+            upd.pop(k)
+        if not upd:
+            return
         if "LONGSHIP" in upd:
-            # The voyage fleet roster also spans several packets
-            # (2026-08-03); append chunks instead of last-chunk-wins.
+            # The voyage fleet roster spans several packets (2026-08-03)
+            # and the MUD rotates the order it pushes them in, so merge
+            # by ship id rather than appending chunks.
             upd["LONGSHIP"] = viking.merge_longship(
-                self.viking_state.get("LONGSHIP", ""), upd["LONGSHIP"])
+                self.viking_state, upd["LONGSHIP"])
         if "TGOODS" in upd:
             # TGOODS outgrew one packet (2026-07 trade expansion) and
             # arrives in pieces; merge by hold id, not last-chunk-wins.
@@ -7562,7 +8047,19 @@ class MudClient:
                 self.viking_state.get("VMAPL", ""), upd["VMAPL"])
         self.viking_state.update(upd)
         if "VMAPH" in upd:
+            # A grid the cache was not saved at means the map was redrawn;
+            # cached rows are indexed by row number and would be garbage, so
+            # drop every wall row and let the feed resend them.
+            cols, rows, _px, _py = viking.parse_vmaph(upd["VMAPH"])
+            if self._viking_map_dims not in (None, (cols, rows)):
+                for k in [k for k in self.viking_state
+                          if k[:3] in ("MEE", "MES")]:
+                    self.viking_state.pop(k, None)
+                self._viking_map_dims = self._viking_map_saved = None
             self._viking_pos_fire()
+        changed = {k: v for k, v in upd.items() if k[:3] in ("MEE", "MES")}
+        if changed:
+            self._save_viking_map(changed)
         vit = viking.vitals_from_state(upd)
         if vit:
             self.vitals.update(vit)
@@ -7661,6 +8158,76 @@ class MudClient:
                               setattr(self, "help_win", None)))
         self.help_win = win
 
+    def _refresh_elem_win(self):
+        if self.elem_win is not None and self.elem_win.winfo_exists():
+            self.elem_win.update_state(self.elem_score, self.elem_info,
+                                       self.elem_extra, self.elem_defs)
+
+    def open_elemental_status(self):
+        if self.elem_win is not None and self.elem_win.winfo_exists():
+            self.elem_win.deiconify()
+            self.elem_win.lift()
+            self._refresh_elem_win()
+            return
+        self.elem_win = elemental.ElementalStatus(
+            self.root,
+            fonts={"mono": self.small_font, "mono_bold": self.small_bold},
+            on_close=self._elem_closed,
+            geometry=self.profiles_data.get("settings", {}).get(
+                "elemental_geometry"),
+            topmost=self.profiles_data.get("settings", {}).get(
+                "elemental_topmost"))
+        self._refresh_elem_win()
+
+    def _elem_closed(self):
+        # _closed() calls this before destroy(), so geometry is still valid.
+        try:
+            if self.elem_win is not None and self.elem_win.winfo_exists():
+                st = self.profiles_data.setdefault("settings", {})
+                st["elemental_geometry"] = self.elem_win.geometry()
+                st["elemental_topmost"] = bool(
+                    self.elem_win.topmost_var.get())
+                profiles.save(self.profiles_data)
+        except (OSError, ValueError, tk.TclError):
+            pass
+        self.elem_win = None
+
+    def _refresh_blade_win(self):
+        if self.blade_win is not None and self.blade_win.winfo_exists():
+            self.blade_win.update_state(self.blade_skills,
+                                        self.blade_available,
+                                        self.blade_glvl,
+                                        self.blade_total_spent)
+
+    def open_bladesinger_status(self):
+        if self.blade_win is not None and self.blade_win.winfo_exists():
+            self.blade_win.deiconify()
+            self.blade_win.lift()
+            self._refresh_blade_win()
+            return
+        self.blade_win = blade.BladeStatus(
+            self.root,
+            fonts={"mono": self.small_font, "mono_bold": self.small_bold},
+            on_close=self._blade_closed,
+            geometry=self.profiles_data.get("settings", {}).get(
+                "bladesinger_geometry"),
+            topmost=self.profiles_data.get("settings", {}).get(
+                "bladesinger_topmost"))
+        self._refresh_blade_win()
+
+    def _blade_closed(self):
+        # _closed() calls this before destroy(), so geometry is still valid.
+        try:
+            if self.blade_win is not None and self.blade_win.winfo_exists():
+                st = self.profiles_data.setdefault("settings", {})
+                st["bladesinger_geometry"] = self.blade_win.geometry()
+                st["bladesinger_topmost"] = bool(
+                    self.blade_win.topmost_var.get())
+                profiles.save(self.profiles_data)
+        except (OSError, ValueError, tk.TclError):
+            pass
+        self.blade_win = None
+
     def open_viking_status(self):
         if self.viking_win is not None and \
                 self.viking_win.winfo_exists():
@@ -7675,7 +8242,9 @@ class MudClient:
             walk_cb=self.viking_walk_to,
             geometry=self.profiles_data.get("settings", {}).get(
                 "viking_geometry"),
-            hold_goods=self.setting("trade_hold_goods"))
+            hold_goods=self.setting("trade_hold_goods"),
+            topmost=self.profiles_data.get("settings", {}).get(
+                "viking_topmost"))
         self.viking_win.update_state(self.viking_state)
         if self.viking_skills:          # restore the last-read skill costs
             self.viking_win.set_vskills(self.viking_skills)
@@ -7690,6 +8259,7 @@ class MudClient:
                     self.viking_win.winfo_exists():
                 s = self.profiles_data.setdefault("settings", {})
                 s["viking_geometry"] = self.viking_win.geometry()
+                s["viking_topmost"] = bool(self.viking_win.topmost_var.get())
                 profiles.save(self.profiles_data)
         except tk.TclError:
             pass
@@ -7702,6 +8272,64 @@ class MudClient:
         self.viking_win = None
 
     # ------------------------------------------- viking map navigation
+    def _load_viking_map(self):
+        """Seed viking_state with the cached MEE/MES wall grid.
+
+        The grid is guild-wide and static, but arrives one row per BBE
+        packet, so for the first ~2 minutes of a session most of it is
+        missing - and a missing row reads as solid wall, which made `Go`
+        answer "no path to (37,7)" for Hafrfjord (2026-09-02). Seeding from
+        disk means the walls are there before the first packet; the live
+        feed then overwrites each row as it arrives through the ordinary
+        state.update path, so a redrawn map self-corrects within one sweep.
+
+        Only walls are cached. NOT VMAPL: merge_vmapl keys entries by
+        (type, name) and deliberately never resets, which is safe in memory
+        because the state dies at exit - on disk a renamed or moved village
+        would live in the file forever with no way to age out."""
+        if self.guild.lower() != "vikings":
+            return
+        data, err = paths.load_json(paths.viking_map_file(self.mud))
+        if err or not isinstance(data, dict):
+            return
+        cols, rows = data.get("cols"), data.get("rows")
+        if not (isinstance(cols, int) and isinstance(rows, int)):
+            return
+        walls = {k: v for k, v in data.items()
+                 if k[:3] in ("MEE", "MES") and isinstance(v, str) and v}
+        self._viking_map_dims = (cols, rows)
+        self._viking_map_saved = walls
+        self.viking_state.update(walls)
+
+    def _save_viking_map(self, changed):
+        """Write the wall grid once it is complete and differs from what we
+        loaded. Called from the BBE hot path with just the rows that arrived
+        in this packet, so the usual case - a row we already have on disk -
+        costs a couple of dict lookups and nothing else."""
+        if self._viking_map_saved is not None and all(
+                self._viking_map_saved.get(k) == v
+                for k, v in changed.items()):
+            return                      # nothing new since the last write
+        cols, rows, _px, _py = viking.parse_vmaph(
+            self.viking_state.get("VMAPH", ""))
+        if cols <= 0 or rows <= 0:
+            return
+        if viking.wall_rows_missing(self.viking_state, rows):
+            return
+        walls = viking.wall_rows(self.viking_state, rows)
+        if walls == self._viking_map_saved and                 self._viking_map_dims == (cols, rows):
+            return
+        data = {"cols": cols, "rows": rows}
+        data.update(walls)
+        try:
+            paths.save_json(paths.viking_map_file(self.mud), data)
+        except OSError as e:
+            self.write_local(f"[viking nav] map cache save failed: {e}",
+                             "#cc6666")
+            return
+        self._viking_map_dims = (cols, rows)
+        self._viking_map_saved = walls
+
     def _viking_after_position(self, cb, settle=0.2, timeout_ms=3000):
         """Run cb once a FRESH guild-map position has arrived: the next
         VMAPH packet at least `settle` seconds after arming (so a packet
@@ -7760,6 +8388,15 @@ class MudClient:
         if not (0 <= gx < cols and 0 <= gy < rows):
             self.write_local("[viking nav] target off the map.",
                              "#cc6666")
+            return
+        # An absent wall row reads as solid wall, so pathfinding a partial
+        # grid returns a confident, wrong "no path" (2026-09-02). With the
+        # cache seeded this only fires on a mud's very first session.
+        missing = viking.wall_rows_missing(self.viking_state, rows)
+        if missing:
+            self.write_local(f"[viking nav] guild map still loading "
+                             f"({missing} wall rows to go) - try again in "
+                             f"a moment.", "#cc9933")
             return
         moves = viking.pathfind(cols, rows, mee, mes, player, (gx, gy))
         if moves is None:
@@ -7869,7 +8506,9 @@ class MudClient:
         """`Track` lists tracked items; `Track <name> [low]` starts/updates
         one (low = highlight dim-red when the count drops below it). <name>
         may be multi-word (a reagent like 'black pearls'); a trailing
-        integer is the threshold. Counts come from `powers`/`gs` readouts."""
+        integer is the threshold. Necro counts come from GMCP (Guild.Powers
+        / Guild.State.reagents / Guild.Undead) when it is on, and from the
+        typed `powers`/`gs`/`inv` readouts otherwise."""
         blade_guild = self.guild.lower() == "bladesingers"
         bits = arg.split()
         if not bits:
@@ -8067,6 +8706,52 @@ class MudClient:
             self.write_local(f"[necroguard: {cmd}]", "#8888aa")
             self.send_line(cmd)
 
+    def _raise_seen_max(self, upd):
+        """Raise the high-water guess for any pool that just read higher
+        than we have seen - EXCEPT where GMCP has stated the real maximum,
+        which is authoritative. Overmax readings are normal (an
+        elemental's corpse drain), so without that exception every drain
+        would permanently inflate the bar's scale."""
+        for f in ("hp", "sp", "gp1", "gp2"):
+            if f in self._gmcp_max_keys:
+                continue
+            if f in upd and upd[f] > self.vitals_max.get(f, 0):
+                self.vitals_max[f] = upd[f]
+                self._maxes_dirty = True
+
+    def elemental_scan_line(self, clean):
+        """Watch the prompt's NEG: line for lapsed elemental negation.
+
+        Negation is the guild's endgame defence and it fails SILENTLY -
+        the prompt simply prints a shorter list. The line arrives on every
+        prompt (129 times in one captured session), so this reports only
+        on CHANGE; a steady state, healthy or not, stays quiet."""
+        if elemental.scrape_score(self.elem_score, clean):
+            # `guild score` / `skills` is the ONLY complete skill table:
+            # GMCP's Guild.State sweep truncates at 32 of 48 fields and
+            # omits Cohesion entirely.
+            self._refresh_elem_win()
+            return
+        active = elemental.parse_negation(clean)
+        if active is None:
+            return
+        gaps = elemental.negation_gaps(active)
+        if gaps == self._elem_negation:
+            return
+        # None is "not seen yet", which is NOT the same as "was fine":
+        # recovery is only worth announcing if a gap was actually
+        # reported, or the first healthy prompt of every session would
+        # claim to have fixed something.
+        prev = self._elem_negation
+        self._elem_negation = gaps
+        if gaps:
+            self.write_local("[negation DOWN against "
+                             + elemental.describe_gaps(gaps) + "]",
+                             "#cc3333")
+        elif prev:
+            self.write_local("[negation restored - all 10 types]",
+                             "#557755")
+
     def changeling_scan_line(self, clean):
         """Update changeling state from a text line: the status prompt (PP/ST
         carry Protoplasm=gp1 / Stamina=gp2, which the FFF feed mis-delivers -
@@ -8076,10 +8761,7 @@ class MudClient:
         upd = changeling.parse_prompt(clean)
         if upd:
             self.vitals.update(upd)
-            for f in ("hp", "sp", "gp1", "gp2"):
-                if f in upd and upd[f] > self.vitals_max.get(f, 0):
-                    self.vitals_max[f] = upd[f]
-                    self._maxes_dirty = True
+            self._raise_seen_max(upd)
             self.update_vitals()
             return
         rows = changeling.parse_forms_line(clean)
@@ -8096,6 +8778,24 @@ class MudClient:
         if bk is not None:
             self.changeling_best_kill = bk
 
+    def _necro_powers_apply(self, cap):
+        """A COMPLETE memorized-powers readout -> necro_counts.
+
+        Complete is the precondition: a power that has run dry drops out of
+        the table entirely, so absence is the only way 0 is ever reported.
+        Applied to tracked powers only, because `cap` cannot distinguish
+        "depleted" from "never memorized" for the other ~20."""
+        changed = False
+        for name in self.tracked:
+            if name in necro.NECRO_POWERS:       # depleted -> absent -> 0
+                new = cap.get(name, 0)
+                if self.necro_counts.get(name) != new:
+                    self.necro_counts[name] = new
+                    changed = True
+        self.necro_counts.update(cap)
+        if changed:
+            self.update_info()
+
     def necro_scan_line(self, clean):
         """Update necro state from a text line: the status prompt (vitals +
         Status fields + auto-commands), the `powers` table block (bracketed
@@ -8104,14 +8804,6 @@ class MudClient:
         when something relevant changed."""
         if necro.is_prompt(clean):
             self._necro_prompt(necro.parse_prompt(clean))
-            return
-        fired = necro.power_fired(clean)
-        if fired is not None:
-            cur = self.necro_counts.get(fired)
-            if cur is not None and cur > 0:      # only when we know the count
-                self.necro_counts[fired] = cur - 1
-                if fired in self.tracked:
-                    self.update_info()
             return
         inv = necro.parse_inv_line(clean)
         if inv:
@@ -8132,15 +8824,7 @@ class MudClient:
             if necro.POWERS_FOOTER in clean:
                 cap = self._necro_powers_capture
                 self._necro_powers_capture = None
-                for name, low in self.tracked.items():
-                    if name in necro.NECRO_POWERS:   # depleted -> absent -> 0
-                        new = cap.get(name, 0)
-                        if self.necro_counts.get(name) != new:
-                            self.necro_counts[name] = new
-                            changed = True
-                self.necro_counts.update(cap)
-                if changed:
-                    self.update_info()
+                self._necro_powers_apply(cap)
                 return
             self._necro_powers_capture.update(necro.parse_powers_line(clean))
             return
@@ -8158,6 +8842,21 @@ class MudClient:
         prompt G2N line. Keeps blade_skill_costs and a LIVE blade_available
         (spendable GXP) so a tracked skill can show GXP-still-needed."""
         refresh = False
+        # Ordered capture of the WHOLE `skills` tree for the detached panel.
+        # Bracketed by the readout's own header/footer, so a skill that
+        # drops out of a fresh read cannot linger from the previous one.
+        if blade.SKILLS_HEADER in clean:
+            self._blade_skills_capture = []
+        elif self._blade_skills_capture is not None:
+            if blade.SKILLS_FOOTER in clean:
+                self.blade_skills = self._blade_skills_capture
+                self._blade_skills_capture = None
+                self.blade_total_spent = blade.parse_total_spent(clean)
+                self._refresh_blade_win()
+            else:
+                row = blade.parse_skill_row(clean)
+                if row:
+                    self._blade_skills_capture.append(row)
         sk = blade.parse_skill_line(clean)
         if sk:
             name, cost = sk
@@ -8173,6 +8872,7 @@ class MudClient:
                 self.blade_glvl = got[0]
             if avail is not None and avail != self.blade_available:
                 self.blade_available = avail
+                self._refresh_blade_win()   # READY/need tracks live GXP
                 if self.tracked:
                     refresh = True
         else:
@@ -8810,6 +9510,7 @@ class MudClient:
 
     def tick(self):
         self._poll_webcmd()
+        self._room_refresh_expire()
         now = time.time()
         idle = now - self.last_sent
         manual_idle = now - self.last_manual
@@ -9236,6 +9937,35 @@ class MudClient:
                 return True
         return False
 
+    # TEMPORARY DIAGNOSTIC (2026-08-31) for the viking round-counter bug:
+    # rnd has been seen at ~27000 where a real fight is a few hundred. There
+    # are exactly two writers - the FFF assignment and the per-damage-line
+    # increment - and this says which one did it. A jump over JUMP cannot
+    # come from the increment (it moves by 1), so an alert naming FFF is the
+    # assignment misreading a field; one naming the damage line means the
+    # climb is gradual and the kill-text reset is not firing. Delete this
+    # method and its two callers once the bug is identified.
+    ROUNDS_WATCH_JUMP = 50
+    ROUNDS_WATCH_CEILING = 500
+
+    def _rounds_watch(self, new_value, source, raw):
+        try:
+            jump = abs(int(new_value) - int(self.rounds))
+        except (TypeError, ValueError):
+            jump = 0
+        if jump > self.ROUNDS_WATCH_JUMP or (
+                new_value and new_value % self.ROUNDS_WATCH_CEILING == 0):
+            self.write_local(
+                "[rounds] %s -> %s via %s | %r" % (
+                    self.rounds, new_value, source, raw), "#cc9933")
+            if self.log_file:
+                try:
+                    self.log_file.write(
+                        "ROUNDS %s -> %s via %s | %r\n" % (
+                            self.rounds, new_value, source, raw))
+                except (OSError, ValueError):
+                    pass
+
     def track_combat_line(self, clean):
         m = DAMAGE_RE.match(clean)
         if m:
@@ -9248,6 +9978,7 @@ class MudClient:
             d["hits"] += hits
             d["damage"] += dmg
             if not self._fff_combat:
+                self._rounds_watch(self.rounds + 1, "damage line", clean)
                 self.rounds += 1
                 self.in_combat = True
         for _p, rx in self.kill_res:
@@ -9403,6 +10134,10 @@ class MudClient:
             lines.append(self.last_deltas)
         if self.blur_portal:
             lines.append(self.blur_portal)
+        if self.guild.lower() == "elementals":
+            lines.extend(elemental.extra_lines(self.elem_extra))
+            lines.extend(elemental.defs_lines(self.elem_defs))
+            lines.extend(elemental.info_lines(self.elem_info))
         if self.guild.lower() == "gentech":
             for f in ("hpbar1", "hpbar2"):
                 txt = strip_mip_colors(str(self.vitals.get(f, ""))).strip()
@@ -9420,6 +10155,7 @@ class MudClient:
         self.info.configure(state="normal")
         self.info.delete("1.0", "end")
         self.info.insert("end", "\n".join(lines))
+        self._render_blade_bars()
         self._render_necro_status()
         self._render_bard_status()
         self._render_tracked()
@@ -9562,6 +10298,57 @@ class MudClient:
             line = f"  {name}: {shown}{suffix}\n"
             low_hit = (low is not None and val is not None and val < low)
             self.info.insert("end", line, "track_low" if low_hit else ())
+
+    # Bar colours. Green/red are the info pane's existing necro_ok /
+    # necro_bad, so the two guilds' "good" and "bad" read the same.
+    _BAR_UP, _BAR_DOWN, _BAR_IDLE = "#46c246", "#c0392b", "#555555"
+
+    def _render_blade_bars(self):
+        """Two graphic bars for the always-on effects, drawn as a Canvas
+        embedded in the info pane.
+
+        A Canvas rather than coloured text because the height has to be one
+        CAP HEIGHT, not one text line - taken from the font's ascent so it
+        tracks whatever family/size is configured.
+
+        Row 1 is Co/Cs/Ms in thirds, RED when down: a code missing from the
+        prompt's [CoCsBlMsRvFl] token is exactly what the player needs to
+        see. Row 2 is blur alone, green when up and GREY when not - blur is
+        a cooldown you spend, not a defence you should always be holding,
+        so its "off" is neutral rather than an alarm.
+        """
+        if self.guild.lower() != "bladesingers" or not self.blade_flags:
+            return
+        # Tk does NOT destroy a widget passed to window_create when the
+        # text is cleared, so the old canvas has to go explicitly or
+        # update_info would orphan one on every call.
+        old = getattr(self, "_blade_bar_canvas", None)
+        if old is not None:
+            try:
+                old.destroy()
+            except tk.TclError:
+                pass
+        h = self.small_font.metrics("ascent")
+        width = max(120, self.info.winfo_width() - 24)
+        cv = tk.Canvas(self.info, height=h * 2 + 3, width=width,
+                       bg="#10141a", highlightthickness=0, borderwidth=0)
+        self._blade_bar_canvas = cv
+        seg = width / len(blade.FLAG_BAR)
+        for i, code in enumerate(blade.FLAG_BAR):
+            up = self.blade_flags.get(blade.FLAG_NAMES[code], False)
+            x0, x1 = i * seg, (i + 1) * seg
+            cv.create_rectangle(x0, 0, x1, h, width=0,
+                                fill=self._BAR_UP if up else self._BAR_DOWN)
+            cv.create_text((x0 + x1) / 2, h / 2, text=code,
+                           font=self.small_font, fill="#0c0c12")
+        up = self.blade_flags.get("blur", False)
+        cv.create_rectangle(0, h + 3, width, h * 2 + 3, width=0,
+                            fill=self._BAR_UP if up else self._BAR_IDLE)
+        cv.create_text(width / 2, h + 3 + h / 2, text="Blur",
+                       font=self.small_font, fill="#0c0c12")
+        self.info.insert("end", "\n")
+        self.info.window_create("end", window=cv)
+        self.info.insert("end", "\n")
 
     def _render_blade_tracked(self):
         """Tracked Bladesinger skills: GXP still needed to raise each one
@@ -9940,6 +10727,33 @@ class MudClient:
                 except OSError as e:
                     self.write_local(f"GMCP log save failed: {e}",
                                      "#cc6666")
+        elif name == "roomrefresh":
+            self.cmd_roomrefresh(arg)
+        elif name == "gmcpsend":
+            # Raw passthrough. Room.Refresh went unanswered on 2026-09-03 and
+            # the payload format is one of the suspects, so variants need to
+            # be tried without an edit per attempt.
+            payload = arg.strip()
+            if not payload:
+                self.write_local("#gmcpsend <payload>   e.g. "
+                                 "#gmcpsend Room.Refresh {}", "#55aacc")
+            elif not (self.conn and self.conn.alive and self.gmcp_on):
+                self.write_local("#gmcpsend: no GMCP connection.", "#cc6666")
+            elif self.conn.send_gmcp(payload):
+                self.write_local("[gmcp sent: " + payload + "]", "#55aacc")
+            else:
+                self.write_local("#gmcpsend: send failed.", "#cc6666")
+        elif name == "gmcpsub":
+            # Core.Supported arrives once, at connect, and scrolls away.
+            if not self._gmcp_supported:
+                self.write_local("No Core.Supported seen this connection.",
+                                 "#cc9933")
+            else:
+                for pkg in sorted(self._gmcp_supported):
+                    self.write_local(
+                        "  %-24s %s" % (pkg, "subscribed"
+                                        if self._gmcp_supported[pkg]
+                                        else "-"), "#55aacc")
         elif name == "combat":
             a = arg.strip().lower()
             if a in ("clear", "reset", "off"):
@@ -10274,8 +11088,13 @@ class MudClient:
                     f"  ({scope}) /{pattern}/ = {body}{extra}")
         elif name == "log":
             if self.log_file:
+                # Name it on the way out: the path is printed when
+                # logging STARTS, which by the time you stop is buried
+                # under a session of raw MIP/GMCP spam.
+                fname = getattr(self.log_file, "name", "")
                 self.log_file.close(); self.log_file = None
-                self.write_local("Logging stopped.")
+                self.write_local("Logging stopped"
+                                 + (f": {fname}" if fname else "."))
             else:
                 fname = arg.strip() or \
                     paths.session_log_file(self.character)
@@ -10288,6 +11107,13 @@ class MudClient:
                 self.write_local("Usage: #go <landmark>", "#cc6666")
             elif self.viking_go(arg.strip()):
                 pass            # handled by guild-map coordinate nav
+            elif self.guild.lower() == "vikings" and                     not viking.map_landmarks(self.viking_state):
+                # Otherwise the room-map walker answers "No landmark or
+                # speedrun '<name>'", which reads as a typo when the POI
+                # feed simply hasn't finished a push cycle yet.
+                self.write_local("[viking nav] guild-map POIs still "
+                                 "loading - try again in a moment.",
+                                 "#cc9933")
             else:
                 self.start_go(arg.strip())
         elif name == "vmarks":
@@ -10641,6 +11467,13 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
   #chatgag /pattern/ | #chatgags   (filter the chat/tell pane only)
   #guild                          (active guild + its layer file path)
   #deadman <minutes|off> | #mip | #mipraw | #raw | #markers | #vperf
+  #gmcpsub | #gmcpsend <payload>   (#gmcpsub reprints the last
+      Core.Supported - the package surface and what you are subscribed to,
+      which MOVES between mud builds; #gmcpsend sends a raw GMCP message)
+  #roomrefresh [info|contents|map]   (GMCP probe: re-ask for the Room
+      packages for the room you are standing in and report what comes back
+      and how fast. Charts nothing - a solicited Room.Info is
+      indistinguishable from a move, so the window suppresses charting.)
   #combat [clear] | #hpbar | #chartdebug   (state debug: #combat reports
       the in_combat/enemy/Run flags ('#combat clear' forces it off);
       #hpbar dumps the raw + stripped FFF I/J bars; #chartdebug traces the
