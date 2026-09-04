@@ -37,6 +37,84 @@ from .protocol import (MudConnection, parse_composite,
                        strip_mip_colors, tag_to_style)
 from .widgets import MapPane, VitalsBar
 
+# ------------------------------------------------------- live code reload
+# `#hotswap` reloads katmud_lib under a RUNNING client so a bot mid-explore
+# doesn't have to start over. It works here because of three properties of
+# this client, checked before it was written:
+#   - the reader thread only pushes onto a queue; it holds no bound method
+#     of MudClient, so no stale callback survives the swap,
+#   - MIP dispatch is getattr(self, "mip_" + tag) at call time, and every
+#     other entry point is self.<method>(), so rebinding __class__ takes
+#     the new code live,
+#   - every timer loop reschedules itself from inside (root.after(ms,
+#     self._bot_tick)), so it re-binds to the new class on its next tick.
+# picker/hub run before the client exists and dialogs may have a window
+# open, so they are not reloaded.
+HOTSWAP_SKIP = ("picker", "hub", "dialogs")
+
+
+def hotswap_targets(skip=HOTSWAP_SKIP):
+    """The katmud_lib modules `#hotswap` reloads, dependency order: the
+    helpers first, then client itself (which re-imports them)."""
+    me = sys.modules[__name__]
+    mods = [m for name, m in sorted(sys.modules.items())
+            if name.startswith("katmud_lib.")
+            and name.rsplit(".", 1)[-1] not in skip
+            and getattr(m, "__file__", None)]
+    return [m for m in mods if m is not me] + [me]
+
+
+def hotswap_syntax_errors(mods):
+    """['viking.py:412: invalid syntax', ...] for every target that won't
+    compile. importlib.reload re-executes into the module's EXISTING dict,
+    so a failure part-way through cannot be rolled back - this check is
+    what keeps the common case (a typo in the edit you just made) from
+    half-loading itself into a live session."""
+    out = []
+    for m in mods:
+        path = m.__file__
+        try:
+            with open(path, encoding="utf-8") as fh:
+                compile(fh.read(), path, "exec")
+        except SyntaxError as e:
+            out.append(f"{os.path.basename(path)}:{e.lineno}: {e.msg}")
+        except OSError as e:
+            out.append(f"{os.path.basename(path)}: {e}")
+    return out
+
+
+def hotswap_init_attrs(path):
+    """The `self.<name> =` targets assigned at the TOP LEVEL of
+    MudClient.__init__, read from source. A swapped-in class may expect
+    attributes the live instance never got; this can't invent their
+    values, but it can name them so the user knows a relaunch is needed
+    instead of meeting an AttributeError inside a bot tick.
+
+    Top level only, deliberately: __init__ also assigns inside branches
+    that a given session never took, and reporting those would cry wolf
+    on every swap. A new attribute added the ordinary way - one more
+    line among the others - is caught."""
+    import ast
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), path)
+    names = set()
+    for cls in tree.body:
+        if not isinstance(cls, ast.ClassDef) or cls.name != "MudClient":
+            continue
+        for fn in cls.body:
+            if not isinstance(fn, ast.FunctionDef) or fn.name != "__init__":
+                continue
+            for node in fn.body:
+                if not isinstance(node, ast.Assign):
+                    continue
+                for t in node.targets:
+                    subs = list(t.elts) if isinstance(t, ast.Tuple) else [t]
+                    for sub in subs:
+                        if isinstance(sub, ast.Attribute) and                                 isinstance(sub.value, ast.Name) and                                 sub.value.id == "self":
+                            names.add(sub.attr)
+    return names
+
+
 try:
     import winsound
 except ImportError:
@@ -205,6 +283,14 @@ class MudClient:
         # (another client/character may add or fire one at any time).
         self._reminders_cache = []
         self._reminders_mtime = None
+        # "Missed while every client was closed" needs to know when a client
+        # was last alive. last_seen lives in reminders.json and is refreshed
+        # periodically (NOT every tick - that would rewrite a shared file
+        # once a second). _reminders_first_poll makes the missed block a
+        # once-per-session event.
+        self._reminders_first_poll = True
+        self._last_seen_at_start = None
+        self._last_seen_written = 0.0
         # Phone/web dashboard (spec: docs/superpowers/specs/
         # 2026-06-21-web-dashboard-design.md): ring buffers snapshotted to
         # webstate/<profile_id>.json every tick. Bounded so the file stays
@@ -280,6 +366,7 @@ class MudClient:
         self.viking_win = None
         self.help_win = None
         self.viking_spells = ""         # active-spell status line
+        self._voyage_line = None        # last info-pane voyage summary
         self.viking_skills = None       # last parsed `vskills` (skill costs)
         self._vskills_capture = False   # arming flag while reading `vskills`
         self._vskills_lines = []        # accumulated `vskills` output lines
@@ -7580,8 +7667,24 @@ class MudClient:
         if "STFX" in upd or "DALER" in upd:
             self.viking_spells = viking.active_spells(self.viking_state)
             self.show_status()
+        self._refresh_voyage_line(upd)
         if self.viking_win is not None and self.viking_win.winfo_exists():
             self.viking_win.update_state(self.viking_state, upd)
+
+    def _refresh_voyage_line(self, upd):
+        """Redraw the info pane when the voyage summary actually changes.
+
+        Gated on `upd` (the delta) and then on the rendered text, because
+        update_info rebuilds the whole pane: the VOYAGE record arrives
+        every ~4s and most of its fields don't reach this line."""
+        if not any(k in upd for k in viking.VOYAGE_LINE_KEYS):
+            return
+        line = viking.voyage_line(self.viking_state)
+        # getattr default, not self._voyage_line: a #hotswap into code
+        # that adds an __init__ attribute must not raise here.
+        if line != getattr(self, "_voyage_line", None):
+            self._voyage_line = line
+            self.update_info()
 
     def gmcp_char_combat(self, data):
         """Char.Combat ends every fight with one empty snapshot (attacker "",
@@ -7824,10 +7927,13 @@ class MudClient:
                 # under the hpbars; the info pane still gets the bioplast count.
                 self.changeling_status = stripped
                 self.show_status()
+            elif guild == "vikings":
+                # Not deltas either: the I-field is the resource readout,
+                # and H/S/V/R of it are already the graphic hpbars.
+                self.last_deltas = viking.fury_chain(stripped)
+                self.vitals.update(viking.parse_hpbar(upd["hpbar1"]))
             else:
                 self.last_deltas = self.parse_deltas(stripped)
-                if guild == "vikings":
-                    self.vitals.update(viking.parse_hpbar(upd["hpbar1"]))
             self.update_info()
         elif self.guild.lower() in ("changelings", "bards") and \
                 "hpbar2" in upd:
@@ -8076,6 +8182,7 @@ class MudClient:
         if "STFX" in upd or "DALER" in upd:
             self.viking_spells = viking.active_spells(self.viking_state)
             self.show_status()
+        self._refresh_voyage_line(upd)
         if not self.vperf:
             if self.viking_win is not None and \
                     self.viking_win.winfo_exists():
@@ -9355,8 +9462,11 @@ class MudClient:
         secs = int(round(secs))
         if secs < 0:
             secs = 0
-        h, rem = divmod(secs, 3600)
+        d, rem = divmod(secs, 86400)
+        h, rem = divmod(rem, 3600)
         m, s = divmod(rem, 60)
+        if d:
+            return f"{d}d{h:02d}h"
         if h:
             return f"{h}h{m:02d}m"
         if m:
@@ -9421,8 +9531,8 @@ class MudClient:
         def add(d):
             rid = d.get("next_id", 1)
             d["next_id"] = rid + 1
-            rec = {"id": rid, "due": due, "text": text,
-                   "set_by": self.character, "mud": self.mud}
+            rec = {"id": rid, "due": due, "set_at": time.time(),
+                   "text": text, "set_by": self.character, "mud": self.mud}
             if repeat:
                 rec["repeat"] = repeat
             d.setdefault("reminders", []).append(rec)
@@ -9459,11 +9569,61 @@ class MudClient:
                 f"  #{r.get('id')}  in {eta}{rpt}{tag}: "
                 f"{r.get('text', '')}", "#ffcc44")
 
+    _LAST_SEEN_EVERY = 60      # seconds between last_seen refreshes
+
+    def _reminder_age(self, r, now):
+        """'set 2d ago, due 31h ago' - as much of it as the record supports.
+        Reminders written before set_at existed simply omit that half."""
+        parts = []
+        sa = r.get("set_at")
+        if isinstance(sa, (int, float)):
+            parts.append("set %s ago" % self._fmt_dur(now - sa))
+        parts.append("due %s ago" % self._fmt_dur(now - r.get("due", now)))
+        return ", ".join(parts)
+
+    def _announce_missed(self, missed, now):
+        """The block for reminders that came due while EVERY client was
+        closed. Shown once, on the first poll of a session (which lands
+        just after connect, since connect() runs a second before the first
+        tick). They are already claimed and removed by then, exactly like
+        any other fired reminder - the block is the only notice, by
+        request."""
+        self.write_local("Reminders missed while you were away:", "#ffcc44")
+        for r in sorted(missed, key=lambda x: x.get("due", 0)):
+            by = r.get("set_by", "")
+            tag = f"  [{by}]" if by and by != self.character else ""
+            self.write_local(
+                f"  #{r.get('id')}  {r.get('text', '')}"
+                f"   ({self._reminder_age(r, now)}){tag}", "#ffcc44")
+
+    def _touch_last_seen(self, now):
+        """Record that a client was alive. Written at most every
+        _LAST_SEEN_EVERY seconds: the file is shared, and rewriting it once
+        a second would be pointless I/O. The cost of the coarseness is that
+        a reminder due in the last minute before a crash may be reported as
+        missed rather than fired - the harmless direction."""
+        if now - self._last_seen_written < self._LAST_SEEN_EVERY:
+            return
+        self._last_seen_written = now
+
+        def stamp(d):
+            d["last_seen"] = now
+        paths.update_json(paths.REMINDERS_FILE, stamp,
+                          {"reminders": [], "next_id": 1})
+        self._reminders_mtime = None       # our own write; re-read next tick
+
     def _poll_reminders(self, now):
         try:
             mtime = os.path.getmtime(paths.REMINDERS_FILE)
         except OSError:
             return                              # no reminders.json yet
+        first = self._reminders_first_poll
+        if first:
+            data, err = paths.load_json(
+                paths.REMINDERS_FILE, {"reminders": [], "next_id": 1})
+            self._last_seen_at_start = (
+                None if err else data.get("last_seen"))
+            self._reminders_first_poll = False
         if mtime != self._reminders_mtime:
             data, err = paths.load_json(
                 paths.REMINDERS_FILE, {"reminders": [], "next_id": 1})
@@ -9500,8 +9660,21 @@ class MudClient:
             self._reminders_mtime = os.path.getmtime(paths.REMINDERS_FILE)
         except OSError:
             self._reminders_mtime = None
+        # A reminder is MISSED only if it came due after the last moment a
+        # client was known to be alive - i.e. while everything was closed.
+        # Without a last_seen (a first run, or a hand-cleared file) nothing
+        # can be called missed, so they all announce normally.
+        # Only the FIRST poll can discover a miss: a later fire happened
+        # with this client running, by definition. Classifying on every poll
+        # would also misfire, since last_seen is up to a minute stale.
+        seen = self._last_seen_at_start
+        missed = ([r for r in fired if r.get("due", 0) > seen]
+                  if first and isinstance(seen, (int, float)) else [])
+        if missed:
+            self._announce_missed(missed, now)
         for r in fired:
-            self._announce_reminder(r)
+            if r not in missed:
+                self._announce_reminder(r)
 
     def _announce_reminder(self, r):
         txt = r.get("text", "(reminder)")
@@ -9560,6 +9733,7 @@ class MudClient:
                 text=f"DM {self.fmt_mmss(dm_limit - manual_idle)}",
                 fg="#66cc66")
         self._poll_reminders(now)
+        self._touch_last_seen(now)
         if self._reminders_cache:        # keep the info-pane countdown live
             self.update_info()
         self._write_webstate(now)
@@ -10147,6 +10321,9 @@ class MudClient:
             lines.extend(elemental.extra_lines(self.elem_extra))
             lines.extend(elemental.defs_lines(self.elem_defs))
             lines.extend(elemental.info_lines(self.elem_info))
+        if self.guild.lower() == "vikings":
+            # Below the hp/delta line, above recent kills (user's layout).
+            lines.append(viking.voyage_line(self.viking_state))
         if self.guild.lower() == "gentech":
             for f in ("hpbar1", "hpbar2"):
                 txt = strip_mip_colors(str(self.vitals.get(f, ""))).strip()
@@ -10676,6 +10853,8 @@ class MudClient:
         elif name == "reload":
             self.reload_cascade()
             self.load_scripts(announce=True)
+        elif name == "hotswap":
+            self.cmd_hotswap(arg)
         elif name in ("reminder", "reminders"):
             self._reminder_cmd(arg, list_only=(name == "reminders"))
         elif name == "vskills":
@@ -11331,6 +11510,58 @@ class MudClient:
         for line in HELP_TEXT.splitlines():
             self.write_local(line)
 
+    # ------------------------------------------------ live code reload
+    def cmd_hotswap(self, _arg=""):
+        """Reload katmud_lib into THIS running client (see HOTSWAP_SKIP
+        above for why it works). Everything on `self` survives - a bot's
+        route, Chaossea's visited rooms, Explore's BFS state - because
+        only the class behind the instance is replaced.
+
+        Also does what #reload does (cascade + katmud_scripts.py), so one
+        command picks up an edit anywhere."""
+        import importlib
+        mods = hotswap_targets()
+        bad = hotswap_syntax_errors(mods)
+        if bad:
+            for b in bad:
+                self.write_local(f"[hotswap] {b}", "#cc6666")
+            self.write_local("[hotswap] nothing reloaded.", "#cc6666")
+            return
+        try:
+            for m in mods:
+                importlib.reload(m)
+        except Exception as e:
+            # Half-reloaded and unrollable - say so plainly rather than
+            # let the session limp on in a mixed state.
+            self.write_local(f"[hotswap] FAILED mid-reload ({e}). The "
+                             "session is now in a mixed state - relaunch.",
+                             "#cc6666")
+            return
+        # The reload re-executed this module into its own dict, so these
+        # globals are already the new classes.
+        self.__class__ = MudClient
+        for attr, cls in (("map", MapPane), ("conn", MudConnection),
+                          ("mapdb", mapsql.MapDB),
+                          ("cascade", config.Cascade),
+                          ("viking_win", viking.VikingStatus)):
+            obj = getattr(self, attr, None)
+            if obj is not None:
+                obj.__class__ = cls
+        self.reload_cascade()
+        self.load_scripts(announce=False)
+        self.write_local(f"[hotswap] {len(mods)} modules reloaded, "
+                         "cascade + scripts too.", "#66cc66")
+        missing = sorted(hotswap_init_attrs(__file__) - set(vars(self)))
+        if missing:
+            self.write_local("[hotswap] new __init__ attributes this "
+                             "instance never got: " + ", ".join(missing)
+                             + " - relaunch if the new code reads them.",
+                             "#cc9933")
+        self.write_local("[hotswap] not covered: the connection reader "
+                         "loop (already running old code), an open guild "
+                         "or dialog window, and one stale tick from any "
+                         "timer already pending.", "#557755")
+
     # ------------------------------------------------ scripts
     def load_scripts(self, announce=True):
         self.hooks = None
@@ -11463,6 +11694,9 @@ class MudClient:
 HELP_TEXT = """\
 CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
   #connect [host port] | #disconnect | #reload (cascade + scripts)
+  #hotswap  reload katmud_lib INTO the running client (#reload plus the
+      python code). Keeps the session and everything on it - a bot
+      mid-route, Chaossea's visited rooms - so no relaunch.
   #alias name = cmds | #alias name | #aliases   (character scope;
       use Tools > Aliases & Triggers for other scopes)
   #trigger /regex/ = cmds | #trigger /regex/ | #triggers

@@ -48,10 +48,36 @@ can send and whether you are subscribed. All packages are version 1.
                   skill 1 it is a small compass of the room's exits;
                   with the skill trained it is the line-of-sight map.
 
+  Room.Refresh    { packages? }          (you ask, server answers)
+                  The one package your client SENDS rather than
+                  receives. It re-sends the three Room packages above
+                  for the room you are standing in, whether or not
+                  anything has changed - a GMCP 'look'. Send it with
+                  no body for all three, or name a subset:
+                  { "packages": [ "Room.Info", "Room.Map" ] }. Only
+                  packages you are subscribed to come back. A couple
+                  of requests a second are answered and the rest are
+                  dropped without a reply, so send one when you need
+                  a resync, not on a timer.
+
+  Room.Death      { name, killer, npc, corpse }
+                  Something in your room died. Everyone standing
+                  there is told, including you when the death is
+                  your own. 'name' is the dead thing as the room
+                  saw it, and is the same name Char.Combat used for
+                  it while you fought. 'killer' is whoever the mud
+                  named out loud, and is empty when it named nobody
+                  - that means uncredited, not unkilled. 'npc' is 0
+                  when a player died. 'corpse' says whether a
+                  corpse was left behind.
+                  Unlike the packages above this is an event, not a
+                  snapshot: two identical kills send two frames,
+                  and hiding the kill line with your colour
+                  settings does not suppress it.
+
   Comm.Channel    Comm.Channel.Text { channel, talker, text }
                   Chat lines, tells, and souls, delivered after the
                   same filters as the text you see.
-More: 0-53(76) : [q,b,<cr>] 
 
   Guild.Info / Guild.State / Guild.Extra
                   Guild identity and rank, live resources, lingers and
@@ -59,8 +85,10 @@ More: 0-53(76) : [q,b,<cr>]
                   provides them.
 
 Two things worth knowing: packages only flow while you are subscribed,
-and only when their values actually change. The Room packages are sent
-when you enter a room - 'look' does not resend them.
+and, Room.Death aside, only when their values actually change.
+The Room packages are sent when you enter a room; typing 'look' does
+not resend them, but your client can ask for them whenever it likes
+with Room.Refresh.
 
 MXP and Pueblo
 

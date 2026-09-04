@@ -1,18 +1,92 @@
 {
   "_comment": [
-    "GUILD TEMPLATE - copy to muds/<mud>/guilds/<guildname>.json",
-    "(lowercase, no spaces; paths.safe_name strips anything else).",
-    "Files starting with underscore are ignored by the picker.",
-    "Once the file exists, the guild appears in the profile form's",
-    "Guild dropdown. All sections optional; cascade rule is REPLACE",
-    "(same key in character file beats this; this beats mud/global)."
+    "3s Elemental. Pools are wire-confirmed against",
+    "logs/mip_20260903_154157.log: FFF E = Energy (gp1, seen 1303-1407,",
+    "the mud's own prompt states max 1412) and FFF G = Consistency (gp2,",
+    "a percentage). GAME FACT (user, 2026-09-03): consistency reaching",
+    "ZERO kills you, which is why it carries warn thresholds - the only",
+    "guild pool in the repo that is lethal at the bottom.",
+    "Note hp/sp maxima are NOT ceilings here: 'evoke corpse drain' takes",
+    "sp over max (747 against a real max of 526), so the bars can read",
+    "past full. That is the truth, not a scaling bug - see",
+    "MudClient._raise_seen_max."
   ],
   "login_commands": [],
-  "aliases": {},
-  "triggers": [],
+  "aliases": {
+    "tt": "evoke create blast;activate blast;give blast to %*"
+  },
+  "triggers": [
+    {
+      "pattern": "seems to be most susceptible to (.+) attacks\\.",
+      "command": "evoke resolve as \\1;evoke prismatic emission as \\1",
+      "cooldown": 3,
+      "_note": "Both of the elemental's damage-type settings follow the mob's susceptibility - Guild.Extra carries them as resolve_type and prismatic_emission. ';' is the command separator, same as the tt alias."
+    },
+    {
+      "pattern": "You reach out and touch (.+) with a shimmering hand",
+      "command": "evoke evaluate"
+    }
+  ],
   "gags": [],
   "keys": {},
   "mip": {},
+  "vitals": [
+    {
+      "label": "HP",
+      "cur": "hp",
+      "max": "hpmax",
+      "color": "#2a7d2a",
+      "width": 200,
+      "warn": [
+        [
+          0.25,
+          "#cc3333"
+        ],
+        [
+          0.5,
+          "#cc9933"
+        ]
+      ]
+    },
+    {
+      "label": "SP",
+      "cur": "sp",
+      "max": "spmax",
+      "color": "#3366cc",
+      "width": 200
+    },
+    {
+      "label": "Energy",
+      "cur": "gp1",
+      "max": "gp1max",
+      "color": "#cc8833",
+      "width": 200
+    },
+    {
+      "label": "Consistency",
+      "cur": "gp2",
+      "max": "gp2max",
+      "color": "#9955cc",
+      "width": 200,
+      "warn": [
+        [
+          0.4,
+          "#cc3333"
+        ],
+        [
+          0.7,
+          "#cc9933"
+        ]
+      ],
+      "_note": "GAME FACT (user, 2026-09-03): consistency does no harm until it reaches ZERO, which kills you - so these are set for AWARENESS, not for a damage threshold. Amber at 70% is deliberately early. Note diffuse CAPS consistency at 50%, so a permanently amber bar while diffused is expected, not a fault."
+    },
+    {
+      "label": "Enemy",
+      "enemy": true,
+      "color": "#aa3333",
+      "width": 260
+    }
+  ],
   "mip_required": [],
   "map_patches": [],
   "settings": {

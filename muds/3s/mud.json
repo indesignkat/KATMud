@@ -125,6 +125,7 @@
   },
   "keys": {
     "KP_0": "d",
-    "KP_Decimal": "u"
+    "KP_Decimal": "u",
+    "KP_Divide": "lineofsight"
   }
 }

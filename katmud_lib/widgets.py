@@ -95,10 +95,19 @@ class MapPane(tk.Canvas):
         sub = ""
         if self.area:
             sub = self.area + (f" [{self.coder}]" if self.coder else "")
-        self.create_text(w // 2, 10, text=sub or hdr, fill="#9999cc",
-                         font=self.f("trail", ("Consolas", 8)))
         if sub:
+            self.create_text(w // 2, 10, text=sub, fill="#9999cc",
+                             font=self.f("trail", ("Consolas", 8)))
             self.create_text(w // 2, 24, text=hdr, fill="#ccccff",
+                             font=self.f("room",
+                                         ("Consolas", 10, "bold")))
+        else:
+            # No area (the viking biome clears the graph, so nothing
+            # names the area): the room is the only header line, and it
+            # gets the room font. It used to be drawn small here and
+            # BOLD again by the compass path four pixels lower, which is
+            # the shadowed title reported on 2026-09-04.
+            self.create_text(w // 2, 12, text=hdr, fill="#ccccff",
                              font=self.f("room",
                                          ("Consolas", 10, "bold")))
         if self.mapping:
@@ -217,7 +226,14 @@ class MapPane(tk.Canvas):
                               lambda _e, dd=dl: self.send_cb(dd))
         odd = [d for d in self.exits if d.lower() not in self.DIRS]
         if odd:
-            y = cy + r + 18
+            # Above the trail block, not at cy + r + 18: for a pane wider
+            # than it is tall that reduces to exactly h - 26, which is
+            # where the trail's SECOND line goes - so '[up]' was printed
+            # over a room name (reported with the shadowed title,
+            # 2026-09-04). The trail grows upward from h - 12.
+            # trail[:-1] is what gets drawn, so n-1 gaps below this row.
+            drawn = max(0, len(self.trail) - 1)
+            y = h - 12 - 14 * max(0, drawn - 1) - 16
             x = 10
             for d in odd:
                 t = self.create_text(x, y, anchor="w", text=f"[{d}]",
@@ -233,10 +249,42 @@ class MapPane(tk.Canvas):
         self.create_oval(cx - 16, cy - 16, cx + 16, cy + 16,
                          fill="#333355", outline="#7777cc", width=2)
         self._header(w)
-        self.create_text(cx, cy - r - 14, text=self.room,
-                         fill="#ccccff",
-                         font=self.f("room", ("Consolas", 10, "bold")))
         for i, name in enumerate(reversed(self.trail[:-1])):
             self.create_text(8, h - 12 - i * 14, anchor="w",
                              text=name, fill="#555577",
                              font=self.f("trail", ("Consolas", 8)))
+
+
+def add_window_menu(win, topmost=False):
+    """Give a detached panel a Window menu with an Always on Top toggle.
+
+    Shared rather than copied: every status panel wants it, and the next
+    one should get it by calling this instead of by remembering to
+    reimplement it. Returns the BooleanVar so the caller can persist the
+    choice (the windows save it beside their geometry on close).
+
+    -topmost is per-window, so one panel pinned does not pin the rest.
+    """
+    var = tk.BooleanVar(master=win, value=bool(topmost))
+
+    def toggle():
+        try:
+            win.attributes("-topmost", bool(var.get()))
+        except tk.TclError:
+            pass        # window closing, or a platform without it
+
+    # tearoff=0 on BOTH: a tearoff entry sits at index 0 and shifts every
+    # real entry down one, which is confusing to drive and ugly besides.
+    bar = tk.Menu(win, tearoff=0)
+    menu = tk.Menu(bar, tearoff=0)
+    menu.add_checkbutton(label="Always on Top", variable=var,
+                         command=toggle)
+    bar.add_cascade(label="Window", menu=menu)
+    try:
+        win.configure(menu=bar)
+    except tk.TclError:
+        return var
+    if var.get():
+        toggle()
+    win.topmost_var = var
+    return var

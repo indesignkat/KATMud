@@ -23,6 +23,8 @@ import re
 import time
 import tkinter as tk
 
+from . import widgets
+
 
 # ======================================================================
 # Decoders
@@ -232,50 +234,101 @@ def merge_vmapl(old, new):
     return ";".join(merged.values())
 
 
-def merge_longship(old, new):
-    """Merge a LONGSHIP chunk into the previous LONGSHIP value.
+def _longship_rows(value):
+    """LONGSHIP value -> {ship id: raw record}, ignoring junk entries."""
+    rows = {}
+    for entry in (value or "").split(";"):
+        sid = entry.split("|", 1)[0]
+        if entry and sid.isdigit():
+            rows[sid] = entry
+    return rows
 
-    Like TGOODS/VMAPL, the voyage-side fleet roster outgrew one packet
-    (capture 2026-08-03: ships 1-2 as LONGSHIP_1of2/2of2, then ships 6-7
-    and 8-9 as two more plain LONGSHIP packets), so last-chunk-wins left
-    the Sea tab showing only the tail of the fleet. Chunks arrive in
-    ascending ship-id order, so a chunk whose first id is not greater
-    than the last id we hold starts a fresh push - which also drops
-    ships that have left the fleet."""
-    def first_sid(value):
-        for f in split_entries(value):
-            if f and f[0].isdigit():
-                return int(f[0])
-        return None
 
-    def last_sid(value):
-        sids = [int(f[0]) for f in split_entries(value)
-                if f and f[0].isdigit()]
-        return sids[-1] if sids else None
+def merge_longship(state, new):
+    """Merge a LONGSHIP push into the fleet held in `state`.
 
-    head, tail = first_sid(new), last_sid(old)
-    if head is None or tail is None or head <= tail:
-        return new
-    return old + ";" + new
+    The voyage-side roster outgrew one packet (2026-08-03), so
+    last-chunk-wins showed only its tail. The first fix segmented pushes
+    by ascending ship id: a push whose first id was not greater than the
+    last id held started a fresh accumulation.
+
+    That broke when the MUD's push ORDER changed. It now emits the fleet
+    as four separate two-ship pushes that ROTATE - 6,7 then 8,9 then 1,2
+    then 10,11 - so the ascending test fired mid-fleet and the Sea tab
+    cycled 2 ships, 4 ships, 2 ships forever, never the whole fleet
+    (logs/mip_20260903_143404.log, and the user watching it flicker every
+    round).
+
+    So merge by SHIP ID instead of by arrival: each push refreshes its
+    own ships and leaves the rest alone, which is stable no matter what
+    order the pushes come in. A push carrying an id already seen this
+    cycle marks the rotation coming round again; that is the only moment
+    a ship can be known to have LEFT the fleet, so it is where the
+    roster is pruned to what the finished cycle actually carried.
+
+    Ordered by ship id, not arrival - with a rotating wire order the
+    block would otherwise reshuffle under the reader every few seconds.
+    """
+    fresh = _longship_rows(new)
+    if not fresh:
+        return state.get("LONGSHIP", "")
+    rows = _longship_rows(state.get("LONGSHIP", ""))
+    seen = state.get("_longship_seen") or set()
+    if any(sid in seen for sid in fresh):
+        rows = {sid: rec for sid, rec in rows.items() if sid in seen}
+        seen = set()
+    rows.update(fresh)
+    state["_longship_seen"] = seen | set(fresh)
+    return ";".join(rows[sid] for sid in sorted(rows, key=int))
 
 
 def accumulate_colony(state, upd):
-    """Join the settlement plan's repeated CPB/CPU keys into one value.
+    """Collect the settlement plan's repeated CPB/CPU keys and publish it
+    WHOLE, once per burst.
 
     The plan pushes its building lists as many separate BBE packets under
     the same key (13x CPB, 2x CPU in the 2026-08-03 capture), so plain
     last-packet-wins keeps only the tail. Every push leads with CPLAN and
     closes with CPEND, so CPLAN restarts the accumulation - which also
-    drops buildings that have since been demolished or moved."""
+    drops buildings that have since been demolished or moved.
+
+    2026-09-03: the fragments used to be merged straight into the state
+    dict, so every one of them landed in `upd` and CPB/CPU are in
+    COLONY_KEYS - the Colony tab therefore redrew on all 499 fragment
+    packets of a session, each showing one MORE line of a
+    half-accumulated plan. That is the "redrawing line by line each
+    round" the user reported. The pieces are now buffered privately
+    (state['_CPB'], state['_CPU']) and only reach `upd` on the next
+    CPLAN, which is what proves the burst finished: 23 whole-plan
+    redraws instead of 499 partial ones.
+
+    Same principle as the GMCP paginated sweeps in docs/gmcp/port.md - a
+    feed that arrives in pieces is published when it is complete, never
+    half-drawn. Costs one burst of latency at login, before which the
+    Colony tab shows nothing rather than something wrong."""
+    frags = {k: upd.pop(k) for k in ("CPB", "CPU") if k in upd}
     if "CPLAN" in upd:
+        # CPLAN starts a burst, so the one that just ended is COMPLETE:
+        # publish it now, whole, and begin collecting the next.
         for k in ("CPB", "CPU"):
-            state.pop(k, None)
-    for k in ("CPB", "CPU"):
-        if k in upd and state.get(k):
-            upd[k] = state[k] + ";" + upd[k]
+            done = state.pop("_" + k, "")
+            if done:
+                upd[k] = done
+    for k, piece in frags.items():
+        held = state.get("_" + k, "")
+        state["_" + k] = held + ";" + piece if held else piece
 
 
 _FRAG_RE = re.compile(r"^([A-Z][A-Z0-9_]*)_(\d+)of(\d+)$")
+
+
+def base_key(key):
+    """'SHIPS_1of3' -> 'SHIPS'. Long BBE values arrive sub-chunked (see
+    reassemble_chunks), so a key GMCP has taken over has to be recognised
+    in its chunked form too - otherwise the pieces sail past the filter,
+    reassemble, and overwrite the GMCP value with the MIP one."""
+    m = _FRAG_RE.match(key)
+    return m.group(1) if m else key
 
 
 def reassemble_chunks(state, upd):
@@ -424,12 +477,37 @@ def parse_construction(value):
 
 
 
-# Warehouse capacity per tier (GAME FACT from the user, 2026-07-11).
+# Warehouse capacity per BUILDING TIER (GAME FACT from the user,
+# 2026-07-11). This is the BASE capacity only: skill bonuses raise the
+# real cap above it, so the table is the fallback, never the first
+# choice - see warehouse_cap.
 WAREHOUSE_CAPS = {1: 400, 2: 1000, 3: 1750, 4: 3000, 5: 5250}
 
 
+def wstock_capacity(value):
+    """The capacity WSTOCK carries in front of its entries, or None.
+
+    GAME FACT (user, 2026-09-03): this header is the warehouse's maximum
+    capacity WITH the character's skill bonuses applied - 8085 where the
+    tier table says 5250. It is a bare number where every entry that
+    follows is pipe-separated, which is how it is told apart."""
+    head = value.partition(";")[0]
+    if "|" in head:
+        return None
+    try:
+        return int(head)
+    except ValueError:
+        return None
+
+
 def warehouse_cap(state):
-    """Warehouse capacity from the tier table. Returns None if unknown."""
+    """Warehouse capacity. The WSTOCK header is authoritative because it
+    includes skill bonuses; WAREHOUSE_CAPS is a base-tier fallback for
+    when the feed has not arrived yet. Returns None if neither is
+    known."""
+    cap = wstock_capacity(state.get("WSTOCK", ""))
+    if cap is not None:
+        return cap
     for name, tier in parse_buildings(state.get("BUILDINGS", "")):
         if name == "warehouse":
             return WAREHOUSE_CAPS.get(tier)
@@ -967,6 +1045,13 @@ def sell_plan(state, hold=DEFAULT_HOLD_GOODS, hid=None):
     your refineries, what the settlement eats per tick, whether vbuild
     wants it, and whether it is on the hold list.
 
+    Each row also carries `max_sell` - the most any city lists for that
+    good, demand or not - and `pct_max`, the chosen price as a
+    percentage of it. The best-daler city is often NOT the best price:
+    the top few buyers frequently have demand 0, so the row realises the
+    most money while still being a poor trade for that particular good,
+    and the percentage is what makes that visible.
+
     `hid` restricts the search to one hold. Trading with a city raises
     your standing there, and Midgard (hold 0) is the one hold whose
     standing cannot be raised by missions - so its best sales are worth
@@ -987,11 +1072,16 @@ def sell_plan(state, hold=DEFAULT_HOLD_GOODS, hid=None):
     consume = dict(parse_semi_pairs(state.get("SCONSUME", "")))
     hold = {g.lower() for g in (hold or ())}
 
-    best = {}
+    best, ceiling = {}, {}
     for hold_id, goods in parse_tgoods(state.get("TGOODS", "")):
-        if hid is not None and hold_id != hid:
-            continue
         for good, _lvl, _sup, dem, _buy, sell in goods:
+            # The ceiling ignores demand ON PURPOSE: the cities paying
+            # most are routinely the ones wanting none, and the whole
+            # point of the % is to show what that costs.
+            if sell and sell > ceiling.get(good, 0):
+                ceiling[good] = sell
+            if hid is not None and hold_id != hid:
+                continue
             have = stock.get(good, 0)
             if not have or not sell or dem <= 0:
                 continue
@@ -1012,6 +1102,9 @@ def sell_plan(state, hold=DEFAULT_HOLD_GOODS, hid=None):
             row["consumed"] = int(consume.get(good, 0) or 0)
         except (TypeError, ValueError):
             row["consumed"] = 0
+        row["max_sell"] = ceiling.get(good, 0)
+        row["pct_max"] = (round(100 * row["sell"] / row["max_sell"])
+                          if row["max_sell"] else 0)
         row["material"] = good in BUILD_MATERIALS
         row["held"] = good in hold
         rows.append(row)
@@ -1220,6 +1313,31 @@ def parse_carts(value):
     return out
 
 
+def parse_cupg(value):
+    """CUPG 'cart|tier|secs|mats|done|detail|job_type|refit;...' -> cart
+    upgrade jobs.
+
+    Decoded 2026-09-03 from GMCP's Guild.Trade.cupg, which sends the same
+    record under NAMES, against the wire's
+    '1|5|41010|520|520|timber:400/400,iron:120/120||'. Before this the
+    Trade tab printed CUPG as "(raw - unidentified)", so a cart being
+    upgraded simply vanished from the cart list - the player counted 4
+    carts while owning 5.
+
+    mats and done both read 520 in that capture, so which index is which
+    is not independently pinned; they are the paid and required material
+    totals and the tab shows them as done/mats. job_type and refit were
+    empty on the wire and are carried through unread."""
+    out = []
+    for f in split_entries(value):
+        if len(f) < 6 or not f[0].isdigit():
+            continue
+        out.append({"cart": f[0], "tier": f[1], "secs": f[2],
+                    "mats": f[3], "done": f[4], "detail": f[5],
+                    "job_type": field(f, 6, ""), "refit": field(f, 7, "")})
+    return out
+
+
 def parse_routes(value):
     """ROUTES 'vid|vname|road_tier|fort_tier|road_maint|fort_maint;...'
     -> per-village route infrastructure dicts (tiers 0-5, maint 0-100)."""
@@ -1372,6 +1490,8 @@ def parse_farm(value):
 # what the player themselves activated). The remaining 3 (indices 6,13,18,
 # all read 0 so far) are still genuinely unidentified - flourishing is in
 # there somewhere, but can't be picked out from an all-zero field.
+# (Superseded 2026-09-03: every field is now named - see the GMCP
+# cross-reference below the constants.)
 # 2026-08-03: the record grew from 19 to 23 fields and the old indices
 # shifted. Re-pinned by value-matching the capture's
 #   SETTLERX^^|0|2460|330|9|244|48|69|299|299|14|120|74|94|0|1475|7329|
@@ -1383,7 +1503,8 @@ def parse_farm(value):
 # Upkeep 243, Sustenance 100%, Employment 81%, Sentiment +22. So index 6
 # is the Housing governance bar (the old "unidentified" slot), a new
 # unknown went in at 7, tax income at 16, sentiment at 20, and two tail
-# fields (21, 22) are still unidentified.
+# fields (21, 22) are still unidentified. (Those two are named as of
+# 2026-09-03 - see below.)
 SETTLERS_POPULATION, SETTLERS_MOOD = 0, 1
 
 # Index 0 carries the active edict's id ('levy' = the readout's
@@ -1403,13 +1524,34 @@ SETTLERX_HOUSING_AVG, SETTLERX_HOUSING_QUALITY = 5, 6
 SETTLERX_HOUSING_UPKEEP = 7
 SETTLERX_PLOT_CAP = 23
 SETTLERX_JOBS = 8
-SETTLERX_EMPLOYED, SETTLERX_MARKET_STAFFED = 9, 10     # order inferred
+SETTLERX_EMPLOYED, SETTLERX_MARKET_STAFFED = 9, 10
 SETTLERX_HAPPINESS_MULT = 11
 SETTLERX_SECURITY, SETTLERX_DIGNITY = 12, 13
 SETTLERX_COMMUNITY_NET, SETTLERX_TAX_INCOME = 15, 16
 SETTLERX_UPKEEP = 17
 SETTLERX_SUSTENANCE, SETTLERX_EMPLOYMENT = 18, 19
 SETTLERX_SENTIMENT = 20
+# 2026-09-03: the whole record is now decoded, and not by inference -
+# GMCP's Guild.Settlement.settlerx sends the same 24 values under NAMES,
+# so the mapping falls out of value-matching one packet against the MIP
+# SETTLERX of the same session (logs/*_20260903_1351*.log). 21 of 24
+# matched exactly; the only three that drifted are the three countdown
+# timers (2, 21, 22), which is itself confirmation rather than doubt.
+#
+# Two long-standing gaps close:
+#   * 9/10 employed vs market_staffed was flagged "order inferred"
+#     because both read 4 in the June capture. GMCP reads employed=418
+#     and staffed_market_jobs=22 in the same record, so the order the
+#     doc implied was RIGHT - now confirmed, not assumed.
+#   * 21 and 22, "still unidentified" since 2026-08-03, are
+#     supply_next_secs and pop_next_secs. Both count down.
+#
+# GAME FACT (user, 2026-09-03): market_staffed counts SETTLERS, who are
+# unnamed. It is NOT the hirdmadr staffing the trading post - that is a
+# named follower (Halfdan Roarsson here) and rides the separate STAFF
+# key, where only one hirdmadr can staff each building or pilot each
+# ship. The two must not be conflated in any readout.
+SETTLERX_SUPPLY_NEXT, SETTLERX_POP_NEXT = 21, 22
 
 # Confirmed 0-100 percentage fields, rendered as bars (Mood comes from
 # SETTLERS, not this list - see _render_people).
@@ -1768,6 +1910,29 @@ def build_graph(state):
     return cols, rows, mee, mes, (px, py)
 
 
+# The wall grid: one MEE row (east walls) and one MES row (south walls)
+# per map row, each arriving as its own BBE packet. MES has one row FEWER
+# than MEE - the bottom row has nothing south of it, so MES<rows-1> is the
+# last one the MUD sends (never seen otherwise across the 2026-08-31 and
+# 2026-09-02 captures).
+def wall_rows_missing(state, rows):
+    """How many MEE/MES rows the state is still waiting for.
+
+    An absent row is stored as "" and _neighbors reads "" as solid wall, so
+    a half-arrived grid is indistinguishable from a genuinely walled-off map
+    and pathfind answers "unreachable" with total confidence (2026-09-02:
+    `Go hafrfjord` at (37,7) failed for the ~2 minutes it took rows 0-13 to
+    arrive). Callers use this to tell "still loading" from "no path"."""
+    return (sum(1 for i in range(rows) if not state.get("MEE%02d" % i))
+            + sum(1 for i in range(rows - 1) if not state.get("MES%02d" % i)))
+
+
+def wall_rows(state, rows):
+    """The MEE/MES rows worth caching, as a plain key -> row dict."""
+    keys = ["MEE%02d" % i for i in range(rows)] +            ["MES%02d" % i for i in range(rows - 1)]
+    return {k: state[k] for k in keys if state.get(k)}
+
+
 def _neighbors(x, y, cols, rows, mee, mes):
     out = []
     row = mee[y] if y < len(mee) else ""
@@ -2031,7 +2196,14 @@ def parse_longship(value):
     2026-08-03: the record grew to 15 fields - a ship style went in at
     index 9 (so the old 'voyage_rep' slot is gone) and the tail is the
     same saga_title|saga_raids pair SHIPS carries. Styles confirmed by
-    the user: 'storm-cutter' is the ship, 'cunning' the captain."""
+    the user: 'storm-cutter' is the ship, 'cunning' the captain.
+
+    2026-09-03: LONGSHIP moved to GMCP, which does not send crew_traits
+    or ship_traits - so indices 11 and 12 are now always empty here. No
+    renderer reads them (the Sea tab shows the voyaging ship's traits
+    from VOYAGE, which is still on MIP); the fields stay in the dict so
+    a MIP-only session, or a later GMCP that carries them, still
+    populates them."""
     out = []
     for f in split_entries(value):
         if len(f) < 4:
@@ -2047,6 +2219,222 @@ def parse_longship(value):
                     "saga_title": field(f, 13, ""),
                     "saga_raids": field(f, 14, "")})
     return out
+
+
+# ======================================================================
+# GMCP -> BBE synthesis
+# ======================================================================
+# The mud carries the whole Viking feed on GMCP as well as on MIP's BBE
+# tag, as structured JSON under Guild.Fleet / Guild.Trade / Guild.City /
+# Guild.Settlement / Guild.Livestock / Guild.Roster / Guild.Voyage /
+# Guild.Market / Guild.State. First seen 2026-09-03; none of those
+# packages is declared in Core.Supported or documented in gmcp.txt, so
+# every mapping below is pinned to a real capture, never to a doc.
+#
+# SYNTHESIZE, DON'T REIMPLEMENT - the same decision port.md made for
+# Room.Info. The tabs read raw BBE strings out of the state dict and
+# parse them at render time, so rebuilding the BBE string and letting the
+# existing parse_* run is a drop-in: no renderer changes, no second code
+# path, and the MIP feed stays byte-comparable next to it.
+#
+# THE RULE: a key is synthesized only when EVERY field its parser reads
+# is present in the GMCP object. A record with one guessed field is worse
+# than no record, because the MIP feed that would have supplied it gets
+# retired. Keys held back for that reason, with the fields GMCP lacks:
+#
+#   LONGSHIP  crew_traits, ship_traits      VOYAGE   crew_traits,
+#   CARTS     legs (multi-stop route plan)           ship_traits, and
+#   FARM      shroom_id (GMCP sends a name),         weather is a key
+#             and the 'meta|weather_mod' header      not a string
+#   BQUEUE    the 'used/cap' header
+#   THRALLS   GMCP's 20 buildings are a NAMED dict and a different set
+#             from THRALL_BUILDINGS' 16 positional slots (no Thrall Pen
+#             or Brewery; new apiary/armoury/goldsmith/skald_hall/
+#             weaponry) - richer, but not a positional swap
+#   BLOT      rendered as a raw string, GMCP sends an object
+#
+# Those need a side-by-side MIP capture to resolve, not a guess.
+
+def _rec(obj, fields, sep="|"):
+    """Positional record from a GMCP object, or None if ANY field is
+    absent. None means "leave this key on MIP" - see THE RULE above.
+    Most BBE records are pipe-joined; TGOODS uses ':'."""
+    out = []
+    for f in fields:
+        if f not in obj:
+            return None
+        v = obj[f]
+        out.append("" if v is None else str(v))
+    return sep.join(out)
+
+
+# BBE record layouts, each verified against the parse_* that reads it.
+GMCP_SHIP_FIELDS = ("name", "tier", "state", "target", "secs", "id",
+                    "crew", "convoy", "convoy_size", "convoy_bonus",
+                    "saga_title", "saga_raids", "held")
+GMCP_ROUTE_FIELDS = ("village", "name", "road_tier", "fort_tier",
+                     "road_maint", "fort_maint")
+GMCP_LMARKET_FIELDS = ("lin", "idx", "species", "breed", "count",
+                       "price", "hard", "fert", "yield", "vigor", "con",
+                       "trait")
+GMCP_FOLLOWER_FIELDS = ("level", "name", "xp", "xp_cap", "carry_used",
+                        "carry_cap", "state")
+# good:score:sup:dem:buy:sell - byte-confirmed against the MIP TGOODS of
+# the same session (logs/*_20260903_1351*.log): one full three-hold value
+# assembled from GMCP matched MIP exactly.
+GMCP_TGOODS_FIELDS = ("good", "score", "sup", "dem", "buy", "sell")
+# LONGSHIP indices 0-10, then crew_traits and ship_traits (11, 12) which
+# GMCP does NOT send, then the saga pair (13, 14). Field order confirmed
+# against the MIP record of the same session: ship 1 reads
+# '1|Skidbladnir|5|raiding|Waterford|317|60|0|1|whisper-prowed|devout|||
+# the Legendary|169', and GMCP's voyage_identity is 'whisper-prowed' with
+# captain_style 'devout' - an exact match on the two style fields that
+# were the only real doubt.
+GMCP_LONGSHIP_HEAD = ("id", "name", "tier", "state", "target", "secs",
+                      "crew", "hired_crew", "safe", "voyage_identity",
+                      "captain_style")
+GMCP_LONGSHIP_TAIL = ("saga_title", "saga_raids")
+# WSTOCK is deliberately NOT synthesized from Guild.Warehouse, though
+# every field parse_wstock reads is there. MIP prefixes the value with
+# the warehouse's true capacity and GMCP has no capacity field at all,
+# so moving the key would strand the Trade tab on WAREHOUSE_CAPS - a
+# base-tier table that ignores skill bonuses and reads 5250 where the
+# real capacity is 8085. See warehouse_cap().
+
+
+def gmcp_bbe_values(pkg, data):
+    """GMCP package -> {BBE key: whole value}. Feeds that arrive complete
+    in one object, so they replace their key outright."""
+    out = {}
+    if pkg == "Guild.City":
+        patrol = data.get("patrol")
+        if isinstance(patrol, dict):
+            rec = _rec(patrol, ("count", "remaining"))
+            if rec:
+                out["PATROL"] = rec
+        wx = data.get("weather")
+        if isinstance(wx, dict):
+            # WEATHER's third field was undecoded ("no readout names it")
+            # - GMCP calls it `strength`.
+            rec = _rec(wx, ("season", "weather", "strength"))
+            if rec:
+                out["WEATHER"] = rec
+        prod = data.get("production")
+        if isinstance(prod, list):
+            pairs = ["%s:%s" % (e["good"], e["amount"]) for e in prod
+                     if isinstance(e, dict) and "good" in e
+                     and "amount" in e]
+            if len(pairs) == len(prod):
+                out["PRODUCTION"] = ",".join(pairs)
+    elif pkg == "Guild.Settlement":
+        sact = data.get("sactions")
+        if isinstance(sact, dict):
+            rec = _rec(sact, SACTIONS_NAMES)
+            if rec:
+                out["SACTIONS"] = rec
+    elif pkg == "Guild.Roster":
+        who = data.get("thrall_follower")
+        if isinstance(who, dict):
+            rec = _rec(who, GMCP_FOLLOWER_FIELDS)
+            if rec:
+                out["THRALL_FOLLOWER"] = rec
+    elif pkg == "Guild.State":
+        fx = data.get("fx")
+        if isinstance(fx, dict) and isinstance(fx.get("stfx"), str):
+            out["STFX"] = fx["stfx"]
+    return out
+
+
+def gmcp_bbe_rows(pkg, data):
+    """GMCP package -> {BBE key: [(group, identity, record), ...]}.
+
+    These feeds are PAGINATED - `page` of `pages`, a few records each -
+    so the caller buffers a whole sweep before publishing, and keys rows
+    by identity so a re-sweep replaces rather than appends. `group`
+    scopes the replacement: "" means the sweep carries the whole key,
+    while LMARKET arrives one lineage at a time and must only replace the
+    lineages this sweep actually carried."""
+    out = {}
+    if pkg == "Guild.Fleet":
+        for sh in data.get("ships") or []:
+            rec = isinstance(sh, dict) and _rec(sh, GMCP_SHIP_FIELDS)
+            if rec:
+                out.setdefault("SHIPS", []).append(
+                    ("", str(sh["id"]), rec))
+    elif pkg == "Guild.Trade":
+        for rt in data.get("routes") or []:
+            rec = isinstance(rt, dict) and _rec(rt, GMCP_ROUTE_FIELDS)
+            if rec:
+                out.setdefault("ROUTES", []).append(
+                    ("", str(rt["village"]), rec))
+    elif pkg == "Guild.Voyage":
+        # DELIBERATE RULE EXCEPTION, approved by the user 2026-09-03:
+        # GMCP omits crew_traits and ship_traits, so this synthesis is
+        # lossy - the only lossy one in the port. It is still the right
+        # trade, twice over. The Fleet renderer does not read either
+        # field (its own comment says the traits are shown in the Voyage
+        # block above, which VOYAGE feeds, and VOYAGE stays on MIP). And
+        # what it replaces is not a working feed: MIP chunks LONGSHIP
+        # across concurrent pushes that reassemble_chunks cannot match to
+        # each other, so 320 of 364 pushes in logs/mip_20260903_143404
+        # carried a MALFORMED record ('Deep Soad-hulled', 'Waterford|
+        # rford'). GMCP paginates - no seams, nothing to mis-join.
+        for sh in data.get("longship") or []:
+            if not isinstance(sh, dict):
+                continue
+            # A ship with no style sends the INTEGER 0 for these two,
+            # where MIP sends an empty field for the same ships (6, 7,
+            # 8, 10, 11 in the capture). Confirmed by cross-reference,
+            # not assumed - str(0) would otherwise put a literal "0"
+            # where a style name belongs.
+            sh = dict(sh)
+            for f in ("voyage_identity", "captain_style"):
+                if sh.get(f) == 0:
+                    sh[f] = ""
+            head = _rec(sh, GMCP_LONGSHIP_HEAD)
+            tail = _rec(sh, GMCP_LONGSHIP_TAIL)
+            if head and tail:
+                out.setdefault("LONGSHIP", []).append(
+                    ("", str(sh["id"]), head + "|||" + tail))
+    elif pkg == "Guild.TradeGoods":
+        # One SWEEP is one trade hold: five pages of goods, then a sixth
+        # page carrying only `lin` as a terminator. Grouping by lin keeps
+        # the per-hold scoping - a sweep must replace its own hold and
+        # leave the other two alone.
+        for g in data.get("goods") or []:
+            rec = isinstance(g, dict) and _rec(g, GMCP_TGOODS_FIELDS, ":")
+            if rec:
+                out.setdefault("TGOODS", []).append(
+                    (str(g["lin"]), str(g["good"]), rec))
+    elif pkg == "Guild.Livestock":
+        for key, rows in data.items():
+            if not key.startswith("lmarket_") or not isinstance(rows, list):
+                continue
+            for head in rows:
+                rec = isinstance(head, dict) and _rec(
+                    head, GMCP_LMARKET_FIELDS)
+                if rec:
+                    out.setdefault("LMARKET", []).append(
+                        (str(head["lin"]), str(head["idx"]), rec))
+    return out
+
+
+def join_rows(key, store):
+    """Assemble a paginated key's buffered rows into its BBE string.
+
+    Nearly every key is a flat ';'-joined record list. TGOODS is the
+    exception: it is grouped by trade hold as '<lin>=<goods>' joined
+    with '|', and parse_tgoods reads the holds left to right, so they
+    are emitted in lin order rather than arrival order."""
+    if key == "TGOODS":
+        def lin_order(g):
+            try:
+                return (0, int(g))
+            except ValueError:
+                return (1, 0)
+        return "|".join("%s=%s" % (g, ";".join(store[g].values()))
+                        for g in sorted(store, key=lin_order))
+    return ";".join(r for grp in store.values() for r in grp.values())
 
 
 def parse_counts(value):
@@ -2144,6 +2532,56 @@ def _pct(v):
     return f"{v}%" if str(v).isdigit() else (v or "-")
 
 
+# The keys the one-line info-pane summary reads, so the client can gate
+# its redraw on a packet that can actually change the line.
+VOYAGE_LINE_KEYS = ("VOYAGE", "VQPATH", "VOYAGE_WAIT", "VRESOLVE")
+
+
+def voyage_line(state):
+    """One-line voyage summary for the client's info pane, mirroring the
+    tail of `vvoyage status`:
+
+        -~*  State: Sailing | Queued steps: 1  *~-
+        -~*  Next arrival in: 54s              *~-
+
+    so "arrival" is VOYAGE's next_move_in (index 17), NOT a client-side
+    countdown: the wire re-sends the record about every 4 seconds and the
+    value visibly ticks down with it (logs/mip_20260903_135126.log).
+    Queued steps is the VQPATH waypoint count - the doc's "Queued steps:
+    1" and a live 'VQPATH^^5,5' agree, though not from the same captured
+    moment.
+
+    Paused instead shows what you can do about it, which is the only
+    thing worth acting on: 'Isoxl paused, salvage or search' from
+    VRESOLVE, falling back to the VOYAGE_WAIT node type when the wire
+    offers no choices.
+
+    NOT wire-confirmed: no capture holds the moment a voyage ends, so
+    "Launch a voyage!" keys off a blank ship/state. If the MUD stops
+    sending VOYAGE rather than blanking it, the last record sticks and a
+    finished voyage keeps showing here.
+    """
+    v = parse_voyage(state.get("VOYAGE", ""))
+    ship, st = v["ship"], v["state"]
+    if not ship or not st:
+        return "Launch a voyage!"
+    head = f"{ship} {st.capitalize()}"
+    if st.lower() == "paused":
+        choices = [c.strip() for c in state.get("VRESOLVE", "").split(",")
+                   if c.strip()]
+        if choices:
+            return f"{head}, " + " or ".join(choices)
+        node = (state.get("VOYAGE_WAIT", "") or "").strip() or v["paused"]
+        return f"{head}, {node} node" if node else head
+    parts = [head]
+    steps = len(parse_vqpath(state.get("VQPATH", "")))
+    if steps:
+        parts.append(f"queued steps {steps}")
+    if v["next"].isdigit() and int(v["next"]) > 0:
+        parts.append(f"arrival in {fmt_secs(v['next'])}")
+    return ", ".join(parts)
+
+
 # The Viking hpbar. Source 1 (frequent): the BBE resource keys when
 # mip_extra is on. Source 2 (always-on fallback): the FFF 'hpbar1' text
 # 'H[hp|max] S[seid|max] V[vig|max] R[rad|max] F[fury] C[chain]'. Both
@@ -2180,6 +2618,23 @@ def parse_hpbar(text):
             out[name] = int(m.group(1))
             out[name + "max"] = int(m.group(2))
     return out
+
+
+def fury_chain(text):
+    """Trim the FFF hpbar text down to the two readouts the graphic
+    hpbars don't already carry.
+
+    The I-field is 'H[1825|2074(0|3111)] S[4016|4016] V[4255|4255]
+    R[3972|3974] F[----------] C[0/0]'. H/S/V/R feed the four bars at the
+    bottom of the window (see VITALS_MAP), so repeating them in the info
+    pane is noise; the Fury gauge and the Chain counter have no bar and
+    are all the pane keeps.
+
+    Falls back to the whole string if the wire stops carrying F/C, so a
+    format change loses the trim rather than the line."""
+    import re
+    parts = re.findall(r"[FC]\[[^\]]*\]", text)
+    return " ".join(parts) if parts else text
 
 
 def active_spells(state):
@@ -2346,7 +2801,7 @@ class VikingStatus(tk.Toplevel):
     client may call it on every BBE packet."""
 
     def __init__(self, master, fonts=None, on_close=None, walk_cb=None,
-                 geometry=None, hold_goods=None):
+                 geometry=None, hold_goods=None, topmost=False):
         super().__init__(master)
         self.title("Viking Status")
         self.configure(bg=BG)
@@ -2357,6 +2812,7 @@ class VikingStatus(tk.Toplevel):
         # setting, else iron and timber.
         self.hold_goods = tuple(hold_goods or DEFAULT_HOLD_GOODS)
         self.protocol("WM_DELETE_WINDOW", self._closed)
+        widgets.add_window_menu(self, topmost)
         f = fonts or {}
         self.mono = f.get("mono", ("Consolas", 11))
         self.mono_bold = f.get("mono_bold", ("Consolas", 11, "bold"))
@@ -2516,7 +2972,8 @@ class VikingStatus(tk.Toplevel):
         for n, btn in self.goods_btns.items():
             btn.configure(bg=TAB_BG_ON if n == active else TAB_BG)
         self._render_goods(self.state_data.get("TGOODS", ""),
-                           self.state_data.get("DCYCLE", ""))
+                           self.state_data.get("DCYCLE", ""),
+                           self.state_data.get("NEXTTICK", ""))
 
     def _build_trade(self, frame):
         txt = self._scrolled_text(frame)
@@ -2951,7 +3408,8 @@ class VikingStatus(tk.Toplevel):
         keys = state if upd is None else upd
         if "TGOODS" in keys:
             self._timed(perf, "Goods", self._render_goods,
-                        state.get("TGOODS", ""), state.get("DCYCLE", ""))
+                        state.get("TGOODS", ""), state.get("DCYCLE", ""),
+                        state.get("NEXTTICK", ""))
         if self.trade_txt is not None and \
                 any(k in keys for k in TRADE_KEYS):
             self._timed(perf, "Trade", self._render_trade, state)
@@ -2986,7 +3444,7 @@ class VikingStatus(tk.Toplevel):
                 any(k in keys for k in COLONY_KEYS):
             self._timed(perf, "Colony", self._render_colony, state)
 
-    def _render_goods(self, tgoods, dcycle):
+    def _render_goods(self, tgoods, dcycle, nexttick=""):
         txt = self.goods_txt
         if txt is None:
             return
@@ -2997,12 +3455,26 @@ class VikingStatus(tk.Toplevel):
             self._redraw_end(txt, pos)
             return
         if dcycle:
+            # DCYCLE, despite the key name, is the WEATHER cycle (user,
+            # 2026-09-04) - 'Harvest Moon' with about three days left.
             parts = dcycle.split("|")
-            txt.insert("end", "Demand cycle: ", "dim")
+            txt.insert("end", "Weather cycle: ", "dim")
             txt.insert("end", parts[0], "cycle")
             if len(parts) > 1:
                 txt.insert("end", f"   {fmt_secs(parts[1])} left", "dim")
-            txt.insert("end", "\n\n")
+            txt.insert("end", "\n")
+        if nexttick:
+            # The only other countdown in the feed, and the closest thing
+            # to a market cycle: replaying logs/normal-20260903.log, every
+            # sell price sat completely still for the whole 50-minute
+            # session while this ticked down, so repricing happens here.
+            # Supply and demand are NOT on a cycle - they drift with every
+            # completed trade, so no countdown for them exists to show.
+            txt.insert("end", "Market tick: ", "dim")
+            txt.insert("end", fmt_secs(nexttick), "cycle")
+            txt.insert("end", "   next price adjustment\n", "dim")
+        if dcycle or nexttick:
+            txt.insert("end", "\n")
         self._render_sell_plan(txt, self.state_data)
         self._redraw_end(txt, pos)
 
@@ -3017,6 +3489,10 @@ class VikingStatus(tk.Toplevel):
         txt.insert("end", f"  x{r['units']}", "num")
         if r["units"] < r["stock"]:
             txt.insert("end", f" of {r['stock']}", "dim")
+        if r["max_sell"]:
+            # What this sale gives up: the best price ANY city lists for
+            # the good, whether or not that city currently wants it.
+            txt.insert("end", f"  {r['pct_max']}% of max", "dim")
         txt.insert("end", "\n")
         notes = []
         if r["cured"]:
@@ -3216,7 +3692,8 @@ class VikingStatus(tk.Toplevel):
         txt.insert("end", "Carts\n", "sec")
         carts = parse_carts(st.get("CARTS", ""))
         idle = split_entries(st.get("CIDLE", ""))
-        if not carts and not idle:
+        upgrading = parse_cupg(st.get("CUPG", ""))
+        if not carts and not idle and not upgrading:
             txt.insert("end", "  No carts\n", "dim")
         for c in carts:
             head = (f"  #{c['cart_id']} {c['mode']} {c['amt']} "
@@ -3235,6 +3712,13 @@ class VikingStatus(tk.Toplevel):
             txt.insert("end",
                        f"  #{field(f, 0)} idle   T{field(f, 1)}  "
                        f"dur{field(f, 2)}%  cap{field(f, 3)}\n", "dim")
+        for j in upgrading:
+            self._row(txt, f"  #{j['cart']} upgrading → T{j['tier']}",
+                      "val", fmt_secs(j["secs"]), "cyan")
+            line = f"      mats {j['done']}/{j['mats']}"
+            if j["detail"]:
+                line += f"  {j['detail']}"
+            txt.insert("end", line + "\n", "dim")
 
         refineries = parse_refinery(st.get("REFINERY", ""))
         if refineries:
@@ -3247,12 +3731,13 @@ class VikingStatus(tk.Toplevel):
                         f"{g} {q} ({p}%)" for g, q, p in r["grades"])
                         + "\n", "dim")
 
-        # Named in the 2026-07 doc with no documented format.
-        for key in ("SUPG", "CUPG"):
-            if (st.get(key) or "").strip():
-                txt.insert("end", f"{key} ", "sec")
-                txt.insert("end", "(raw - unidentified)\n", "dim")
-                txt.insert("end", "  " + st[key].strip() + "\n", "val")
+        # Named in the 2026-07 doc with no documented format. CUPG used
+        # to be dumped here too, which is how an upgrading cart went
+        # missing from the cart list - it is parsed above now.
+        if (st.get("SUPG") or "").strip():
+            txt.insert("end", "SUPG ", "sec")
+            txt.insert("end", "(raw - unidentified)\n", "dim")
+            txt.insert("end", "  " + st["SUPG"].strip() + "\n", "val")
 
         self._redraw_end(txt, pos)
 

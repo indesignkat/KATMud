@@ -85,6 +85,15 @@ def map_db_file(mud):
     return os.path.join(mud_dir(mud), f"{safe_name(mud)}.db")
 
 
+def viking_map_file(mud):
+    """Cached Viking guild-map wall grid (MEE/MES rows) for a mud. The
+    overland grid is guild-wide and static, but the MUD trickles it in one
+    row per BBE packet, so for ~2 minutes after login the half-built grid
+    reads as solid wall and `Go` reports a confident "no path". Seeding it
+    from disk closes that window."""
+    return os.path.join(mud_dir(mud), f"vikingmap-{safe_name(mud)}.json")
+
+
 def webstate_file(profile_id):
     return os.path.join(WEBSTATE_DIR, f"{safe_name(profile_id)}.json")
 

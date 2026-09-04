@@ -39,6 +39,7 @@ the `#`.
 | `#connect [host [port]]` | Connect; optional host/port override the profile. |
 | `#disconnect` | Drop the connection. |
 | `#reload` | Reload the config cascade **and** `katmud_scripts.py`. |
+| `#hotswap` | `#reload` **plus** the Python: reloads `katmud_lib` into the running client and rebinds the live objects, so a code edit takes effect without a relaunch and a running bot keeps its state. Syntax-checks first and reloads nothing if a file won't compile. Doesn't reach the connection reader loop, an already-open guild/dialog window, or a timer tick already pending. |
 | `#mip` | Re-send the MIP handshake (clears `mip_sent`). |
 | `#guild` | Show the active guild and its layer file path. |
 | `Gswap <guild>` | Switch the active guild live — reloads the cascade, guild hooks, vitals, and fires the layer's `on_activate` batch. No relaunch. |
