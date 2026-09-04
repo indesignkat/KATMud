@@ -1436,6 +1436,15 @@ class MudClient:
                     self.update_info()
         elif clean.startswith("G2N:"):
             self.stat2 = clean.strip(); changed = True
+            if self.guild.lower() == "elementals":
+                # This line's G2N is the SIZE track and prints with every
+                # prompt, so the panel's "next size" no longer waits for the
+                # player to type `guild score`. Written into elem_score
+                # beside the scraped fields, which is what the panel reads.
+                n = elemental.parse_g2n_size(clean)
+                if n is not None and self.elem_score.get("next_size") != n:
+                    self.elem_score["next_size"] = n
+                    self._refresh_elem_win()
         elif clean.startswith("HP:"):
             m = self.BP_RE.search(clean)
             if m:
