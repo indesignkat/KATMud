@@ -47,6 +47,32 @@ every power not yet sent.
 
 FIVE COMPLETE SWEEPS in the capture while `powers` was typed only TWICE -
 so three arrived unprompted, at a dead-regular 4 repower_pct ticks apart.
+
+A TICK IS ~15 SECONDS, so a sweep lands about once a MINUTE. Measured off
+two captures saved 62s apart (gmcp_20260904_010500 and _010602) whose
+repower_pct read 81 and 85 - four ticks in roughly a minute. Call it 55-70s
+for four, since the position of each reading inside its capture is unknown.
+That puts a full 0-100 repower cycle at ~25 minutes, consistent with the
+29 ticks seen across the 2026-09-03 session.
+
+GAME FACT (user, 2026-09-04): RESET LENGTHS ARE PER-GUILD, and a guild may
+have MORE THAN ONE. Bladesingers have two, with different durations - see
+blade.BLUR_RESET_SECS (2700s, measured off the GMCP reset counter) and the
+separate portal reset (400 rounds). The necro repower is "very fast" by
+comparison, which fits the ~25 minutes measured here.
+
+So do NOT reach for another guild's constant. Every one of these numbers
+has been measured off its own wire, and they do not transfer.
+
+THAT CADENCE IS THE THING TO REMEMBER when the feed looks dead. A short
+capture will contain NO sweep at all and that is normal: on 2026-09-04 a
+53-packet capture spanning a whole fight held one single repower_pct value
+(81), i.e. about one tick, with the next sweep not due until 84. Absence
+over a couple of minutes is not evidence of a broken feed.
+
+It is also easily MASKED: Dru's corpse cascade runs `powers` on every kill,
+so the text path resyncs the table minutes before a sweep would, and the
+tracker looks text-driven even when GMCP is working.
 All five carried all 25 powers, and the last agrees with the `powers` table
 the player typed at the end of the session, 25/25. test_necro_gmcp replays
 both.
@@ -91,17 +117,30 @@ And critically, `(VI)` does NOT generalise - drain's line carries no prefix
 at all ("The energized mist returns to you with a revival of life energy!"),
 so the pattern misses the one power the player most needs accurate.
 
-What `VI` MEANS is unknown. It is not the globe cost (dream is tier 3) and
-not the number of usages spent (nine lines, nine uses).
+WHAT THE NUMERAL MEANS. GAME FACT (user, 2026-09-04): it is dream's SLEEP
+FACTOR - the count of trailing z's on the command. `dream zz` prints
+`(II)`; plain `dream` with no z's prints NO numeral at all. Yesterday's
+nine lines were all `(VI)`, so they were six-z casts.
+
+It is therefore a CEILING you REQUEST, not a price you pay - nine `(VI)`
+lines against nine usages consumed. Six-z casts spending one usage each is
+consistent with the ability clamping to what you actually need.
+
+The numeral-to-spend relationship is still UNRESOLVED, and one observation
+does not fit: on 2026-09-04 a plain `dream` - no numeral, so factor 1 - sat
+between readouts of 845 and 843, i.e. TWO usages. Either something else
+cast dream in between, or the spend cannot be derived from the line at all.
+Left open rather than smoothed over.
 
 (An earlier draft of this file blamed the undercount on multi-use casts.
 That was wrong for this capture; the four-message split is the actual
 cause. The multi-use mechanic below is real and independently breaks a
 subtract-one estimator, but it is not what happened here.)
 
-GAME FACT (user, 2026-09-03): `dream` takes a count of trailing z's -
-`dream zz` consumes two usages on one line - and the higher your tier the
-more you can spend at once. It also appears to clamp to what you need.
+GAME FACT (user, 2026-09-03): `dream` takes a count of trailing z's, and
+the higher your tier the more you can spend at once. It clamps to what you
+need - which is why the z-count is the numeral above and NOT the usages
+consumed.
 
 So maintaining POWER_FIRE means hand-collecting every flavour message for
 every power AND solving the multi-use problem. That is the treadmill
@@ -126,12 +165,27 @@ conditional and nothing is cleared by absence.
 
   repower_pct     WIRE-CONFIRMED to be the prompt's r%. Session log line
                   667 sends repower_pct 47; the prompt at line 718 reads
-                  Status[w125%|pON|vON|r47%]. It is also the `powers`
-                  screen's "N will free in X%". Feeds self.vars["reset"],
+                  Status[w125%|pON|vON|r47%]. Feeds self.vars["reset"],
                   live, instead of only when a prompt happens to print.
+                  It is NOT the `powers` screen's percentage - that one is
+                  the COMPLEMENT, and they run in opposite directions. An
+                  earlier draft of this file called them the same number.
+                  Two captures pin it: repower_pct 81 vs "117 will free in
+                  19%", and repower_pct 85 vs "123 will free in 15%".
+
+                  GAME FACT (user, 2026-09-04): repower_pct counts UP to the
+                  guild reset (the "repower"), and the powers screen shows
+                  what is LEFT to it. Using a power parks its memory globes
+                  in a buffer; the reset frees them all at once, and only
+                  then can they be spent memorizing again. So repower_pct is
+                  "how far through the cycle", 100-repower_pct is "how long
+                  until my globes come back".
+  globes_freeing  how many buffered globes the next reset will release -
+                  the N in "N will free in X%". Rises as powers are spent
+                  (9 -> 36 over one capture, 117 -> 123 in another).
+                  Observed, not consumed.
   np              -> gp1, same as the text prompt's NP[]. No maximum is
                   sent; the prompt remains the source for npmax.
-  globes_freeing  the "N will free" count. Observed, not consumed.
   hp_gain         per-tick hp delta, ranging -130..+55. UNCONSUMED - its
                   purpose is not established.
   reagents        all eight, ONE packet in the capture. Keys are singular
