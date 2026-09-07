@@ -1,10 +1,18 @@
-"""katmud_lib.config - the four-layer configuration cascade (spec s2).
+"""katmud_lib.config - the layered configuration cascade (spec s2).
 
 Load order (later wins):
   1. global.json
   2. muds/<mud>/mud.json
   3. muds/<mud>/guilds/<guild>.json     (skipped when guild == "none")
   4. characters/<character>.json
+  5. characters/<character>-<mud>-<guild>.json   ("role"; skipped when
+     guild == "none")
+
+Layer 4 is keyed on the character NAME ALONE, so din on 3k and din on 3s
+share it - deliberate, since it lets gswap profiles keep one personal
+layer. Layer 5 exists because that sharing is wrong for anything mud- or
+guild-specific: a corpse routine for din/bladesinger/3k names commands
+that don't exist for din/bladesinger/3s.
 
 Collision rule for ALL config types, MIP handlers included:
 REPLACE, not append. A later layer's entry with the same key fully
@@ -46,7 +54,7 @@ merge so future sections need no migration.
 
 from . import paths
 
-LAYER_SCOPES = ("global", "mud", "guild", "character")
+LAYER_SCOPES = ("global", "mud", "guild", "character", "role")
 
 # Sections where the merge is dict.update (per-key replace).
 DICT_SECTIONS = ("aliases", "macros", "keys", "mip", "settings", "connection",
@@ -56,6 +64,14 @@ DICT_SECTIONS = ("aliases", "macros", "keys", "mip", "settings", "connection",
                  # "harvest"). Per-key merge so a character can override one
                  # guild's command without rewriting the rest.
                  "corpse",
+                 # combat: baseline per-fight routine. keys "start" (list of
+                 # command strings, all run once at the start of a fight),
+                 # "if" (list of {round, hp, cmd} dicts, each fired once the
+                 # fight has gone at least `round` rounds with the enemy
+                 # still above `hp`%) and "on" (bool, default True). Per-key
+                 # merge, same discipline as corpse - Combat's add/remove
+                 # commands read-modify-write the whole list under one key.
+                 "combat",
                  "vars")
 # Sections that are keyed lists: later same-key entry replaces earlier.
 KEYED_LIST_SECTIONS = {
@@ -100,6 +116,8 @@ def layer_path(scope, mud=None, guild=None, character=None):
         return paths.guild_file(mud, guild)
     if scope == "character":
         return paths.character_file(character)
+    if scope == "role":
+        return paths.role_file(character, mud, guild)
     raise ValueError(f"unknown scope {scope!r}")
 
 
@@ -108,7 +126,8 @@ def scope_label(scope, mud=None, guild=None, character=None):
     return {"global": "global (all muds)",
             "mud": f"{mud} (mud-wide)",
             "guild": f"{mud} / {guild}",
-            "character": f"{character} (character)"}[scope]
+            "character": f"{character} (character)",
+            "role": f"{character} on {mud}/{guild}"}[scope]
 
 
 class Cascade:
@@ -138,6 +157,10 @@ class Cascade:
         if self.guild.lower() != "none":
             scopes.append("guild")
         scopes.append("character")
+        # Most specific of all - this character, in this guild, on this
+        # mud. Last, so it wins every collision.
+        if self.guild.lower() != "none":
+            scopes.append("role")
         return scopes
 
     def path_for(self, scope):

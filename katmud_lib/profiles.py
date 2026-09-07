@@ -41,6 +41,44 @@ def save(data):
     paths.save_json(paths.PROFILES_FILE, data)
 
 
+def save_settings(values):
+    """Merge global settings (fonts) into profiles.json.
+
+    Same reason as save_window: a whole-file save from one running
+    client reverts whatever another wrote after we loaded ours."""
+    def mutate(data):
+        data.setdefault("settings", {}).update(values)
+
+    paths.update_json(paths.PROFILES_FILE, mutate, default=DEFAULT)
+
+
+def save_window(profile_id, values):
+    """Merge one character's window state (geometry / topmost / whether
+    a status window was open) into profiles.json.
+
+    Read-modify-writes the FILE instead of rewriting our whole in-memory
+    copy the way save() does. Two clients run side by side - 3s in one,
+    3k in the other - and each holds a snapshot loaded at startup, so a
+    whole-file save from one silently reverts whatever the other wrote
+    after that. Window state is the only thing either of them changes
+    while running, so merging just these keys is enough.
+
+    A profile that isn't listed (launched ad-hoc) is stashed under
+    settings.window/<id> rather than dropped."""
+    def mutate(data):
+        for p in data.setdefault("profiles", []):
+            if p.get("id") == profile_id:
+                w = p.get("window")
+                if not isinstance(w, dict):
+                    w = p["window"] = {}
+                w.update(values)
+                return
+        stash = data.setdefault("settings", {}).setdefault("window", {})
+        stash.setdefault(profile_id, {}).update(values)
+
+    paths.update_json(paths.PROFILES_FILE, mutate, default=DEFAULT)
+
+
 def get(data, profile_id):
     for p in data["profiles"]:
         if p.get("id") == profile_id:
@@ -73,12 +111,32 @@ def ordered_for_picker(data):
     return mru, grouped
 
 
+def _merge_profile(profile_id, values):
+    """Merge fields onto one profile ON DISK, appending it if absent.
+
+    Every writer here read profiles.json at startup, and a client
+    running alongside keeps writing its window state to the same file -
+    so saving a whole in-memory snapshot silently reverts whatever it
+    wrote since. Launching a second character used to do exactly that
+    (touch() runs on every launch)."""
+    def mutate(disk):
+        for p in disk.setdefault("profiles", []):
+            if p.get("id") == profile_id:
+                p.update(values)
+                return
+        entry = {"id": profile_id}
+        entry.update(values)
+        disk["profiles"].append(entry)
+
+    paths.update_json(paths.PROFILES_FILE, mutate, default=DEFAULT)
+
+
 def touch(data, profile_id):
     p = get(data, profile_id)
     if p:
-        p["last_launched"] = datetime.datetime.now() \
-            .isoformat(timespec="seconds")
-        save(data)
+        stamp = datetime.datetime.now().isoformat(timespec="seconds")
+        p["last_launched"] = stamp
+        _merge_profile(profile_id, {"last_launched": stamp})
 
 
 def delete(data, profile_id):
@@ -86,14 +144,20 @@ def delete(data, profile_id):
     stored credential - those may be shared by sibling profiles."""
     data["profiles"] = [p for p in data["profiles"]
                         if p.get("id") != profile_id]
-    save(data)
+
+    def mutate(disk):
+        disk["profiles"] = [p for p in disk.get("profiles", [])
+                            if p.get("id") != profile_id]
+
+    paths.update_json(paths.PROFILES_FILE, mutate, default=DEFAULT)
 
 
 def upsert(data, entry):
     """Insert or replace by id, scaffold the character file if absent
     (spec 1.3 / 2.3: an existing characters/<name>.json is REUSED, not
     scaffolded over - that's what makes gswap profiles share one
-    personal layer)."""
+    personal layer). Merges, so a running client's `window` state
+    survives an edit here."""
     existing = get(data, entry["id"])
     if existing:
         existing.update(entry)
@@ -102,4 +166,4 @@ def upsert(data, entry):
     cpath = paths.character_file(entry["character"])
     if not os.path.exists(cpath):
         paths.save_json(cpath, config.CHARACTER_TEMPLATE)
-    save(data)
+    _merge_profile(entry["id"], entry)

@@ -279,10 +279,33 @@ class TinMap:
 
     # ------------------------------------------------------- lookups
     def candidates(self, name, exits):
-        ids = self.by_key.get(norm_key(name, exits))
-        if ids:
-            return list(ids)
-        return list(self.by_name.get(name.strip().lower(), []))
+        """Rooms matching the name AND the exit set.
+
+        There is deliberately no name-only fallback. norm_key already
+        ignores order, case and whitespace, so a miss means the exit SETS
+        genuinely differ - the map and the MUD disagree about what exits
+        this room has.
+
+        On 3k that means we are almost certainly in a DIFFERENT room that
+        happens to share a name, not in a room the map has merely gone
+        stale on: 3k adds areas maybe twice a year, exits do not drift,
+        and no 3k area is procedurally generated (GAME FACT, user
+        2026-09-06). 6623 of the 9894 room names in that map belong to
+        exactly one room, so a name-only match would have looked
+        confident nearly every time while contradicting the evidence.
+        Report nothing instead and let the player fix it with
+        Mapfind/Mapgo.
+
+        Corollary worth acting on: a mismatch is rare and meaningful.
+        Historic capture (the auto-mapper's phantom rooms, built from
+        live MUD text) had 4959 of 5152 matching the community map
+        exactly and only 188 differing on exits. Frequent conflicts in
+        practice would point at something systematic - the MUD naming an
+        exit differently from the map - not at normal drift.
+
+        by_name is kept as an index for name lookups - it is just no
+        longer consulted to decide where we are."""
+        return list(self.by_key.get(norm_key(name, exits)) or ())
 
     # ---------------------------------------------------- traversal
     def tunnel(self, from_rid, tgt, dirbits=0):
@@ -483,14 +506,28 @@ class Locator:
                     self.cands = []
                     return rid
 
-        matches = self.tmap.candidates(name, exits)
-
+        # TRUST THE MAP. If we knew where we were and the command we sent
+        # is a charted exit of that room, we are in the room that exit
+        # leads to - full stop, no second-guessing from the room text.
+        #
+        # Deriving position from (name, exits) instead cannot work on 3k:
+        # names repeat heavily - 41 of the 91 Treehouse rooms are
+        # ambiguous that way, and 'Along a wall' occurs in hundreds - so
+        # tracking was lost within a move or two of entering such an area.
+        # This used to be gated on `tgt in matches`, which threw the map's
+        # definite answer away exactly when the text was ambiguous.
+        #
+        # Name matching now only runs when there is no prediction to be
+        # had: we are not located, or the command taken is not an exit
+        # this room has on the map.
         if self.room_id is not None and last_cmd:
             tgt = self.tmap.follow(self.room_id, last_cmd.strip())
-            if tgt is not None and tgt in matches:
+            if tgt is not None:
                 self.room_id = tgt
                 self.cands = []
-                return self.room_id
+                return tgt
+
+        matches = self.tmap.candidates(name, exits)
 
         if len(matches) == 1:
             self.room_id = matches[0]

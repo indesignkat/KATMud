@@ -33,9 +33,9 @@ class ScopeBar(tk.Frame):
         self.var = tk.StringVar(value="character")
         tk.Label(self, text="Save to:", bg=BG, fg=FG).pack(side="left",
                                                            padx=(0, 6))
-        for scope in ("character", "guild", "mud", "global"):
+        for scope in ("role", "character", "guild", "mud", "global"):
             label = client.cascade.label_for(scope) \
-                if not (scope == "guild"
+                if not (scope in ("guild", "role")
                         and client.guild.lower() == "none") \
                 else "(no guild)"
             rb = tk.Radiobutton(

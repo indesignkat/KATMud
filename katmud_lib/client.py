@@ -268,6 +268,22 @@ class MudClient:
         self.exits = []
         self.rounds = 0
         self.in_combat = False
+        # Combat: baseline per-fight routine (start list/if list), see
+        # cmd_combat. Fired-once state reset at every fight-start edge AND
+        # every fight-over signal (Char.Combat empty snapshot, FFF
+        # enemy-empty, kill-text) - see _try_evoke_age's note on back-to-back
+        # fights for why in_combat alone can't be trusted to always cycle.
+        self._combat_start_fired = False
+        self._combat_if_fired = set()      # {(round, hp), ...} fired this fight
+        # Rooms left in a manual ';' speedwalk not yet DDD-confirmed. A
+        # non-zero count means "still mid-sprint" - Combat's triggers are
+        # suppressed then (unless a bot/walker is driving) so an aggro mob
+        # you're running PAST doesn't get a routine meant for the mob
+        # you're running TO. See sql_follow_ddd / process_input.
+        self._speedwalk_remaining = 0
+        # tin backend: set when tin_advance_position has already walked a
+        # move on the map, so the arrival packet doesn't apply it twice.
+        self._tin_move_spent = False
         self.last_sent = time.time()
         self.last_manual = time.time()
         self.deadman_tripped = False
@@ -551,6 +567,13 @@ class MudClient:
                                            # every mutant, ignore loot/items
         self._chaossea_dm_paused = False   # deadman: paused in place, all
                                            # state held; resumes on release
+        self._chaossea_dm_kills_at_trip = 0  # len(self.kills) snapshotted
+                                           # when the trip began - a kill
+                                           # while paused resolves via mud
+                                           # autocombat but its Corpse
+                                           # cascade send was dropped by the
+                                           # deadman guard; release re-fires
+                                           # it - see _chaossea_tick.
         self._chaossea_job = None
         self._chaossea_map = {}         # fake_vnum -> {direction: fake_vnum}
         self._chaossea_room_exits = {}  # fake_vnum -> live exits seen there
@@ -805,6 +828,7 @@ class MudClient:
         self.start_map_loader()
         self.root.after(30, self.poll_queue)
         self.root.after(1000, self.tick)
+        self.root.after(200, self.restore_status_window)
         self.connect()
 
     # ------------------------------------------------ config layering
@@ -899,6 +923,10 @@ class MudClient:
         # "dealt the killing blow to" trigger): {solo, party, toggle}. Fired
         # by _fire_corpse from the kill detection in track_combat_line.
         self.corpse_cfg = dict(c.get("corpse", {}) or {})
+        # Baseline combat routine: {start, if: {round, hp, cmd}}. Fired
+        # once per fight by _on_combat_change (start) and the round-count
+        # check in track_combat_line/gmcp_guild_state (if). See cmd_combat.
+        self.combat_cfg = dict(c.get("combat", {}) or {})
         vit = c.get("vitals")
         self.vitals_cfg = vit if isinstance(vit, list) and vit \
             else DEFAULT_VITALS
@@ -935,6 +963,58 @@ class MudClient:
             self.setting("rating_swallow_patterns",
                          DEFAULT_RATING_SWALLOW))
 
+    # --------------------------------------------- per-character windows
+    def _win_state(self, key, default=None):
+        """One window-state value for THIS character.
+
+        Falls back to the old global `settings` key, which every
+        character used to share, so an existing install keeps its
+        positions until this character saves its own."""
+        p = profiles.get(self.profiles_data, self.profile_id) or {}
+        win = p.get("window")
+        if isinstance(win, dict) and key in win:
+            return win[key]
+        stash = (self.profiles_data.get("settings", {})
+                 .get("window", {}).get(self.profile_id) or {})
+        if key in stash:
+            return stash[key]
+        return self.profiles_data.get("settings", {}).get(key, default)
+
+    # Guild -> (window-open flag, opener). Only the guild's own status
+    # window is ever restored, matching the guild gating on the Tools menu.
+    STATUS_WINDOWS = {
+        "vikings": ("viking_open", "open_viking_status"),
+        "elementals": ("elemental_open", "open_elemental_status"),
+        "bladesingers": ("bladesinger_open", "open_bladesinger_status"),
+    }
+
+    def restore_status_window(self):
+        """Reopen the guild status window if it was open when this
+        character last quit, so a viking doesn't have to pull it up by
+        hand every login. Deferred a beat past build_ui so the window
+        opens over a laid-out main window rather than a zero-size one."""
+        entry = self.STATUS_WINDOWS.get((self.guild or "").lower())
+        if not entry:
+            return
+        flag, opener = entry
+        if not self._win_state(flag):
+            return
+        try:
+            getattr(self, opener)()
+        except tk.TclError:
+            pass
+
+    def _save_win_state(self, **values):
+        """Persist window state for this character only - see
+        profiles.save_window for why this isn't a whole-file save."""
+        profiles.save_window(self.profile_id, values)
+        p = profiles.get(self.profiles_data, self.profile_id)
+        if p is not None:               # keep our snapshot in step
+            w = p.get("window")
+            if not isinstance(w, dict):
+                w = p["window"] = {}
+            w.update(values)
+
     # ------------------------------------------------ UI construction
     def build_ui(self):
         self.root.title(f"KatMUD \u2014 {self.display_name} "
@@ -943,13 +1023,15 @@ class MudClient:
         # Restore the last size/position (the +X+Y in a Tk geometry string is
         # virtual-desktop coords, so this also restores which monitor). Saved
         # on close; restored as-is so a second-monitor spot survives (the WM
-        # re-clamps if that monitor is now gone).
+        # re-clamps if that monitor is now gone). Per CHARACTER, so a 3s and
+        # a 3k client don't fight over one position.
         try:
-            self.root.geometry(s0.get("main_geometry") or "1280x800")
+            self.root.geometry(self._win_state("main_geometry")
+                               or "1280x800")
         except tk.TclError:
             self.root.geometry("1280x800")
         self.root.configure(bg="#1a1a1a")
-        if s0.get("main_zoomed"):
+        if self._win_state("main_zoomed"):
             try:
                 self.root.state("zoomed")
             except tk.TclError:
@@ -1233,7 +1315,9 @@ class MudClient:
             b.configure(height=bar_h)
         self.update_vitals()
         self.map.redraw()
-        profiles.save(self.profiles_data)
+        # Fonts stay global (unlike window position), but the write is
+        # still targeted so it can't revert another client's entry.
+        profiles.save_settings({"font_family": fam, "font_size": size})
 
     def bump_font(self, delta):
         s = self.profiles_data.setdefault("settings", {})
@@ -1816,6 +1900,10 @@ class MudClient:
             return
         vnum = self._sql_resolve_low5(pe.vnum)   # DDD has no bracket: lift it
         moved = (self._sql_cur_vnum is not None and vnum != self._sql_cur_vnum)
+        # getattr default, not self._speedwalk_remaining: a #hotswap into
+        # code that adds an __init__ attribute must not raise here.
+        if moved and getattr(self, "_speedwalk_remaining", 0) > 0:
+            self._speedwalk_remaining -= 1
         self._sql_cur_vnum = vnum
         self.room_vnum = vnum
         # self.exits must be settled before _chaossea_on_room_packet runs -
@@ -2855,6 +2943,10 @@ class MudClient:
         those manage the gate and combat themselves. Resume is debounced so
         a flapping enemy field or an immediate next mob doesn't thrash the
         mode (and post-kill loot/text settles first)."""
+        if fighting:
+            self._combat_start_fired = False
+            self._combat_if_fired = set()
+            self._try_combat_start()
         if self.map_backend != "sqlite" or self.mapdb is None:
             return
         if self._bot_on or self._run_on or self._explore_on or self._agent_on:
@@ -3090,6 +3182,16 @@ class MudClient:
     def map_locate(self, vnum=None):
         if not self.locator or not self.room:
             return
+        if getattr(self, "_tin_move_spent", False):
+            # tin_advance_position already walked this move on the map;
+            # the arrival packet confirms it and tells us nothing more.
+            # Re-deriving here would either double-apply the command or
+            # re-identify us from ambiguous room text - the two things
+            # this design exists to avoid.
+            self._tin_move_spent = False
+            if self.locator.located:
+                self.render_tin_map(self.locator.room_id)
+                return
         was_located = self.locator.located
         prev_rid = self.locator.room_id
         rid = self.locator.on_room(self.room, self.exits,
@@ -3104,27 +3206,93 @@ class MudClient:
                 self.exit_mapping("tracking returned to known "
                                   "territory")
             self.handle_record(prev_rid, rid)
-            room = self.tmap.rooms[rid]
-            grid, collisions = self.tmap.neighborhood(rid, 3)
-            payload = {}
-            for (x, y), gid in grid.items():
-                r = self.tmap.rooms.get(gid)
-                if r is None:
-                    continue
-                _nm, exits, _v = mapdata.split_name(r.name)
-                payload[(x, y)] = {"rid": gid, "exits": exits,
-                                   "here": gid == rid,
-                                   "collide": (x, y) in collisions,
-                                   "house": r.house}
-            self.map.set_graph(payload, area=room.area,
-                               coder=room.coder,
-                               status=f"#{rid}", mapping=self.mapping)
+            self.render_tin_map(rid)
         else:
             n = len(self.locator.cands)
-            self.map.set_graph(None,
-                               status=(f"locating... ({n} candidates)"
-                                       if n else "not on map"),
-                               mapping=self.mapping)
+            self.map.set_graph(
+                None,
+                status=(f"locating... ({n} candidates)" if n
+                        else "unmapped - Mapfind/Mapgo to fix"),
+                mapping=self.mapping)
+
+    def tin_advance_position(self, cmd):
+        """Move the map marker the moment a charted exit is SENT.
+
+        3k's MIP room packets can't be relied on to arrive promptly, so
+        waiting for one before updating position leaves the pane lagging
+        behind (or lost, when the room text is ambiguous). The map already
+        knows where this exit goes, so go there now - the same thing
+        tintin's mapper does. A room packet, if one does arrive, still
+        runs through Locator.on_room afterwards.
+
+        Three outcomes, in order:
+          - a charted exit          -> move to where the map says it goes
+          - a move the map lacks    -> we have LEFT the map; say so, and
+                                       wait for Mapfind/Mapgo rather than
+                                       leaving the marker in the room we
+                                       just walked out of
+          - anything else           -> not movement at all; ignore it
+        """
+        if self.map_backend == "sqlite":
+            return                  # 3s has vnums on the wire; not needed
+        if not self.tmap or not self.locator or not self.locator.located:
+            return
+        here = self.locator.room_id
+        tgt = self.tmap.follow(here, (cmd or "").strip())
+        if tgt is not None:
+            if tgt == here:
+                return
+            self.locator.force(tgt)
+            # This move is SPENT. mip_room calls map_locate while
+            # _last_move is still set (it clears it afterwards), and
+            # map_locate dead-reckons too - so without this the arrival
+            # packet applied the same command a second time and left us a
+            # room ahead. Live 2026-09-06: `ne` twice in Terra's Terrific
+            # Treehouse put the marker two rooms on, and the move after
+            # that wasn't an exit of the wrong room, so the pane went
+            # unmapped.
+            self._tin_move_spent = True
+            room = self.tmap.rooms.get(tgt)
+            if room is not None:
+                self.map.update_room(room=room.name)
+            self.render_tin_map(tgt)
+            return
+        if not self._is_move_command(cmd, here):
+            return                  # `eq`, `look`, chat: we haven't moved
+        # A real move down an exit the map doesn't have. Anything we
+        # displayed from here on would be a guess, so show nothing.
+        self.locator.force(None)    # force(None) == lost: room_id None
+        self.map.set_graph(None, status="unmapped - Mapfind/Mapgo to fix",
+                           mapping=self.mapping)
+
+    def render_tin_map(self, rid):
+        """Draw the tt++ map pane centred on room `rid`."""
+        room = self.tmap.rooms.get(rid)
+        if room is None:
+            return
+        grid, collisions = self.tmap.neighborhood(rid, 3)
+        payload = {}
+        for (x, y), gid in grid.items():
+            r = self.tmap.rooms.get(gid)
+            if r is None:
+                continue
+            _nm, exits, _v = mapdata.split_name(r.name)
+            # draw_graph needs BOTH of these or it draws no connector at
+            # all: a solid line requires links[d] to name the room
+            # actually drawn in the neighbouring cell, and a dashed spoke
+            # requires the exit to be a stub. Room.exits is
+            # {command: target_rid}, 0 meaning tintin charted no
+            # destination. Omitting them (until 2026-09-06) left 3k's
+            # pane drawing floating boxes with nothing joining them.
+            links = {d: t for d, t in r.exits.items() if t}
+            stubs = [d for d in exits if not r.exits.get(d)]
+            payload[(x, y)] = {"rid": gid, "exits": exits,
+                               "stubs": stubs, "links": links,
+                               "here": gid == rid,
+                               "collide": (x, y) in collisions,
+                               "house": r.house}
+        self.map.set_graph(payload, area=room.area, coder=room.coder,
+                           status=f"#{rid}", mapping=self.mapping)
 
     # -------------------------------------------- mapping mode (6.3)
     def enter_mapping(self, auto=False):
@@ -3151,12 +3319,50 @@ class MudClient:
             f"[mapping mode off{': ' + why if why else ''}]",
             "#ffaa44")
 
+    def _is_move_command(self, cmd, prev_rid):
+        """Did `cmd` plausibly move us out of room prev_rid?
+
+        _raw_send stamps _last_move on EVERY command sent, so without
+        this the auto-mapper reads `eq` or `i` as movement and mints a
+        patch room duplicating the one we're standing in (live: a 3-room
+        3k house had grown to 13 patch rooms, edges labelled `eq`, `i`,
+        `ho`, `unkeep shield`).
+
+        A command counts as a move if the room we left offers it - either
+        as a charted exit or in the exit list the MUD reported in its
+        name - or if it's declared in `movement_commands`. That setting
+        is for mud-side aliases no room can advertise: 3k grants `home`
+        from every room its owner has linked a house teleport to, and
+        never lists it among the room's exits."""
+        cmd = (cmd or "").strip().lower()
+        if not cmd:
+            return False
+        declared = {str(c).strip().lower()
+                    for c in (self.setting("movement_commands", []) or [])}
+        # Match the bare verb too: 3k's `home` takes an optional house
+        # number ('home 481' goes to a clan house rather than your own),
+        # and both are moves. Only the declared list gets this - doing it
+        # for room exits would let 'look north' pass as a move.
+        if cmd in declared or cmd.split()[0] in declared:
+            return True
+        room = self.tmap.rooms.get(prev_rid) if self.tmap else None
+        if room is None:
+            return False
+        if cmd in {str(e).strip().lower() for e in room.exits}:
+            return True
+        _nm, exits, _v = mapdata.split_name(room.name)
+        return cmd in {e.strip().lower() for e in exits}
+
     def maybe_map_new_room(self, prev_rid, was_located):
         """Locator lost us. Auto-enter mapping ONLY on a confident fix
         for the previous room (spec 6.3 safeguard: a lost locator in
         mapped territory must not trigger spurious mapping); in
         mapping mode, create the room from observed MIP data."""
         if not self.tmap:
+            return
+        # Before anything else, including auto-entering mapping mode - a
+        # non-move must not flip the client into mapping either.
+        if not self._is_move_command(self._last_move, prev_rid):
             return
         if not self.mapping:
             if was_located and prev_rid is not None and \
@@ -5172,6 +5378,9 @@ class MudClient:
         self._chaossea_reschedule(self._bot_safety_s())
 
     def _chaossea_scan_markers(self, spans, clean):
+        if "a glowing portal (swirling chaotically)" in clean.lower():
+            self._chaossea_stop("reached the boss/treasure room (glowing portal) - stopping")
+            return
         ital, under = self._line_markers(spans)
         if ital:
             if clean.lstrip().lower().startswith("a ritual scene depicting"):
@@ -5286,6 +5495,7 @@ class MudClient:
             # keypress releases it.
             if not self._chaossea_dm_paused:
                 self._chaossea_dm_paused = True
+                self._chaossea_dm_kills_at_trip = len(self.kills)
                 self.write_local(
                     "[chaossea] deadman tripped - paused in place, state "
                     "held. Type anything to release and resume.", "#ffaa44")
@@ -5294,6 +5504,23 @@ class MudClient:
             self._chaossea_dm_paused = False
             self.write_local("[chaossea] deadman released - resuming.",
                              "#66cc66")
+            if len(self.kills) > self._chaossea_dm_kills_at_trip \
+                    and not self.in_combat:
+                # A kill landed via mud-side autocombat while paused - the
+                # tick never saw it happen (this branch is the first one
+                # reached after the trip), so _chaossea_was_fighting never
+                # latched and the kill-text's _fire_corpse call had its send
+                # silently dropped by the deadman guard. Re-fire the Corpse
+                # cascade for real now, then feed the SAME post-kill
+                # transition a normal in-view kill takes (see the
+                # in_combat->False edge below) instead of falling through to
+                # the engage/whiff-retry branch, which would otherwise
+                # 'kill <keyword>' a mutant that's already dead.
+                mob, _rnd = self.kills[-1]
+                self._fire_corpse(mob)
+                self._chaossea_post_kill_wait = True
+                self._arm_post_kill_resume()
+                self._chaossea_reschedule(0.3); return
         if self.in_combat:
             self._chaossea_was_fighting = True
             self._chaossea_engage_whiffs = 0   # the swing connected - real fight
@@ -7712,6 +7939,8 @@ class MudClient:
             self.call_hook("evoke_age_rearm")
             if self.rounds:
                 self.rounds = 0
+            self._combat_start_fired = False
+            self._combat_if_fired = set()
 
     def gmcp_mud_status(self, data):
         """Replaces AAF (uptime) and AAC (reboot eta). MIP sent these
@@ -7886,6 +8115,7 @@ class MudClient:
                     upd.get("round"),), data)
                 self.rounds = upd["round"]
                 self.in_combat = True
+                self._try_combat_if()
         if "enemy" in upd:
             self._fff_combat = True
             if len(upd["enemy"]) > 1:
@@ -7895,6 +8125,8 @@ class MudClient:
                 self.in_combat = False
                 self.vitals["enemy"] = ""
                 self.vitals.pop("enemycond", None)
+                self._combat_start_fired = False
+                self._combat_if_fired = set()
         if self.guild.lower() == "bards" and "hpbar2" in upd:
             # J carries the song being performed plus its countdown, and it
             # ticks on J-ONLY packets too - so parse it out here rather than
@@ -8289,21 +8521,19 @@ class MudClient:
             self.root,
             fonts={"mono": self.small_font, "mono_bold": self.small_bold},
             on_close=self._elem_closed,
-            geometry=self.profiles_data.get("settings", {}).get(
-                "elemental_geometry"),
-            topmost=self.profiles_data.get("settings", {}).get(
-                "elemental_topmost"))
+            geometry=self._win_state("elemental_geometry"),
+            topmost=self._win_state("elemental_topmost"))
         self._refresh_elem_win()
+        self._save_win_state(elemental_open=True)
 
     def _elem_closed(self):
         # _closed() calls this before destroy(), so geometry is still valid.
         try:
             if self.elem_win is not None and self.elem_win.winfo_exists():
-                st = self.profiles_data.setdefault("settings", {})
-                st["elemental_geometry"] = self.elem_win.geometry()
-                st["elemental_topmost"] = bool(
-                    self.elem_win.topmost_var.get())
-                profiles.save(self.profiles_data)
+                self._save_win_state(
+                    elemental_geometry=self.elem_win.geometry(),
+                    elemental_topmost=bool(self.elem_win.topmost_var.get()),
+                    elemental_open=False)
         except (OSError, ValueError, tk.TclError):
             pass
         self.elem_win = None
@@ -8325,21 +8555,20 @@ class MudClient:
             self.root,
             fonts={"mono": self.small_font, "mono_bold": self.small_bold},
             on_close=self._blade_closed,
-            geometry=self.profiles_data.get("settings", {}).get(
-                "bladesinger_geometry"),
-            topmost=self.profiles_data.get("settings", {}).get(
-                "bladesinger_topmost"))
+            geometry=self._win_state("bladesinger_geometry"),
+            topmost=self._win_state("bladesinger_topmost"))
         self._refresh_blade_win()
+        self._save_win_state(bladesinger_open=True)
 
     def _blade_closed(self):
         # _closed() calls this before destroy(), so geometry is still valid.
         try:
             if self.blade_win is not None and self.blade_win.winfo_exists():
-                st = self.profiles_data.setdefault("settings", {})
-                st["bladesinger_geometry"] = self.blade_win.geometry()
-                st["bladesinger_topmost"] = bool(
-                    self.blade_win.topmost_var.get())
-                profiles.save(self.profiles_data)
+                self._save_win_state(
+                    bladesinger_geometry=self.blade_win.geometry(),
+                    bladesinger_topmost=bool(
+                        self.blade_win.topmost_var.get()),
+                    bladesinger_open=False)
         except (OSError, ValueError, tk.TclError):
             pass
         self.blade_win = None
@@ -8356,27 +8585,26 @@ class MudClient:
             fonts={"mono": self.small_font, "mono_bold": self.small_bold},
             on_close=self._viking_closed,
             walk_cb=self.viking_walk_to,
-            geometry=self.profiles_data.get("settings", {}).get(
-                "viking_geometry"),
+            geometry=self._win_state("viking_geometry"),
             hold_goods=self.setting("trade_hold_goods"),
-            topmost=self.profiles_data.get("settings", {}).get(
-                "viking_topmost"))
+            topmost=self._win_state("viking_topmost"))
         self.viking_win.update_state(self.viking_state)
         if self.viking_skills:          # restore the last-read skill costs
             self.viking_win.set_vskills(self.viking_skills)
         if self._viking_focus_bind is None:
             self._viking_focus_bind = self.root.bind(
                 "<FocusIn>", self._viking_raise_with_main, add="+")
+        self._save_win_state(viking_open=True)
 
     def _viking_closed(self):
         # _closed() calls this before destroy(), so geometry is still valid.
         try:
             if self.viking_win is not None and \
                     self.viking_win.winfo_exists():
-                s = self.profiles_data.setdefault("settings", {})
-                s["viking_geometry"] = self.viking_win.geometry()
-                s["viking_topmost"] = bool(self.viking_win.topmost_var.get())
-                profiles.save(self.profiles_data)
+                self._save_win_state(
+                    viking_geometry=self.viking_win.geometry(),
+                    viking_topmost=bool(self.viking_win.topmost_var.get()),
+                    viking_open=False)
         except tk.TclError:
             pass
         if self._viking_focus_bind is not None:
@@ -9920,10 +10148,17 @@ class MudClient:
                 return
             if manual and self.walk:
                 self.cancel_walk()
+            if manual:
+                # Combat's triggers stay suppressed (mid-sprint) until this
+                # many more rooms have been DDD-confirmed - see
+                # sql_follow_ddd and _combat_mid_sprint.
+                self._speedwalk_remaining = len(steps)
             for s in steps:
                 self.send_line(s, manual=manual, gated=gated)
             self._sql_blast_reset()
             return
+        if manual and depth == 0:
+            self._speedwalk_remaining = 0
         if manual and self.walk and depth == 0:
             self.cancel_walk()
         for cmd in self.split_commands(raw):
@@ -9943,7 +10178,8 @@ class MudClient:
                     "VN", "Track", "Untrack", "Bot",
                     "Hunt", "Scan", "Gswap", "Run",
                     "Reagents", "Explore", "Agent",
-                    "Reminder", "Reminders", "Corpse",
+                    "Reminder", "Reminders", "Corpse", "Combat",
+                    "Mapfind", "Mapgo",
                     "Vskills", "Missionlist", "VNlist",
                     "Chaossea")
                     # a guild "macros" entry (e.g. bladesinger Autoregen) -
@@ -10100,6 +10336,10 @@ class MudClient:
             self.last_sent = time.time()
             if manual:
                 self.last_manual = time.time()
+            # tt++ map: move the marker now rather than waiting on a room
+            # packet that may be slow or never come (3k). No-op on the
+            # sqlite backend and for anything that isn't a charted exit.
+            self.tin_advance_position(cmd)
         else:
             self.write_local("Not connected. #connect to retry.",
                              "#cc6666")
@@ -10164,6 +10404,7 @@ class MudClient:
                 self._rounds_watch(self.rounds + 1, "damage line", clean)
                 self.rounds += 1
                 self.in_combat = True
+                self._try_combat_if()
         for _p, rx in self.kill_res:
             km = rx.search(clean)
             if km:
@@ -10182,6 +10423,8 @@ class MudClient:
                 # packet that would normally clear it ever arrives.
                 self.vitals["enemy"] = ""
                 self.vitals.pop("enemycond", None)
+                self._combat_start_fired = False
+                self._combat_if_fired = set()
                 self.update_info()
                 if self._maxes_dirty:
                     self.persist_seen_max()
@@ -10228,9 +10471,12 @@ class MudClient:
         Separate multiple commands with '/' (NOT the ';' command separator,
         which would split the line before this command sees it): e.g.
         `Corpse bury corpse/glance` is stored as `bury corpse;glance`.
-        Saved to the character layer."""
+        Saved for THIS character, in THIS guild, on THIS mud (the `role`
+        layer) - din/bladesinger/3k, din/bladesinger/3s and
+        din/necromancer/3k each keep their own, since the commands don't
+        even exist on the other mud."""
         arg = arg.strip()
-        scope = "character"
+        scope = self._routine_scope()
         low = arg.lower()
         if not arg:
             cfg = self.corpse_cfg
@@ -10285,6 +10531,292 @@ class MudClient:
         self.write_local(f"[corpse] {key} routine set "
                          f"({self.cascade.label_for(scope)}): {value}",
                          "#cc99ee")
+
+    def cmd_mapdebug(self, _arg=""):
+        """`#mapdebug` - why the map pane is (not) drawing connectors.
+
+        Replays MapPane.draw_graph's own decision for every exit of every
+        cell currently on the pane and reports which branch it takes, so
+        a missing line is attributable to real data rather than guessed
+        at. Reads self.map.graph - the payload the pane actually holds,
+        not a rebuilt one, so it catches a stale or stomped draw too."""
+        graph = getattr(self.map, "graph", None)
+        if not graph:
+            self.write_local("[mapdebug] pane holds NO graph - it is "
+                             "drawing the compass fallback, not the map "
+                             "(viking biome / chaossea / no room yet).",
+                             "#cc9933")
+            return
+        from .widgets import MapPane
+        solid = dashed = nothing = 0
+        misses = []
+        for (x, y), info in sorted(graph.items()):
+            links = info.get("links") or {}
+            stubs = [s.lower() for s in (info.get("stubs") or ())]
+            for d in info.get("exits") or ():
+                off = MapPane.DIRS.get(d.lower())
+                if not off:
+                    continue            # u/d and named exits: never drawn
+                nb = graph.get((x + off[0], y + off[1]))
+                if nb is not None and links.get(d) == nb["rid"]:
+                    solid += 1
+                elif d.lower() in stubs and nb is None:
+                    dashed += 1
+                else:
+                    nothing += 1
+                    if nb is not None and len(misses) < 8:
+                        misses.append(
+                            f"    ({x},{y}) {info['rid']} '{d}' -> "
+                            f"links={links.get(d)!r} but the room drawn "
+                            f"there is {nb['rid']!r}")
+        self.write_local(
+            f"[mapdebug] {len(graph)} cells: {solid} solid, {dashed} "
+            f"dashed, {nothing} drawn as nothing.", "#cc99ee")
+        has_links = sum(1 for i in graph.values() if i.get("links"))
+        has_stubs = sum(1 for i in graph.values() if i.get("stubs"))
+        self.write_local(f"  cells carrying links: {has_links}/{len(graph)}"
+                         f"   stubs: {has_stubs}/{len(graph)}")
+        if not has_links:
+            self.write_local("  NO cell carries a links dict - whichever "
+                             "code built this payload omits it, so a solid "
+                             "connector can never be drawn.", "#cc6666")
+        for m in misses:
+            self.write_local(m, "#cc9933")
+
+    # ---- Mapfind / Mapgo (tin backend manual re-location) -----------------
+    MAPFIND_LIMIT = 25
+
+    def cmd_mapfind(self, arg):
+        """`Mapfind <text>` - find rooms by name or area.
+
+        3k has no vnum on the wire, so the Locator identifies a room by
+        name + exit list. When that loses track there was no way back
+        short of walking until it re-fixed. This is the manual recovery:
+        glance, search the name, and tell the candidates apart by their
+        exits - 3k names rooms very repetitively (every room on a level
+        of Kikipopo's Section Z is "Section 42"), so the exit list is the
+        whole point, not a nicety. Then `Mapgo <id>` pins it."""
+        text = arg.strip().lower()
+        if not text:
+            self.write_local("Usage: Mapfind <part of a room name or area>",
+                             "#cc9933")
+            return
+        if not self.tmap:
+            self.write_local("[mapfind] no map loaded.", "#cc6666")
+            return
+        hits = []
+        for rid, room in self.tmap.rooms.items():
+            name, exits, _v = mapdata.split_name(room.name or "")
+            if text in name.lower() or text in (room.area or "").lower():
+                hits.append((rid, name, room.area or "?", exits))
+        if not hits:
+            self.write_local(f"[mapfind] no rooms match {arg.strip()!r}.",
+                             "#cc9933")
+            return
+        hits.sort()
+        self.write_local(f"[mapfind] {len(hits)} room(s) match "
+                         f"{arg.strip()!r}:", "#cc99ee")
+        for rid, name, area, exits in hits[:self.MAPFIND_LIMIT]:
+            self.write_local(f"  {rid:<7} {area:<24} {name}")
+            self.write_local(f"          exits: "
+                             f"{', '.join(exits) if exits else '(none)'}")
+        if len(hits) > self.MAPFIND_LIMIT:
+            self.write_local(f"  ... {len(hits) - self.MAPFIND_LIMIT} more; "
+                             "narrow the search.", "#cc9933")
+        self.write_local("  'Mapgo <id>' to tell the map you're in one.",
+                         "#8899bb")
+
+    def cmd_mapgo(self, arg):
+        """`Mapgo <id>` - pin the locator to a room found with Mapfind.
+
+        Manual override, so it does NOT verify you're really there - if
+        you pin the wrong one of several lookalikes, everything
+        downstream believes it."""
+        text = arg.strip()
+        if not text.isdigit():
+            self.write_local("Usage: Mapgo <room id>   (find one with "
+                             "Mapfind)", "#cc9933")
+            return
+        if not self.tmap or not self.locator:
+            self.write_local("[mapgo] no map loaded.", "#cc6666")
+            return
+        rid = int(text)
+        room = self.tmap.rooms.get(rid)
+        if room is None:
+            self.write_local(f"[mapgo] no room {rid} on the map.", "#cc6666")
+            return
+        self.locator.force(rid)
+        name, _exits, _v = mapdata.split_name(room.name or "")
+        self.write_local(f"[mapgo] now at room {rid}: {name} "
+                         f"({room.area or '?'})", "#66cc66")
+        self.update_info()
+
+    def _routine_scope(self):
+        """Where Corpse/Combat save. The `role` layer (this character +
+        guild + mud) unless the character has no guild, in which case
+        there is no role layer and the character file is as specific as
+        it gets."""
+        return ("role" if "role" in self.cascade.active_scopes()
+                else "character")
+
+    # ---- Combat (baseline per-fight routine) ------------------------------
+    def _combat_enemy_live(self):
+        """Is there actually a currently-tracked target? Guards against a
+        stale in_combat flag (e.g. from a mob run past mid-sprint) firing
+        Combat's routine in an empty room."""
+        return bool((self.vitals.get("enemy") or "").strip())
+
+    def _combat_mid_sprint(self):
+        """True while a manual speedwalk still has rooms left to confirm -
+        Combat is suppressed then, so a mob you're running PAST during a
+        sprint doesn't get the routine meant for the mob you're running TO.
+        Never true while a bot/walker drives - none of them sprint past
+        mobs, they engage what's in front of them."""
+        if (self._bot_on or self._run_on or self._explore_on
+                or self._agent_on or self._chaossea_on):
+            return False
+        return self._speedwalk_remaining > 0
+
+    def _combat_ok_to_fire(self):
+        if not (self.combat_cfg or {}).get("on", True):
+            return False
+        return self._combat_enemy_live() and not self._combat_mid_sprint()
+
+    def _try_combat_start(self):
+        """Fire every command on the `start` list once, right as a fight
+        begins - joined into one line, same as Corpse's routine."""
+        cmds = (self.combat_cfg or {}).get("start") or []
+        if not cmds or self._combat_start_fired or not self._combat_ok_to_fire():
+            return
+        self._combat_start_fired = True
+        sep = self.setting("command_separator", ";")
+        line = sep.join(cmds)
+        self.write_local(f"[combat: start] {line}", "#aa88cc")
+        self.process_input(line, gated=False)
+
+    def _try_combat_if(self):
+        """Fire each `if` entry once, the first round the fight has gone
+        at least its `round` with the enemy still at/above its `hp`%."""
+        entries = (self.combat_cfg or {}).get("if") or []
+        if not entries or not self._combat_ok_to_fire():
+            return
+        hp = self.vitals.get("enemycond")
+        for cond in entries:
+            key = (cond.get("round", 0), cond.get("hp", 0))
+            if key in self._combat_if_fired:
+                continue
+            if self.rounds < cond.get("round", 0):
+                continue
+            if hp is None or hp < cond.get("hp", 0):
+                continue
+            self._combat_if_fired.add(key)
+            cmd = cond.get("cmd", "")
+            self.write_local(f"[combat: if {key[0]}/{key[1]}%] {cmd}",
+                             "#aa88cc")
+            self.process_input(cmd, gated=False)
+
+    def cmd_combat(self, arg):
+        """`Combat` / `#combat` - view or edit the baseline per-fight
+        routine: things you always want to do every time you fight.
+          Combat                        show the start list, if list, on/off
+          Combat <cmd>                  add <cmd> to the start-of-fight list
+          Combat if <round> <hp%> <cmd> add a conditional: fires once the
+                                        fight has gone <round> rounds with
+                                        the enemy still at/above <hp%>
+          Combat rem <cmd>              remove <cmd> from the start list
+          Combat rem if <round> <hp%>   remove that conditional
+          Combat off | Combat on        disable/re-enable firing (keeps the
+                                        lists - 'on' brings back what was set)
+          Combat clear                  wipe both lists
+        Multiple commands within one entry are separated by '/' (NOT ';',
+        which would split the line before this command sees it) - same
+        convention as Corpse. Saved to the character layer.
+
+        Requires a live tracked enemy (a stale in_combat flag won't fire it
+        in an empty room) and is suppressed while a manual multi-room
+        speedwalk hasn't finished yet - unless a bot/walker is driving,
+        since none of those sprint past mobs.
+
+        Saved at the same scope as Corpse: this character, this guild,
+        this mud."""
+        arg = arg.strip()
+        scope = self._routine_scope()
+        sep = self.setting("command_separator", ";")
+        cfg = self.combat_cfg or {}
+        if not arg:
+            starts = cfg.get("start") or []
+            ifs = cfg.get("if") or []
+            if not starts and not ifs:
+                self.write_local(
+                    "No Combat routine set. 'Combat <cmd>' adds something to "
+                    "always do at the start of a fight; 'Combat if <round> "
+                    "<hp%> <cmd>' adds a conditional. '/' inside one entry "
+                    "for multiple commands.", "#cc9933")
+                return
+            self.write_local(
+                f"Combat routine (per fight, {'ON' if cfg.get('on', True) else 'OFF'}):",
+                "#cc99ee")
+            if starts:
+                for c in starts:
+                    self.write_local(f"  start: {c!r}")
+            else:
+                self.write_local("  start:  (none)")
+            if ifs:
+                for cond in ifs:
+                    self.write_local(
+                        f"  if round>={cond.get('round', 0)} "
+                        f"hp>={cond.get('hp', 0)}%: {cond.get('cmd', '')!r}")
+            else:
+                self.write_local("  if:     (none)")
+            return
+        low = arg.lower()
+        if low == "off":
+            err = self.cascade.save_entry(scope, "combat", "on", False)
+        elif low == "on":
+            err = self.cascade.save_entry(scope, "combat", "on", True)
+        elif low == "clear":
+            err = (self.cascade.save_entry(scope, "combat", "start", [])
+                   or self.cascade.save_entry(scope, "combat", "if", []))
+        elif low.startswith("rem "):
+            rest = arg[4:].strip()
+            m = re.match(r"if\s+(\d+)\s+(\d+(?:\.\d+)?)\s*$", rest, re.I)
+            if m:
+                key = (int(m.group(1)), float(m.group(2)))
+                new_ifs = [c for c in (cfg.get("if") or [])
+                           if (c.get("round", 0), c.get("hp", 0)) != key]
+                err = self.cascade.save_entry(scope, "combat", "if", new_ifs)
+            else:
+                new_starts = [c for c in (cfg.get("start") or []) if c != rest]
+                err = self.cascade.save_entry(scope, "combat", "start",
+                                              new_starts)
+        elif low.startswith("if "):
+            rest = arg[3:].strip()
+            m = re.match(r"(\d+)\s+(\d+(?:\.\d+)?)\s+(.*)$", rest)
+            if not m:
+                self.write_local(
+                    "Usage: Combat if <round> <hp%> <cmd> - e.g. "
+                    "Combat if 5 90 evoke age", "#cc9933")
+                return
+            entry = {"round": int(m.group(1)), "hp": float(m.group(2)),
+                     "cmd": m.group(3).strip().replace("/", sep)}
+            new_ifs = list(cfg.get("if") or [])
+            new_ifs.append(entry)
+            err = self.cascade.save_entry(scope, "combat", "if", new_ifs)
+        else:
+            cmd = arg.replace("/", sep)
+            starts = list(cfg.get("start") or [])
+            if cmd in starts:
+                self.write_local(f"[combat] {cmd!r} is already in the "
+                                 "start list.", "#cc9933")
+                return
+            starts.append(cmd)
+            err = self.cascade.save_entry(scope, "combat", "start", starts)
+        if err:
+            self.write_local(f"[combat] {err}", "#cc6666")
+            return
+        self.load_layers()
+        self.write_local(f"[combat] updated ({self.cascade.label_for(scope)}). "
+                         "Combat to review.", "#cc99ee")
 
     def persist_seen_max(self):
         vm = dict(self.vitals_max)
@@ -10865,6 +11397,14 @@ class MudClient:
             self.cmd_vnlist(arg)
         elif name == "corpse":
             self.cmd_corpse(arg)
+        elif name == "combat":
+            self.cmd_combat(arg)
+        elif name == "mapdebug":
+            self.cmd_mapdebug(arg)
+        elif name == "mapfind":
+            self.cmd_mapfind(arg)
+        elif name == "mapgo":
+            self.cmd_mapgo(arg)
         elif name == "vperf":
             self.vperf = not self.vperf
             self.vperf_stats = {}
@@ -10942,23 +11482,23 @@ class MudClient:
                         "  %-24s %s" % (pkg, "subscribed"
                                         if self._gmcp_supported[pkg]
                                         else "-"), "#55aacc")
-        elif name == "combat":
+        elif name == "cstats":
             a = arg.strip().lower()
             if a in ("clear", "reset", "off"):
                 was = self.in_combat
                 self.in_combat = False
                 self.write_local(
-                    f"[combat] in_combat forced False (was {was}).",
+                    f"[cstats] in_combat forced False (was {was}).",
                     "#cc66cc")
             else:
                 self.write_local(
-                    f"[combat] in_combat={self.in_combat} "
+                    f"[cstats] in_combat={self.in_combat} "
                     f"fff_combat={self._fff_combat} "
                     f"enemy={self.vitals.get('enemy', '')!r} "
                     f"run_on={self._run_on} "
                     f"run_killing={getattr(self, '_run_killing', None)} "
                     f"run_engaged={getattr(self, '_run_engaged', None)} "
-                    "(#combat clear to force it off)", "#cc66cc")
+                    "(#cstats clear to force it off)", "#cc66cc")
         elif name == "hpbar":
             i_raw = self.vitals.get("hpbar1", "")
             j_raw = self.vitals.get("hpbar2", "")
@@ -11634,9 +12174,8 @@ class MudClient:
         """Put the right-column split (text|panes divider) and the chat/map/info
         splits back where they were left. Runs once the panes have a real size -
         sash_place is a no-op on a zero-size pane, so retry until laid out."""
-        s = self.profiles_data.get("settings", {})
-        sx = s.get("main_sash_x")
-        rys = s.get("right_sash_y")
+        sx = self._win_state("main_sash_x")
+        rys = self._win_state("right_sash_y")
         if sx is None and not rys:
             return
         if self.paned.winfo_width() <= 1 or self.right_pane.winfo_height() <= 1:
@@ -11654,26 +12193,27 @@ class MudClient:
         """Remember the main window's size/position/monitor (and maximized
         state) for next launch. When zoomed we keep the last NORMAL geometry
         so un-maximizing restores a sane size. Viking window saved too if
-        open. Stored in the shared (global) settings, like fonts."""
-        s = self.profiles_data.setdefault("settings", {})
+        open. Stored per CHARACTER, so a 3s and a 3k client running side by
+        side each keep their own spot."""
+        vals = {}
         try:
             zoomed = self.root.state() == "zoomed"
-            s["main_zoomed"] = zoomed
+            vals["main_zoomed"] = zoomed
             if not zoomed:
-                s["main_geometry"] = self.root.geometry()
+                vals["main_geometry"] = self.root.geometry()
             if self.viking_win is not None and \
                     self.viking_win.winfo_exists():
-                s["viking_geometry"] = self.viking_win.geometry()
+                vals["viking_geometry"] = self.viking_win.geometry()
             # right-column sash positions: text|panes divider x, then the
             # chat/map/info divider ys (2 sashes for the 3 stacked panes).
             # Nested so a sash hiccup never blocks the geometry save.
             try:
-                s["main_sash_x"] = self.paned.sash_coord(0)[0]
-                s["right_sash_y"] = [self.right_pane.sash_coord(i)[1]
-                                     for i in range(2)]
+                vals["main_sash_x"] = self.paned.sash_coord(0)[0]
+                vals["right_sash_y"] = [self.right_pane.sash_coord(i)[1]
+                                        for i in range(2)]
             except tk.TclError:
                 pass
-            profiles.save(self.profiles_data)
+            self._save_win_state(**vals)
         except tk.TclError:
             pass
 
@@ -11717,8 +12257,8 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
       packages for the room you are standing in and report what comes back
       and how fast. Charts nothing - a solicited Room.Info is
       indistinguishable from a move, so the window suppresses charting.)
-  #combat [clear] | #hpbar | #chartdebug   (state debug: #combat reports
-      the in_combat/enemy/Run flags ('#combat clear' forces it off);
+  #cstats [clear] | #hpbar | #chartdebug   (state debug: #cstats reports
+      the in_combat/enemy/Run flags ('#cstats clear' forces it off);
       #hpbar dumps the raw + stripped FFF I/J bars; #chartdebug traces the
       charting gate - each pump/arrival/edge, so wrong-room edges and
       stalls are visible)
@@ -11736,6 +12276,24 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
       their source layer and which is active. Separate commands with '/',
       NOT ';' - 'Corpse bury corpse/glance' is stored as
       'bury corpse;glance'. Saved to the character layer.)
+  Mapfind <text> | Mapgo <id>
+      (tin-backend map, e.g. 3k: Mapfind lists every room whose name or
+      area matches, with each one's id and EXIT LIST - which is how you
+      tell apart the several rooms sharing a name (a whole level of
+      Section Z is called 'Section 42'). Mapgo pins the map to one of
+      them when the locator has lost track. Mapgo does not verify you
+      are really there.)
+  Combat | Combat <cmd> | Combat if <round> <hp%> <cmd> | Combat rem <cmd>
+  | Combat rem if <round> <hp%> | Combat off/on | Combat clear
+      (baseline per-fight routine: 'Combat <cmd>' ADDS <cmd> to the list
+      always run at the start of a fight; 'Combat if <round> <hp%> <cmd>'
+      adds a conditional that fires once the fight has gone <round> rounds
+      with the enemy still at/above <hp%> (e.g. 'Combat if 5 90 evoke age').
+      'rem' removes one entry, 'off'/'on' disable/re-enable without losing
+      the lists, 'clear' wipes them. Requires a live tracked enemy and is
+      suppressed mid-sprint (a manual multi-room speedwalk not yet
+      finished) unless a bot/walker is driving. '/' inside one entry for
+      multiple commands, same as Corpse. Saved to the character layer.)
   Reminder <time> <text> | Reminder every <time> <text> | Reminder |
       Reminders | Reminder clear [id|all]   (timer shared across muds and
       characters, e.g. 'Reminder 5m buff wore off', 'Reminder 1h30m

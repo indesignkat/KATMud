@@ -71,6 +71,17 @@ def character_file(character):
     return os.path.join(CHARACTERS_DIR, f"{safe_name(character)}.json")
 
 
+def role_file(character, mud, guild):
+    """The most specific config layer: this character, in this guild, on
+    this mud. character_file is keyed on the NAME alone, so din on 3k and
+    din on 3s share it - deliberate (gswap profiles keep one personal
+    layer) but useless for anything mud- or guild-specific, like a corpse
+    routine whose commands don't even exist on the other mud."""
+    return os.path.join(
+        CHARACTERS_DIR,
+        f"{safe_name(character)}-{safe_name(mud)}-{safe_name(guild)}.json")
+
+
 def map_file(mud):
     return os.path.join(mud_dir(mud), f"{safe_name(mud)}.map")
 
