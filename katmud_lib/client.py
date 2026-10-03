@@ -21,6 +21,7 @@ import os
 import queue
 import random
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -35,7 +36,7 @@ from . import (bard, blade, changeling, config, credentials, dialogs,
                picker, profiles, viking)
 from .protocol import (MudConnection, parse_composite,
                        strip_mip_colors, tag_to_style)
-from .widgets import MapPane, VitalsBar
+from .widgets import MONO, MapPane, VitalsBar
 
 # ------------------------------------------------------- live code reload
 # `#hotswap` reloads katmud_lib under a RUNNING client so a bot mid-explore
@@ -135,7 +136,21 @@ def play_sound(path):
                                    winsound.SND_NODEFAULT)
         except RuntimeError:
             pass
+    elif sys.platform == "darwin":
+        # macOS has no winsound; afplay ships with the OS. Popen, not run,
+        # so the sound plays without blocking the client (SND_ASYNC's job).
+        if path == "beep":
+            path = "/System/Library/Sounds/Ping.aiff"
+        try:
+            subprocess.Popen(["afplay", path], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
 
+
+# `(powers` CooldR durations: 43m, 13.4h, 2.4D. RDY, `2.0xB`
+# (uses-per-reboot) and `--` are deliberately NOT durations.
+POWER_DUR_RE = re.compile(r"^([\d.]+)([DhmsS])$")
 
 DAMAGE_RE = re.compile(
     r"^You hit (.+?) (\d+) times? for ([\d,]+) damage\.")
@@ -152,6 +167,28 @@ _DIR_OPPOSITE = {
 # the same mob/item is in the room - strip it before matching a bot whitelist
 # entry, or an exact-match Run bot never recognizes the mob at all.
 RUN_COUNT_TAG_RE = re.compile(r"\s*\{\d+\}\s*$")
+# Kayos Wars appends a status tag to each mob's room line - 'A small imp
+# [freezing alerting]' - carrying the damage type (randomised per event)
+# and state words like furious/alerting/fleeing. Enumerating every
+# combination in a bot's mob list is hopeless, so the tag is stripped
+# before the name match. UNIQUE TO THAT AREA, hence opt-in per bot
+# ("strip_tags": true): elsewhere a bracketed suffix may be part of the
+# real name.
+# A trailing tag on a mob line, dropped before matching when a bot sets
+# `strip_tags`. Kayos has random `[freezing berserking]` states; the
+# Celestial Zodiacs put one tagged mob on each floor, e.g. "Desecrator of
+# Ptah (psychic)." - which silently hid the last mob of a level, since
+# the matcher compares the whole line. Whether that tag is always the
+# same, or on the same mob, is unknown and does not matter: it goes
+# either way.
+RUN_STATUS_TAG_RE = re.compile(r"\s*(?:\[[^\]]*\]|\([^)]*\))\s*$")
+# Leading stack count on an inventory line: '3  An intricate digital key.'
+RUN_INV_COUNT_RE = re.compile(r"^\s*(\d+)\s+")
+# 'The skinless, slightly moldy corpse of Abomination.' - a corpse on the
+# floor proves something died here even when the killing-blow line never
+# matched kill_patterns (a merc or hirdmadr landing the blow, or wording
+# the patterns don't cover). Overridable per mud via `corpse_line`.
+CORPSE_LINE_RE = re.compile(r"\bcorpse of\b", re.IGNORECASE)
 # A room-entry mob line already mid-attack, e.g. 'Flesh Golem attacking
 # you!.' or 'Steel Golem [scratched] attacking you!.' - the mud's
 # auto-combat already has these on you regardless of whether they're on
@@ -163,6 +200,12 @@ RUN_ATTACKING_RE = re.compile(
 # Max times one trigger may fire in a row (same pattern, no other trigger or
 # manual command in between) before we suppress it as a runaway loop.
 TRIGGER_RECURSION_LIMIT = 10
+# Dead-reckoned moves still waiting for their arrival packet. 3k's
+# room packets are slow and sparse, so a move that never yields one
+# is ORDINARY - without this the credit count would only ever climb
+# and start swallowing real relocations. A wrong zero costs one
+# relocation, never the position: dead reckoning already moved us.
+TIN_PENDING_MAX_S = 5.0
 
 DEFAULT_VITALS = [
     {"label": "HP", "cur": "hp", "max": "hpmax", "color": "#2a7d2a",
@@ -267,7 +310,21 @@ class MudClient:
         self.room = "?"
         self.exits = []
         self.rounds = 0
+        # The count the last fight ENDED on, held for the killing-blow line
+        # that arrives after the fight-over packet - see _stash_rounds.
+        self._rounds_at_end = 0
         self.in_combat = False
+        self._last_damage_t = 0.0       # heartbeat for _combat_stale_check
+        self._dmg_line_seen = False     # has the paid `numbers` perk
+        self._merc_line_held = ""       # a wrapped merc status line's head
+        self._glance_due = None         # when a glance went out (see
+                                        # _glance_scan_line)
+        self._gmcp_room_items = set()   # GMCP-confirmed scenery, not mobs
+        self._gmcp_room_monsters = {}   # lowername -> count, entry-only
+        self._gmcp_room_mob_names = {}  # lowername -> original spelling
+        self._gmcp_room_seen = False    # a Contents packet arrived here
+        self._last_kill_name = ""       # for _is_post_mortem
+        self._last_kill_at = 0.0
         # Combat: baseline per-fight routine (start list/if list), see
         # cmd_combat. Fired-once state reset at every fight-start edge AND
         # every fight-over signal (Char.Combat empty snapshot, FFF
@@ -281,9 +338,24 @@ class MudClient:
         # you're running PAST doesn't get a routine meant for the mob
         # you're running TO. See sql_follow_ddd / process_input.
         self._speedwalk_remaining = 0
-        # tin backend: set when tin_advance_position has already walked a
-        # move on the map, so the arrival packet doesn't apply it twice.
-        self._tin_move_spent = False
+        # tin backend: how many moves tin_advance_position has already
+        # walked on the map that are still waiting for their arrival
+        # packet, so those packets confirm rather than re-derive. A COUNT,
+        # not a flag: at speed several moves are in flight at once, and a
+        # flag credited only the first packet - every later one fell
+        # through to name matching, which on 3k's repeated room names is
+        # ambiguous and dropped us off the map (the faster you moved, the
+        # more often). See map_locate / tin_advance_position.
+        self._tin_moves_pending = 0
+        self._tin_moves_at = 0.0
+        # A BAB packet held until the plain line that follows says whether
+        # it was a tell or an emote - see mip_tell / _bab_resolve.
+        self._bab_queue = []
+        # Section Z pause: armed by `unpause game`, spent by the arrival
+        # packet - see _sz_hook.
+        self._sz_restore = None
+        self._sz_restore_at = 0.0
+        self._sz_noted_at = None
         self.last_sent = time.time()
         self.last_manual = time.time()
         self.deadman_tripped = False
@@ -374,8 +446,13 @@ class MudClient:
         self._viking_gmcp_keys = set()  # BBE keys GMCP has taken over
         self._viking_gmcp_rows = {}     # key -> {group: {identity: rec}}
         self._viking_gmcp_sweep = {}    # package -> rows buffered mid-sweep
+        self._cart_cd_until = None      # cart cooldown end (time.time())
+        # Guild.Map sends w, h and pos on three DIFFERENT packets, so the
+        # pieces of VMAPH are held here until all four are known.
+        self._viking_map_dims = {}
         self._viking_map_dims = None    # (cols, rows) the cache was saved at
         self._viking_map_saved = None   # last wall set written to disk
+        self._viking_last_cell = None   # best-known map cell (see walk_to)
         self._load_viking_map()
         self.vperf = False              # #vperf: time the BBE hot path
         self.vperf_stats = {}           # rolling window accumulator
@@ -386,6 +463,10 @@ class MudClient:
         self.viking_skills = None       # last parsed `vskills` (skill costs)
         self._vskills_capture = False   # arming flag while reading `vskills`
         self._vskills_lines = []        # accumulated `vskills` output lines
+        self._vsettle_capture = False   # arming flag while reading
+        self._vsettle_lines = []        # `settlements` output lines
+        self._vpouch_capture = False    # arming flag while reading `vpouch`
+        self._vpouch_lines = []         # accumulated `vpouch` output lines
         self._vtradestock_capture = False  # arming flag for `vtrade stock`
         self._vtradestock_lines = []    # accumulated `vtrade stock` lines
         self._vtrade_stock = {}         # last parsed `vtrade stock` totals
@@ -436,8 +517,26 @@ class MudClient:
         self.last_unknown_mip = ""
         self._fff_combat = False
         self._hold_job = None
-        self.dmg = {"portals": dict(rounds=0, hits=0, damage=0),
-                    "noportals": dict(rounds=0, hits=0, damage=0)}
+        # #dmg splits rounds by whatever burst this character has: a
+        # STATE (3s bladesinger portals, katmud_scripts sets
+        # portals_active) or a per-round PROC whose line arrives just
+        # before that round's damage line (3k eradication - see
+        # dmg_split_text). _dmg_burst latches the proc for one round.
+        self.dmg = {"with": dict(rounds=0, hits=0, damage=0),
+                    "without": dict(rounds=0, hits=0, damage=0)}
+        self._dmg_burst = False
+        # Damage TAKEN, diffed from `(cstats` snapshots - see
+        # _cstats_capture. `taken` is ours (survives #dmg reset
+        # independently); _cstats_prev is the last raw boot counter.
+        self.taken = dict(rounds=0, damage=0)
+        self._cstats_pending = False
+        self._cstats_prev = None
+        # Eternal powers, from `(powers` - see _powers_capture. Cooldowns
+        # are kept as absolute ready-at times so the pane counts down
+        # between polls instead of showing a frozen figure.
+        self.powers = {}
+        self._powers_pending = False
+        self._powers_polled_at = 0.0
         self.vitals_max = {}
         self._maxes_dirty = False
         self.last_deltas = ""
@@ -449,6 +548,9 @@ class MudClient:
         self.blade_skill_costs = {}
         self.blade_available = None
         self.blade_glvl = None
+        # GMCP Guild.State gxp/gtnl; once gxp arrives it owns blade_available.
+        self._blade_gmcp_gxp = None
+        self._blade_gmcp_gtnl = None
         # Blur reset length: a KNOWN constant (blade.BLUR_RESET_SECS, derived
         # from the GMCP `reset` step - see blade.py), not something we watch
         # the hpbar and guess at. Overridable per character.
@@ -492,6 +594,10 @@ class MudClient:
         self.walk = []
         self._walk_job = None
         self._walk_done_cb = None       # fires once a walk reaches its goal
+        # A walk the USER asked for (Go/Sprint) is allowed to leave a fight -
+        # fleeing is a legitimate move and the mud, not the client, decides
+        # whether it works. Only programmatic walks keep the combat guard.
+        self._walk_ignore_combat = False
         self._last_move = None
         # --- area roaming bot (Bot / Hunt commands) ---
         self._bot_on = False
@@ -505,15 +611,14 @@ class MudClient:
         self._bot_area_name = ""
         self._bot_start_vnum = None     # room Bot was started in (return point)
         self._bot_prev_vnum = None      # room we came from (avoid backtrack)
-        self._bot_fence_vnum = None     # `Hunt <dir>`: origin room; bot may not
-        self._bot_fence_dir = None      #   exit it in this direction
+        self._bot_fence_vnum = None     # `Fence <dir>`: the room the fence
+        self._bot_fence_dir = None      #   binds; bot may not leave it <dir>
         self._bot_in_combat = False     # was the last tick a combat tick?
         self._bot_combat_end = 0.0      # when the last fight ended
         self._bot_homing = False        # running the post-deadman return walk
         self._bot_home_reason = ""      # _bot_stop() message once home (deadman
                                         # vs. area-cleared - whichever armed it)
         self._bot_recheck = False       # re-look this room (start / post-combat)
-        self._bot_fence_dest = None     # room on the far side of the fence exit
         self._bot_no_combat_rooms = 0   # Hunt-only: consecutive rooms entered
                                         # with no fight; resets on any combat
         self._hunt_filter = None        # optional mob-name filter (Hunt n zombie)
@@ -524,6 +629,8 @@ class MudClient:
                                         # finishes it - don't roam meanwhile)
         self._hunt_attacked_at = 0.0    # when that swing was sent
         self._hunt_whiffs = 0           # consecutive swings that never engaged
+        self._hunt_kw = None            # keyword the last swing actually used,
+                                        # so "There is no <kw> here." is ours
                                         # (bad keyword); cap stops a dead loop
         self._hunt_lines = []           # recent room text (keyword-parse fallback)
         self._bot_job = None
@@ -565,6 +672,7 @@ class MudClient:
         self._chaossea_on = False
         self._chaossea_fight_mode = False  # True = `Chaossea fight`: kill
                                            # every mutant, ignore loot/items
+        self._corpse_seen = False          # a corpse is lying in this room
         self._chaossea_dm_paused = False   # deadman: paused in place, all
                                            # state held; resumes on release
         self._chaossea_dm_kills_at_trip = 0  # len(self.kills) snapshotted
@@ -598,6 +706,7 @@ class MudClient:
         self._chaossea_room_mob = False
         self._chaossea_room_player = False
         self._chaossea_mob_lines = []
+        self._chaossea_floor_wants = []
         self._chaossea_pre_move_room = None  # set (to self.room) just before
                                              # a move attempt; None means no
                                              # move is pending a blocked-check
@@ -634,7 +743,25 @@ class MudClient:
         self._run_mobs = []             # [(match_lower, target)]
         self._run_setup = []
         self._run_lines = []            # room text since the last step
+        self._run_mob_latch = None
+        self._run_find = None           # (phrase, message) for a `find` bot
+        self._run_reactions = []        # `reactions` entries (see _run_react)
+        self._run_fired = set()         # `once` latch keys already spent
+        self._run_hold_until = 0.0      # numeric pause: hold movement till
+        self._run_hold_phrase = ""      # pause:true - phrase that releases it
+        self._run_hold_deadline = 0.0   # ...and the ceiling if it never comes
+        self._run_hold_why = ""
         self._run_room_enter_t = 0.0    # time.time() this room's lines started
+        # Step when the room ARRIVES, not on a clock. Run was the last engine
+        # still paced purely by run_move_ms: it sat out the full timer even
+        # though a nil-lag mud lands the room in ~100-200ms, which both felt
+        # sluggish next to tintin AND made the single-shot mob scan a race
+        # (lower the timer for speed and it reads a room that hasn't landed).
+        # Bot/Hunt have gated on the prompt for months - same two flags here.
+        self._run_waiting_room = False  # sent a step, awaiting the display
+        self._run_expect_room = False   # ...and a room packet will release it
+        self._run_room_ready = False    # prompt seen -> display complete
+        self._run_wait_t0 = 0.0         # when the wait began (timer fallback)
         self._run_acted = False         # already mob-checked this room?
         self._run_killing = False       # in/awaiting a fight right now
         self._run_kill_start = 0.0      # when the current kill/fight started
@@ -943,9 +1070,13 @@ class MudClient:
         self.tracked = dict(self.setting(self._tracked_key(), {}) or {})
         self.necro_guard = bool(self.setting("necro_guard", True))
         self.evoke_age_auto = bool(self.setting("evoke_age_auto", True))
-        # OFF by default. Negotiating GMCP coincided with MIP going silent
-        # once (2026-08-30); cause still unproven, so this stays opt-in.
-        self.gmcp_on = bool(self.setting("gmcp", False))
+        # Default ON since 2026-09-15: MIP is gone for good, so GMCP is
+        # the only transport left. Opt-in made sense while both ran; now
+        # it just means a player who never found the toggle gets nothing.
+        # Only a character who explicitly turned it OFF keeps it off -
+        # set_setting is written from _toggle_gmcp alone, so a character
+        # who never touched it has no stored value and picks this up.
+        self.gmcp_on = bool(self.setting("gmcp", True))
         self.blur_reset_secs = (self.setting("blur_reset_secs")
                                 or blade.BLUR_RESET_SECS)
         self.blur_auto = bool(self.setting("blur_auto", True))
@@ -1037,9 +1168,7 @@ class MudClient:
             except tk.TclError:
                 pass
         s = self.profiles_data.setdefault("settings", {})
-        fam = s.get("font_family",
-                    "Consolas" if sys.platform == "win32" else
-                    "Monospace")
+        fam = s.get("font_family", MONO)
         size = s.get("font_size", 11)
         self.base_font = tkfont.Font(family=fam, size=size)
         self.bold_font = tkfont.Font(family=fam, size=size,
@@ -1091,6 +1220,10 @@ class MudClient:
         self.root.bind("<Control-equal>", lambda e: self.bump_font(+1))
         self.root.bind("<Control-plus>", lambda e: self.bump_font(+1))
         self.root.bind("<Control-minus>", lambda e: self.bump_font(-1))
+        if sys.platform == "darwin":    # Mac users reach for Cmd, not Ctrl
+            self.root.bind("<Command-equal>", lambda e: self.bump_font(+1))
+            self.root.bind("<Command-plus>", lambda e: self.bump_font(+1))
+            self.root.bind("<Command-minus>", lambda e: self.bump_font(-1))
 
         # --- top bar ---
         self.topbar = tk.Frame(self.root, bg="#222236")
@@ -1134,6 +1267,10 @@ class MudClient:
         self.info.tag_configure("track_hdr", foreground="#cc9933")
         self.info.tag_configure("necro_ok", foreground="#46c246")
         self.info.tag_configure("necro_bad", foreground="#e0703a")
+        # eternal powers: ready vs cooling. Deliberately muted - the
+        # block sits in the pane permanently, so it must not shout.
+        self.info.tag_configure("power_rdy", foreground="#7fc47f")
+        self.info.tag_configure("power_cd", foreground="#c98686")
         right.add(self.chat, minsize=80)
         right.add(self.map, minsize=100, height=240)
         right.add(self.info, minsize=60)
@@ -1173,6 +1310,11 @@ class MudClient:
         self.text.bind("<B1-Motion>", self.click_drag)
         self.text.bind("<ButtonRelease-1>", self.click_release)
         self.text.bind("<Button-3>", self.output_context_menu)
+        if sys.platform == "darwin":
+            # Aqua Tk 8.6 reports right-click as Button-2 (Tk 8.7+ moved it
+            # to 3, bound above); Ctrl-click is the Mac one-button habit.
+            self.text.bind("<Button-2>", self.output_context_menu)
+            self.text.bind("<Control-Button-1>", self.output_context_menu)
 
         for w in self.cascade.warnings:
             self.write_local(f"[config] {w}", "#cc9933")
@@ -1244,7 +1386,8 @@ class MudClient:
         self.blur_portal = ""
         self.last_deltas = ""
         for k in ("worth", "protection", "veil", "reset", "circle",
-                  "corpses", "glamor", "tport", "tier"):
+                  "corpses", "glamor", "glamor_pct", "glamor_left",
+                  "glamor_max", "tport", "tier"):
             self.vars.pop(k, None)
         self.update_info()
         self.root.title(f"KatMUD — {self.display_name} "
@@ -1704,6 +1847,7 @@ class MudClient:
         self._viking_gmcp_keys = set()
         self._viking_gmcp_rows = {}
         self._viking_gmcp_sweep = {}
+        self._viking_map_dims = {}
         # A stated maximum is only authoritative while GMCP is actually
         # running: a reconnect that never negotiates it must fall back to
         # the high-water guess rather than freeze on a stale number.
@@ -2582,7 +2726,7 @@ class MudClient:
                 return
             for r in sorted(rows, key=lambda r: r["tag"]):
                 self.write_local(f"  {r['tag']:<16} room {r['vnum']}")
-            self.write_local(f"{len(rows)} landmark(s). 'go <tag>' to "
+            self.write_local(f"{len(rows)} landmark(s). 'Go <tag>' to "
                              "travel.")
             return
         action = bits[0]
@@ -3172,6 +3316,26 @@ class MudClient:
     def LANDMARK_FILE(self):
         return os.path.join(paths.mud_dir(self.mud), "landmarks.json")
 
+    def _tin_landmark_list(self):
+        """`#landmark` / `#landmark list` on the tin backend.
+
+        The sqlite side has listed landmarks all along (sql_landmark);
+        here bare `#landmark` only ever printed usage, which reads as
+        "wrong syntax" rather than "not a thing on this backend". The
+        room number is the map room id - 3k has no vnum - matching what
+        the info pane shows after the room name."""
+        if not self.landmarks:
+            self.write_local("No landmarks yet. #landmark add <name>.",
+                             "#cc9933")
+            return
+        for nm in sorted(self.landmarks):
+            d = self.landmarks[nm] or {}
+            desc = (d.get("desc") or "").strip()
+            self.write_local(f"  {nm:<14} room {str(d.get('rid')):<8}"
+                             f"{desc}")
+        self.write_local(f"{len(self.landmarks)} landmark(s). "
+                         "'Go <name>' to travel.")
+
     def load_landmarks(self):
         data, _err = paths.load_json(self.LANDMARK_FILE, default={})
         self.landmarks = data
@@ -3179,17 +3343,172 @@ class MudClient:
     def save_landmarks(self):
         paths.save_json(self.LANDMARK_FILE, self.landmarks)
 
+    def _same_room_text(self, room_text, rid):
+        """Does `room_text` describe the room the map calls `rid`?
+
+        Compared with norm_key so exit ORDER doesn't matter: the MUD
+        sends 'The Trunk (e,ne)' where the map stores 'The Trunk (ne,e)'.
+        """
+        room = self.tmap.rooms.get(rid) if self.tmap else None
+        if room is None or not room_text:
+            return False
+        nm, ex, _v = mapdata.split_name(room_text)
+        mnm, mex, _mv = mapdata.split_name(room.name or "")
+        return mapdata.norm_key(nm, ex) == mapdata.norm_key(mnm, mex)
+
+    # ---- Section Z pause (3k) --------------------------------------------
+    # Kikipopo's Section Z is left with `pause game` from anywhere out of
+    # combat and re-entered at the exact room with `unpause game`. Neither
+    # is a charted exit, so tin_advance_position can't dead-reckon through
+    # them, and every room on a level is named "Section 42", so
+    # Locator.on_room can't recover the position from the text either. The
+    # room is only knowable for free at the moment of the pause - so note
+    # it then, and pin it back on the way in.
+    SZ_PAUSE = "pause game"
+    SZ_UNPAUSE = "unpause game"
+    # How long the arm waits for the arrival packet. Deliberately the
+    # SAME constant the move credits use: it is the same question - how
+    # long a 3k room packet can take before we stop expecting it - and
+    # two independent numbers for it would only ever drift.
+    SZ_RESTORE_WINDOW_S = TIN_PENDING_MAX_S
+
+    def _sz_hook(self, cmd):
+        """Watch the outgoing command for the pause pair. Never swallows
+        it - both still go to the MUD unchanged."""
+        if self.map_backend == "sqlite":
+            return          # 3s locates from vnums, and has no Section Z
+        c = " ".join((cmd or "").lower().split())
+        if c == self.SZ_PAUSE:
+            self._sz_note_pause()
+        elif c == self.SZ_UNPAUSE:
+            self._sz_arm_restore()
+
+    def _sz_note_pause(self):
+        """Remember where we are, before the pause takes us out of it."""
+        if not self.locator or not self.locator.located:
+            self.write_local("[sectionz] not located on the map - nothing "
+                             "noted. Mapfind/Mapgo before you pause.",
+                             "#cc9933")
+            return
+        rid = self.locator.room_id
+        # The `character` layer, not `role`: a Gswap while paused must not
+        # lose the note. It is shared across muds by name, hence the mud
+        # stamp - a 3k note must never be offered on 3s.
+        err = self.cascade.save_entry(
+            "character", "sectionz_pause", None,
+            {"room": rid, "mud": self.mud, "at": time.time()})
+        if err:
+            self.write_local(f"[sectionz] couldn't note the room: {err}",
+                             "#cc6666")
+            return
+        self.write_local(f"[sectionz] noted room {rid}: {self._sz_name(rid)}"
+                         " - 'unpause game' will put you back.", "#66cc66")
+
+    def _sz_name(self, rid):
+        room = self.tmap.rooms.get(rid) if self.tmap else None
+        return mapdata.split_name(room.name or "")[0] if room else "?"
+
+    def _sz_note(self):
+        """The stored note, if there is one and it is this mud's."""
+        note = self.cascade.get("sectionz_pause")
+        if not isinstance(note, dict) or note.get("mud") != self.mud:
+            return None
+        return note if isinstance(note.get("room"), int) else None
+
+    def _sz_arm_restore(self):
+        """`unpause game` sent: expect an arrival packet imminently."""
+        note = self._sz_note()
+        if note is None:
+            return
+        self._sz_restore = note["room"]
+        self._sz_restore_at = time.time()
+        self._sz_noted_at = note.get("at")
+
+    def _sz_ago(self, then):
+        if not isinstance(then, (int, float)):
+            return "some time"
+        secs = max(0, int(time.time() - then))
+        h, m = secs // 3600, (secs % 3600) // 60
+        return f"{h}h {m}m" if h else f"{m}m"
+
+    def _sz_try_restore(self):
+        """First thing in map_locate. True = this packet is the unpause
+        arrival, the position is set, and nothing else should touch it.
+
+        Guarded twice, because an unpause can be REFUSED mud-side - the
+        dungeon was cleared, its timer lapsed, or `reset dungeon` made a
+        different instance - and a refusal produces no arrival packet at
+        all. So the text must still match the noted room, AND it must
+        arrive promptly; otherwise a stale arm would fire on whatever
+        unrelated room turned up minutes later.
+
+        The text check is a sanity gate, not proof: it catches "you came
+        back at the entrance instead", but Section Z's repeated names mean
+        it cannot tell your Section 42 from the one a level down."""
+        rid = self._sz_restore
+        if rid is None:
+            return False
+        self._sz_restore = None
+        if time.time() - self._sz_restore_at > self.SZ_RESTORE_WINDOW_S:
+            # Say so: silence here looks exactly like "no note was ever
+            # saved", and this is the branch a refused unpause produces.
+            self.write_local(
+                f"[sectionz] noted room {rid} ({self._sz_name(rid)}, "
+                f"{self._sz_ago(self._sz_noted_at)} ago) but no arrival "
+                "came - was the unpause refused? Map left alone.", "#cc9933")
+            return False
+        if not self._same_room_text(self.room, rid):
+            self.write_local(
+                f"[sectionz] noted room {rid} ({self._sz_name(rid)}, "
+                f"{self._sz_ago(self._sz_noted_at)} ago) but arrived "
+                "somewhere else - leaving the map alone. Mapfind/Mapgo if "
+                "you need to fix it.", "#cc9933")
+            return False
+        self.locator.force(rid)
+        # `unpause game` is still stamped on _last_move. Left there, the
+        # next real move hands it to on_room, tmap.follow fails on it, and
+        # we drop into name matching in a maze of identical names - lost
+        # on step one.
+        self._last_move = None
+        self._tin_moves_pending = 0
+        self.write_local(f"[sectionz] back in room {rid}: "
+                         f"{self._sz_name(rid)} (noted "
+                         f"{self._sz_ago(self._sz_noted_at)} ago).",
+                         "#66cc66")
+        self.render_tin_map(rid)
+        return True
+
     def map_locate(self, vnum=None):
         if not self.locator or not self.room:
             return
-        if getattr(self, "_tin_move_spent", False):
+        # Before the pending-move block below: that returns early, and
+        # would eat the arrival packet the restore is waiting for. Tested
+        # on the state, not by calling in - this runs on every room
+        # packet, and an armed restore is the rare case.
+        # getattr, not a bare read: #hotswap swaps the class without
+        # re-running __init__, so a session started before this feature
+        # existed has no _sz_restore - same reason as the pending-move
+        # read below.
+        if isinstance(getattr(self, "_sz_restore", None), int) \
+                and self._sz_try_restore():
+            return
+        pending = getattr(self, "_tin_moves_pending", 0)
+        if pending and time.time() - getattr(self, "_tin_moves_at", 0.0)                 > TIN_PENDING_MAX_S:
+            # The wire went quiet with credits outstanding: those moves are
+            # never getting a packet. Drop them rather than let them eat
+            # the next real relocation.
+            pending = self._tin_moves_pending = 0
+        if pending:
             # tin_advance_position already walked this move on the map;
             # the arrival packet confirms it and tells us nothing more.
             # Re-deriving here would either double-apply the command or
             # re-identify us from ambiguous room text - the two things
             # this design exists to avoid.
-            self._tin_move_spent = False
+            self._tin_moves_pending = pending - 1
             if self.locator.located:
+                self._mapdbg(f"packet {self.room!r}: spent a move credit "
+                             f"({pending} -> {pending - 1}), marker stays "
+                             f"{self.locator.room_id}")
                 self.render_tin_map(self.locator.room_id)
                 return
         was_located = self.locator.located
@@ -3197,6 +3516,21 @@ class MudClient:
         rid = self.locator.on_room(self.room, self.exits,
                                    last_cmd=self._last_move,
                                    vnum=vnum)
+        self._mapdbg(f"packet {self.room!r}: no credit, on_room("
+                     f"last_move={self._last_move!r}) from {prev_rid} -> "
+                     f"{rid}" + ("" if rid is not None
+                                 else f" (ambiguous: "
+                                      f"{len(self.locator.cands)} cands)"))
+        if rid is None and prev_rid is not None \
+                and self._same_room_text(self.room, prev_rid):
+            # The packet is re-describing the room we already know we are
+            # in - a `look`, or one of 3k's spontaneous room lines. It
+            # tells us nothing new, so it must not throw the position
+            # away just because the text is ambiguous (41 of the 91
+            # Treehouse rooms are). Live 2026-09-06: any packet after a
+            # non-move dropped the pane to the compass view mid-area.
+            self.locator.force(prev_rid)
+            rid = prev_rid
         if rid is None:
             self.maybe_map_new_room(prev_rid, was_located)
             rid = self.locator.room_id
@@ -3214,6 +3548,17 @@ class MudClient:
                 status=(f"locating... ({n} candidates)" if n
                         else "unmapped - Mapfind/Mapgo to fix"),
                 mapping=self.mapping)
+
+    # How many BAB packets may wait for their plain lines. Bursts of
+    # three are normal (one emote emits two packets plus any reply);
+    # anything near this means plain lines have stopped arriving.
+    BAB_QUEUE_MAX = 12
+
+    def _mapdbg(self, msg):
+        """One line of `#mapdebug` narration. Off by default; this sits in
+        the send path, so the flag is checked before anything is built."""
+        if getattr(self, "_map_debug", False):
+            self.write_local("[map] " + msg, "#7788aa")
 
     def tin_advance_position(self, cmd):
         """Move the map marker the moment a charted exit is SENT.
@@ -3236,12 +3581,41 @@ class MudClient:
         if self.map_backend == "sqlite":
             return                  # 3s has vnums on the wire; not needed
         if not self.tmap or not self.locator or not self.locator.located:
+            self._mapdbg(f"send {cmd!r}: not located - marker cannot move")
             return
         here = self.locator.room_id
+        # A from-anywhere teleport ('ho'/'home' to a player house, a recall)
+        # cannot be an EDGE: the map can only express a move out of one
+        # specific room, and these work from every room on the mud. Charted
+        # as edges they are actively wrong - the shared 3kdb map had 'home'
+        # pointing six rooms at ANOTHER player's house (see
+        # muds/3k/map-extra.json). Declared as command -> destination rid
+        # instead, so the destination is right wherever it is sent from.
+        dest = (self.setting("teleport_rooms", None) or {}).get(
+            (cmd or "").strip().lower())
+        if dest is not None and int(dest) in self.tmap.rooms:
+            if int(dest) == here:
+                return
+            self._tin_prev_room = here
+            self.locator.force(int(dest))
+            self._tin_moves_pending = getattr(
+                self, "_tin_moves_pending", 0) + 1
+            self._tin_moves_at = time.time()
+            room = self.tmap.rooms.get(int(dest))
+            if room is not None:
+                self.map.update_room(room=room.name)
+            self.render_tin_map(int(dest))
+            return
         tgt = self.tmap.follow(here, (cmd or "").strip())
         if tgt is not None:
             if tgt == here:
+                self._mapdbg(f"send {cmd!r}: exit of {here} leads back to "
+                             f"{here} - marker held")
                 return
+            self._mapdbg(f"send {cmd!r}: {here} -> {tgt} (charted exit), "
+                         f"credits {self._tin_moves_pending} -> "
+                         f"{self._tin_moves_pending + 1}")
+            self._tin_prev_room = here
             self.locator.force(tgt)
             # This move is SPENT. mip_room calls map_locate while
             # _last_move is still set (it clears it afterwards), and
@@ -3251,19 +3625,69 @@ class MudClient:
             # Treehouse put the marker two rooms on, and the move after
             # that wasn't an exit of the wrong room, so the pane went
             # unmapped.
-            self._tin_move_spent = True
+            self._tin_moves_pending = getattr(
+                self, "_tin_moves_pending", 0) + 1
+            self._tin_moves_at = time.time()
             room = self.tmap.rooms.get(tgt)
             if room is not None:
                 self.map.update_room(room=room.name)
             self.render_tin_map(tgt)
             return
         if not self._is_move_command(cmd, here):
-            return                  # `eq`, `look`, chat: we haven't moved
+            # `eq`, `look`, `kill`, the corpse routine, chat: we haven't
+            # moved, so hold the marker - but LEAVE THE CREDITS ALONE.
+            #
+            # This used to zero them, on the reasoning that a packet such
+            # a command provokes describes the room we are already in and
+            # must not be charged against a move credit. But spending a
+            # credit MEANS "hold position", which is exactly right for
+            # that packet - while zeroing throws away the credit for a
+            # move whose packet has not landed yet. 3k sends fewer room
+            # packets than a bot sends moves, so there is usually one
+            # outstanding, and the orphaned packet then falls through to
+            # on_room, which cannot dead-reckon (last_move is now `kill
+            # ripper`) and must re-derive from room text - ambiguous in
+            # Section Z, so the marker jumps or drops. Live capture
+            # logs/3kDinMapdebug.log: two moves, one packet, `kill
+            # ripper`, and the marker was adrift; earlier in the same
+            # capture the same path walked it backwards 25234 -> 25233.
+            #
+            # Credits still expire on their own: TIN_PENDING_MAX_S drops
+            # them when the wire goes quiet, which is what a fight does.
+            self._mapdbg(f"send {cmd!r}: not a move out of {here} - "
+                         f"marker held, {self._tin_moves_pending} credit(s) "
+                         f"kept")
+            return
         # A real move down an exit the map doesn't have. Anything we
         # displayed from here on would be a guess, so show nothing.
+        self._mapdbg(f"send {cmd!r}: a move, but {here} has no such exit "
+                     f"on the map - left the map, marker dropped")
         self.locator.force(None)    # force(None) == lost: room_id None
         self.map.set_graph(None, status="unmapped - Mapfind/Mapgo to fix",
                            mapping=self.mapping)
+
+    def tin_undo_last_move(self):
+        """Put the marker back after a move the MUD refused.
+
+        Position advances when a direction is SENT (3k's room packets are
+        too slow and too sparse to wait for), so a refusal - a walling mob,
+        a closed door - leaves the marker a room ahead of the player. Live
+        2026-09-06: a [walling] mob in Kayos refused seven moves in a row,
+        and the map silently walked seven rooms without us."""
+        prev = getattr(self, "_tin_prev_room", None)
+        if prev is None or not self.locator:
+            return
+        if self.locator.room_id == prev:
+            return
+        self.locator.force(prev)
+        self._tin_prev_room = None
+        # The move was credited when it was SENT, and a refusal yields no
+        # arrival packet - so without this every refusal leaves the count
+        # one high forever. Live: a Kayos [walling] mob refused seven in a
+        # row, which would have swallowed the next seven relocations.
+        self._tin_moves_pending = max(
+            0, getattr(self, "_tin_moves_pending", 0) - 1)
+        self.render_tin_map(prev)
 
     def render_tin_map(self, rid):
         """Draw the tt++ map pane centred on room `rid`."""
@@ -3578,6 +4002,7 @@ class MudClient:
             return
         self.cancel_walk(quiet=True)
         self.walk = list(path)
+        self._walk_ignore_combat = True          # manual Go: combat is no bar
         desc = dict(targets).get(dst, "")
         note = (f" - nearest of {len(targets)} '{name}' entries"
                 if len(targets) > 1 else "")
@@ -3606,6 +4031,7 @@ class MudClient:
             self.write_local(f"[walk cancelled, {len(self.walk)} "
                              "steps remaining]", "#aa88cc")
         self.walk = []
+        self._walk_ignore_combat = False
         # A cancelled/aborted walk never reached its goal, so any pending
         # arrival callback (e.g. the next leg of a VN errand) is dropped.
         self._walk_done_cb = None
@@ -3614,6 +4040,7 @@ class MudClient:
         """A walk reached its goal: run the one-shot arrival callback, if
         any. Cleared first so a callback that starts a new walk can set its
         own without it being wiped here."""
+        self._walk_ignore_combat = False
         cb = self._walk_done_cb
         self._walk_done_cb = None
         if cb:
@@ -3623,7 +4050,7 @@ class MudClient:
         self._walk_job = None
         if not self.walk:
             return
-        if self.in_combat:
+        if self.in_combat and not self._walk_ignore_combat:
             self.write_local("[walk aborted: combat]", "#ff5555")
             self.walk = []
             self._walk_done_cb = None
@@ -3691,8 +4118,21 @@ class MudClient:
     def cmd_hunt(self, arg):
         self._bot_command(arg, "hunt")
 
-    def _bot_command(self, arg, mode):
-        verb = "Bot" if mode == "aggro" else "Hunt"
+    def cmd_fence(self, arg):
+        """`Fence <dir> [target] [watch]` - hunt every direction from THIS
+        room except <dir>. Split off from the old `Hunt <dir>` so that Hunt
+        keeps the keyword forms and one word means one thing.
+
+        Unlike the old form this sends NO opening move and does NOT invert
+        the direction: <dir> is a real exit of the room you are standing in,
+        which is the only way to fence a named exit like `leave` at all.
+        Speedruns drop you inside the area, so the room you start in is
+        normally one you want to fight in - Fence hunts it like any other."""
+        self._bot_command(arg, "hunt", fence=True)
+
+    def _bot_command(self, arg, mode, fence=False):
+        verb = ("Fence" if fence
+                else "Bot" if mode == "aggro" else "Hunt")
         a = arg.strip().lower()
         if a in ("off", "stop", "halt"):
             if self._bot_on:
@@ -3717,15 +4157,41 @@ class MudClient:
             return
         words = a.split()
         first = words[0] if words else ""
-        if mode == "hunt" and first in self._REVERSE_DIR:
+        if fence:
+            if not first:
+                self.write_local(
+                    "Usage: Fence <dir> [target] [watch] - hunts every "
+                    "direction from this room EXCEPT <dir>. The direction "
+                    "is the way you will NOT go.", "#cc9933")
+                return
             fence_vnum = self._sql_cur_vnum
             if fence_vnum is None:
-                self.write_local("[hunt] location unknown.", "#cc9933"); return
-            self.send_line(first)
+                self.write_local("[fence] location unknown.", "#cc9933")
+                return
+            # Validate against the room's REAL exits, not a compass table:
+            # the exits worth fencing are often named (`leave`, `enter`,
+            # `shadows`), and those are exactly what the old reverse-compass
+            # derivation could not express.
+            here = [e["direction"] for e in self.mapdb.iter_exits(fence_vnum)]
+            if first not in here:
+                self.write_local(
+                    f"[fence] no '{first}' exit here. This room's exits: "
+                    + (", ".join(here) if here else "(none charted)"),
+                    "#cc9933")
+                return
             filt, watch = self._hunt_targets(words[1:])
-            self._bot_start(mode, fence_vnum=fence_vnum,
-                            fence_dir=self._REVERSE_DIR[first],
+            self._bot_start(mode, fence_vnum=fence_vnum, fence_dir=first,
                             hunt_filter=filt, hunt_watch=watch)
+            return
+        if mode == "hunt" and first in self._REVERSE_DIR:
+            # `Hunt <dir>` used to mean "step <dir>, then fence the room you
+            # left". It is now `Fence <dir>`, which names the way you will
+            # NOT go. Refuse rather than fall through to the keyword path,
+            # which would send `kill nw`.
+            self.write_local(
+                f"Hunt no longer takes a direction. Use 'Fence {first}' to "
+                f"hunt every direction from this room EXCEPT {first}.",
+                "#cc9933")
             return
         mapless = (first == "mapless")
         filt, watch = self._hunt_targets(words[1:] if mapless else words)
@@ -4171,12 +4637,6 @@ class MudClient:
         self._bot_prev_vnum = None
         self._bot_fence_vnum = fence_vnum
         self._bot_fence_dir = fence_dir
-        self._bot_fence_dest = None
-        if fence_vnum and fence_dir and self.mapdb:
-            for e in self.mapdb.iter_exits(fence_vnum):
-                if e["direction"] == fence_dir:
-                    self._bot_fence_dest = e["to_vnum"]
-                    break
         self._bot_in_combat = self.in_combat
         self._bot_combat_end = 0.0
         self._bot_homing = False
@@ -4187,6 +4647,7 @@ class MudClient:
         self._hunt_watch = hunt_watch
         self._hunt_attacked = False
         self._hunt_whiffs = 0
+        self._hunt_kw = None
         self._hunt_lines = []
         self._bot_waiting_room = False
         self._bot_room_ready = False
@@ -4210,6 +4671,16 @@ class MudClient:
                         f"'{hunt_watch}' is in the room")
             limit = self.wander_clear_limit if mapless else self.hunt_clear_limit
             clear = (f", or {limit} rooms with no combat," if limit else "")
+            if fence_dir:
+                # The argument names the way you will NOT go, which reads
+                # backwards at a glance - so say it in full, every start.
+                self.write_local(
+                    f"[fence] fencing off '{fence_dir}': the bot will hunt "
+                    f"in any direction from this room EXCEPT '{fence_dir}'. "
+                    "It DOES fight in this room.", "#66cc66")
+                self.write_local(
+                    "[fence] locked to this level - only n/s/e/w/ne/nw/se/"
+                    "sw, no u, d, enter or leave.", "#66cc66")
             self.write_local(
                 f"[hunt] roaming {where} - {markers}; "
                 f"attacks any mob it finds via {how}, skips rooms with a "
@@ -4226,7 +4697,10 @@ class MudClient:
         self._bot_reschedule(0.6)
 
     def _bot_stop(self, why=""):
-        verb = "hunt" if self._bot_mode == "hunt" else "bot"
+        # A Fence run rides mode "hunt", so name it by the fence, not the
+        # mode - otherwise `Fence se` stops with a "[hunt] ..." line.
+        verb = ("fence" if self._bot_fence_vnum
+                else "hunt" if self._bot_mode == "hunt" else "bot")
         self._bot_on = False
         self._bot_homing = False
         self._bot_home_reason = ""
@@ -4359,6 +4833,7 @@ class MudClient:
         self._mm_south_col = None
         self._mm_south_count = 0
         self._hunt_attacked = False     # any fresh look re-evaluates the room
+        self._hunt_kw = None
         if not refresh:
             self._hunt_whiffs = 0       # new room: fresh whiff budget
         self._bot_room_ready = False
@@ -4545,8 +5020,15 @@ class MudClient:
         self._resume_vitals_margin = float(
             self.setting("post_kill_resume_vitals_margin", 20))
         self._resume_pending = True
-        self._resume_deadline = time.time() + max(
-            1, int(self.setting("post_kill_resume_timeout", 90)))
+        # 0 (or less) = NO deadline: wait as long as the condition takes.
+        # The timeout is a net for a resume line that never comes, but on
+        # 3k it was catching real revalries instead - a full refill from
+        # low sp is ~12000 sp at ~17/round on 2s rounds, about 23 MINUTES,
+        # against a 40s net. It fired every time and put the bot back in a
+        # fight with no sp.
+        secs = int(self.setting("post_kill_resume_timeout", 90))
+        self._resume_deadline = (None if secs <= 0
+                                 else time.time() + max(1, secs))
 
     def _vitals_topped_up(self):
         """True once every field named in self._resume_vitals is within
@@ -4571,7 +5053,8 @@ class MudClient:
         if self._resume_vitals and self._vitals_topped_up():
             self._resume_pending = False
             return False
-        if time.time() >= self._resume_deadline:
+        if self._resume_deadline is not None \
+                and time.time() >= self._resume_deadline:
             self._resume_pending = False
             self.write_local("[bot: resume condition never came - resuming]",
                              "#888899")
@@ -4782,14 +5265,20 @@ class MudClient:
                 continue
             if self._bot_area_of(to) != self._bot_area_id:
                 continue
-            if self._bot_mode == "hunt" and self.hunt_flat \
+            # A Fence run is level-locked by definition ("I only want to
+            # kill HERE"): another level usually means another difficulty
+            # band, which means changing your setup. So Fence implies
+            # `flat` for its whole duration - u/d and every named exit
+            # (enter/leave/shadows) are out. The persisted hunt_flat
+            # toggle is NOT touched; the lock belongs to the run.
+            if self._bot_mode == "hunt" \
+                    and (self.hunt_flat or self._bot_fence_vnum) \
                     and e["direction"] not in self.CARDINAL_DIRS:
                 continue
             cands.append(e)
         if self._bot_fence_vnum and v == self._bot_fence_vnum:
+            # `Fence <dir>`: the one exit of this room we never take.
             cands = [e for e in cands if e["direction"] != self._bot_fence_dir]
-        if self._bot_fence_dest:
-            cands = [e for e in cands if e["to_vnum"] != self._bot_fence_dest]
         if not cands:
             return None
         forward = [e for e in cands if e["to_vnum"] != self._bot_prev_vnum]
@@ -4876,6 +5365,7 @@ class MudClient:
             # whatever's in the room, which is exactly what the filter is
             # there to prevent. Name the target explicitly instead - the
             # MUD's "There is no <target> here." then moves us on.
+            self._hunt_kw = self._hunt_filter
             self.send_line(f"kill {self._hunt_filter}")
             return True
         if aa:
@@ -4883,15 +5373,39 @@ class MudClient:
                 kw = self._hunt_filter or self._bot_kill_keyword()
                 if not kw:
                     return False
+                self._hunt_kw = kw
                 self.send_line(aa.replace("{t}", kw))
             else:
+                self._hunt_kw = None    # self-targeting: no keyword to whiff
                 self.send_line(aa)
             return True
         kw = self._hunt_filter or self._bot_kill_keyword()
         if kw:
+            self._hunt_kw = kw
             self.send_line(f"kill {kw}")
             return True
         return False
+
+    def _hunt_note_no_target(self, clean):
+        """The MUD says the keyword we just swung at isn't here. Believe it
+        on the first try - mark the room mobless and let the tick roam on -
+        instead of burning the whole whiff budget waiting out the engage
+        grace five times.
+
+        This used to be gated on self._hunt_filter, so it only ever fired
+        for a keyword the USER typed. A keyword we derived from the mob line
+        was never believed, which is how `Hunt nw` beside `Oladus the Blind.`
+        sent `kill blind` against "There is no blind here." indefinitely
+        (3s, 2026-09-09) - the whiff budget resets on every room entry, so
+        the roam kept coming back and starting the five over again."""
+        if not self._bot_on or not self._hunt_attacked:
+            return
+        kw = self._hunt_filter or self._hunt_kw
+        if not kw or f"there is no {kw.lower()}" not in clean.lower():
+            return
+        self._bot_room_mob = False
+        self._hunt_attacked = False
+        self._bot_reschedule(0)
 
     def _bot_kill_keyword(self):
         """A kill keyword for the mob in the room. Prefers the italic
@@ -4932,6 +5446,17 @@ class MudClient:
             words = words[1:]
         if not words:
             return None
+        # '<Name> the <Epithet>' is a proper name, so the head noun is the
+        # word BEFORE the 'the' - the opposite of the last-noun rule below.
+        # ('Oladus the Blind.' -> oladus, not blind; live 3s 2026-09-09,
+        # where `kill blind` drew "There is no blind here.")
+        #
+        # ONLY at index 1, i.e. 'the' directly after the name. Any later
+        # 'the' belongs to a trailing prepositional phrase, where the rule
+        # below already gets it right - matching those would turn every
+        # 'Warlord of the Monkey.' in Celestial Zodiacs into 'of'.
+        if len(words) > 2 and words[1].lower() == "the":
+            return words[0].lower()
         keep = []
         for w in words:
             if w.lower() in self._MOB_NOUN_STOPWORDS:
@@ -5017,7 +5542,7 @@ class MudClient:
         if cur is None:
             self._bot_job = self.root.after(1500, self._bot_home_step)
             return
-        if home is None or cur == home or cur == self._bot_fence_dest:
+        if home is None or cur == home:
             self._bot_stop(self._bot_home_reason or "back at start room")
             return
         edges = self.mapdb.find_path(cur, home)
@@ -5106,6 +5631,7 @@ class MudClient:
         self._chaossea_room_mob = False
         self._chaossea_room_player = False
         self._chaossea_mob_lines = []
+        self._chaossea_floor_wants = []
         self._chaossea_pre_move_room = None
         self._chaossea_got_ddd = False
         self._chaossea_pre_move_mobs = 0
@@ -5251,6 +5777,19 @@ class MudClient:
         self._chaossea_engage_mob(self._chaossea_mob_idx, [])
 
     def _chaossea_examine_scan_line(self, clean):
+        if self._chaossea_examine_pending and self.in_combat:
+            # The mutant attacked. Its reply has already landed, but combat
+            # lines never stop arriving, so "settle" would never fire and
+            # the buffer swallowed the whole fight (3 times, 10k+ lines in
+            # logs/normal-20260923.log). Nothing to read it for: the fight
+            # happens regardless, and the post-fight rescan picks up any
+            # item it drops via _chaossea_floor_wants.
+            self._chaossea_examine_pending = False
+            self._chaossea_examine_buf = []
+            if self.setting("chaossea_tick_debug"):
+                self.write_local("[cs-exam] abandoned - a fight started",
+                                 "#888888")
+            return
         if self._chaossea_examine_pending:
             self._chaossea_examine_buf.append(clean)
             self._chaossea_examine_last_line = time.time()
@@ -5298,6 +5837,7 @@ class MudClient:
     def _chaossea_enter_room(self):
         self._chaossea_room_mob = self._chaossea_room_player = False
         self._chaossea_mob_lines = []
+        self._chaossea_floor_wants = []
         self._chaossea_room_mobs = 0
         self._chaossea_mob_idx = 0
         self._chaossea_examine_buf = []
@@ -5321,6 +5861,7 @@ class MudClient:
             if self._chaossea_skip_ddds > 0:
                 self._chaossea_skip_ddds -= 1
                 self._chaossea_mob_lines = []
+                self._chaossea_floor_wants = []
                 self._chaossea_room_mob = False
                 return
             self._chaossea_room_displayed(has_exits)
@@ -5374,12 +5915,22 @@ class MudClient:
         # successful retry doesn't double-count mob lines.
         self._chaossea_room_mob = self._chaossea_room_player = False
         self._chaossea_mob_lines = []
+        self._chaossea_floor_wants = []
         self.send_line("look")
         self._chaossea_reschedule(self._bot_safety_s())
 
     def _chaossea_scan_markers(self, spans, clean):
         if "a glowing portal (swirling chaotically)" in clean.lower():
             self._chaossea_stop("reached the boss/treasure room (glowing portal) - stopping")
+            return
+        # A wanted item lying on the floor ("A chaotic charm.", or with a
+        # stack count "A cube of raw chaos {112}.") - a mutant killed in an
+        # aggro fight, or by fight mode which ignores drops, leaves it here.
+        floor = re.sub(r"\s*\{\d+\}$", "",
+                       clean.strip().rstrip(".")).lower()
+        if floor in self._chaossea_wants(self._chaossea_has_charm,
+                                         self._chaossea_has_cube):
+            self._chaossea_floor_wants.append(floor)
             return
         ital, under = self._line_markers(spans)
         if ital:
@@ -5496,6 +6047,7 @@ class MudClient:
             if not self._chaossea_dm_paused:
                 self._chaossea_dm_paused = True
                 self._chaossea_dm_kills_at_trip = len(self.kills)
+                self._corpse_seen = False
                 self.write_local(
                     "[chaossea] deadman tripped - paused in place, state "
                     "held. Type anything to release and resume.", "#ffaa44")
@@ -5504,7 +6056,12 @@ class MudClient:
             self._chaossea_dm_paused = False
             self.write_local("[chaossea] deadman released - resuming.",
                              "#66cc66")
-            if len(self.kills) > self._chaossea_dm_kills_at_trip \
+            # Either signal will do, and the CORPSE is the reliable one:
+            # kills only grows when the killing-blow text matched, which it
+            # doesn't when a merc or hirdmadr lands the blow - and then a
+            # real kill leaves nothing to react to (live 2026-09-07).
+            if (len(self.kills) > self._chaossea_dm_kills_at_trip
+                    or getattr(self, "_corpse_seen", False)) \
                     and not self.in_combat:
                 # A kill landed via mud-side autocombat while paused - the
                 # tick never saw it happen (this branch is the first one
@@ -5516,7 +6073,8 @@ class MudClient:
                 # in_combat->False edge below) instead of falling through to
                 # the engage/whiff-retry branch, which would otherwise
                 # 'kill <keyword>' a mutant that's already dead.
-                mob, _rnd = self.kills[-1]
+                mob = self.kills[-1][0] if self.kills else ""
+                self._corpse_seen = False
                 self._fire_corpse(mob)
                 self._chaossea_post_kill_wait = True
                 self._arm_post_kill_resume()
@@ -5593,6 +6151,7 @@ class MudClient:
                 self._chaossea_skip_ddds = 0
                 self._chaossea_room_mob = self._chaossea_room_player = False
                 self._chaossea_mob_lines = []
+                self._chaossea_floor_wants = []
                 self.send_line(self.setting("bot_refresh_command", "glance"))
                 self._chaossea_room_entered_at = time.time()
             self._chaossea_reschedule(0.3); return
@@ -5620,6 +6179,21 @@ class MudClient:
             self._chaossea_pre_move_room = None
             if unchanged:
                 self._chaossea_handle_blocked(); return
+        if self._chaossea_floor_wants and not self._chaossea_fight_mode:
+            # Same pickup commands as the post-kill loot: the charm is
+            # bind-on-pickup, which `get all` skips.
+            for item in self._chaossea_floor_wants:
+                if item == "a chaotic charm" and not self._chaossea_has_charm:
+                    self.write_local("[chaossea] a chaotic charm is on the "
+                                     "floor - taking it.", "#66cc66")
+                    self.send_line("get charm")
+                    self._chaossea_has_charm = True
+                elif item == "a cube of raw chaos"                         and not self._chaossea_has_cube:
+                    self.write_local("[chaossea] a cube of raw chaos is on "
+                                     "the floor - taking it.", "#66cc66")
+                    self.send_line("get all")
+                    self._chaossea_has_cube = True
+            self._chaossea_floor_wants = []
         if self._chaossea_has_charm and self._chaossea_has_cube:
             self.send_line("retreat from the sea")
             self._chaossea_stop("got both - retreated"); return
@@ -5741,6 +6315,8 @@ class MudClient:
                 if room_exits and any(e not in known for e in room_exits):
                     return path[0]
             for d, nxt in self._chaossea_map.get(room, {}).items():
+                if d in ("u", "up"):
+                    continue    # the Sea is descended, never climbed
                 if nxt not in seen:
                     seen.add(nxt)
                     queue.append((nxt, path + [d]))
@@ -5760,6 +6336,8 @@ class MudClient:
                 if room_exits and any(e not in known for e in room_exits):
                     return path
             for d, nxt in self._chaossea_map.get(room, {}).items():
+                if d in ("u", "up"):
+                    continue    # the Sea is descended, never climbed
                 if nxt not in seen:
                     seen.add(nxt)
                     queue.append((nxt, path + [d]))
@@ -5800,8 +6378,17 @@ class MudClient:
         connector - confirmed live when the novelty-preferring pick walked
         the character straight out of the Sea through it. Retreating on
         purpose (item-hunt's goal-complete case) sends it directly, never
-        through this picker."""
-        exits = [d for d in (exits or []) if d != "out"]
+        through this picker.
+
+        'u' is excluded for a different reason: the Sea is DESCENDED, never
+        climbed. Live, hours into a run, the bot oscillated between two
+        rooms forever - Layer three (u,e) had both exits recorded, so the
+        frontier BFS routed it UP to Layer two for that room's unexplored
+        w/s, and on arrival the dive rule above fired first and sent it
+        straight back down, cancelling the plan every time. With no way
+        back to a shallower floor that loop cannot form, and anything left
+        unexplored up there was reachable going down another way anyway."""
+        exits = [d for d in (exits or []) if d not in ("out", "u", "up")]
         if not exits:
             return None
         if "d" in exits:
@@ -5895,6 +6482,129 @@ class MudClient:
             return []
         return sorted(f[:-5] for f in os.listdir(d) if f.endswith(".json"))
 
+    def _run_bot_data(self, name):
+        """One bot definition, or None (the caller reports why)."""
+        path = os.path.join(self._run_bots_dir(), f"{name}.json")
+        if not os.path.exists(path):
+            return None
+        data, err = paths.load_json(path, default=None)
+        return None if (err or not data) else data
+
+    def _map_exit_vocabulary(self):
+        """Every command that is an exit SOMEWHERE on the map. Cached."""
+        vocab = getattr(self, "_map_exit_vocab", None)
+        if vocab is None:
+            vocab = {str(c).strip().lower()
+                     for r in self.tmap.rooms.values() for c in r.exits}
+            self._map_exit_vocab = vocab
+        return vocab
+
+    def _run_walk_step(self, rid, step):
+        """Where one path step leaves us, or None if it can't be walked.
+
+        Only `Run <bot> here` needs this. RUNNING a bot never does:
+        _run_send_step sends every ';'-separated part in order, so unlock
+        chains ('unlock door;open door;n') already work. This exists only
+        to work out which room each step lands in, so a resume can match
+        the room you are standing in to a step number.
+
+        A step's parts are not all movement - bot paths carry loot ('get
+        all') and preconditions ('unlock door', 'swipe card'). A part the
+        map knows as an exit command somewhere must resolve from here or
+        this route is wrong; a part that is an exit nowhere is not
+        movement and leaves the room unchanged."""
+        sep = self.setting("command_separator", ";")
+        vocab = self._map_exit_vocabulary()
+        cur = rid
+        for part in [p.strip() for p in str(step).split(sep) if p.strip()]:
+            nxt = self.tmap.follow(cur, part)
+            if nxt is not None:
+                cur = nxt
+            elif part.lower() in vocab:
+                return None         # a real move the map can't make here
+        return cur
+
+    def _run_routes(self, steps, area=None):
+        """Every room-by-room route the bot's path could describe.
+
+        A bot path is commands, so once the START room is known each
+        later room follows from the map - and the start is recoverable as
+        a room the whole path walks from. Several can qualify: 'angels'
+        walks both 'Tree of Life' and 'Tree of Life 2.0', which are real
+        alternatives rather than an error, so all are returned and the
+        caller picks by where the player actually is.
+
+        Searches the bot's own area first when its label happens to name
+        a map area (Section Z: 440 rooms, not 54k), then the whole map -
+        several bots label themselves something the map doesn't use."""
+        if not self.tmap or not steps:
+            return []
+
+        def route_from(start):
+            route, cur = [start], start
+            for step in steps:
+                cur = self._run_walk_step(cur, step)
+                if cur is None:
+                    return None
+                route.append(cur)
+            return route
+
+        pool = [rid for rid, r in self.tmap.rooms.items() if r.area == area] \
+            if area else []
+        routes = [r for r in (route_from(rid) for rid in pool) if r]
+        if not routes:
+            routes = [r for r in (route_from(rid) for rid in self.tmap.rooms)
+                      if r]
+        # A path of pure actions "walks" from everywhere; that is not a route.
+        return [r for r in routes if len(set(r)) > 1]
+
+    def cmd_run_here(self, name, loop=False):
+        """`Run <bot> here` - start the bot at the step for THIS room.
+
+        Section Z can be left with `pause game` and re-entered at the same
+        room, so a run is routinely interrupted partway; working out where
+        to pick up meant counting rooms by hand and trimming the script."""
+        if not self.locator or not self.locator.located:
+            self.write_local("[run] not located on the map - Mapfind/Mapgo "
+                             "to say where you are first.", "#cc6666")
+            return
+        data = self._run_bot_data(name)
+        if data is None:
+            avail = ", ".join(self._run_available()) or "(none)"
+            self.write_local(f"No bot '{name}'. Available: {avail}", "#cc6666")
+            return
+        steps = [s for s in (data.get("path") or []) if s]
+        routes = self._run_routes(steps, data.get("area"))
+        if not routes:
+            self.write_local(
+                f"[run] can't place '{name}' on the map - no room's exits "
+                "follow its whole path. Either the area isn't charted or the "
+                f"path uses a move the map lacks. Use 'Run {name} <step>'.",
+                "#cc9933")
+            return
+        here = self.locator.room_id
+        # A room belongs to one area, so at most one route can hold it -
+        # which is what tells 'Tree of Life' from 'Tree of Life 2.0'.
+        hits = sorted({i for route in routes
+                       for i, rid in enumerate(route) if rid == here})
+        if not hits:
+            self.write_local(
+                f"[run] this room is not on '{name}'s route ({len(steps)} "
+                "steps). Walk to the route, or Mapgo to the right room.",
+                "#cc9933")
+            return
+        if len(hits) > 1:
+            self.write_local(
+                f"[run] this room is on '{name}'s route {len(hits)} times - "
+                "pick one:", "#cc9933")
+            for i in hits:
+                self.write_local(f"    Run {name} {i}"
+                                 f"   ({len(steps) - i} step(s) left)")
+            return
+        self.write_local(f"[run] '{name}': resuming at step {hits[0]} of "
+                         f"{len(steps)}.", "#66cc66")
+        self._run_start(name, loop, hits[0])
+
     def cmd_run(self, arg):
         bits = arg.split()
         if not bits:
@@ -5910,7 +6620,8 @@ class MudClient:
             else:
                 avail = ", ".join(self._run_available()) or "(none)"
                 self.write_local(
-                    f"Run <bot> [loop] [<step>] | Run resume | Run off. "
+                    f"Run <bot> [loop] [<step>|here] | Run resume | "
+                    f"Run off. "
                     f"Available: {avail}", "#cc9933")
             return
         a0 = bits[0].lower()
@@ -5935,12 +6646,22 @@ class MudClient:
             return
         loop = False
         start_idx = 0
+        here = False
+        fast = False
         for b in bits[1:]:
             bl = b.lower()
             if bl in ("loop", "l"):
                 loop = True
+            elif bl == "here":
+                here = True
+            elif bl == "fast":
+                fast = True
             elif bl.isdigit():
                 start_idx = int(bl)
+        self._run_fast = fast
+        if here:
+            self.cmd_run_here(a0, loop)
+            return
         self._run_start(a0, loop, start_idx)
 
     def _run_start(self, name, loop, start_idx=0):
@@ -6036,8 +6757,87 @@ class MudClient:
         self._run_idx = start_idx
         self._run_loop = loop or bool(data.get("loop"))
         self._run_name = name
+        # `find`: walk the route until this phrase shows up, then stop.
+        find = data.get("find") or {}
+        match = str(find.get("match") or "").strip().lower()
+        self._run_find = (match,
+                          str(find.get("message") or "found").strip()) \
+            if match else None
+        # `discover` / `pickup`: note where things are, and take what's
+        # on the floor, while the route runs (Kayos Wars randomises where
+        # its bunkers and landing pad sit, so they have to be found).
+        # `reactions`: bot-scoped answers to lines the MUD sends. The tin
+        # scripts do this with #action; a bot-scoped list is used instead of
+        # cascade "triggers" so none of it can fire while hand-playing.
+        #   on       phrase to match (substring, case-insensitive)
+        #   do       commands to send
+        #   after    seconds to wait before sending them (default 0)
+        #   pause    true = hold movement till `resume`; a number = N seconds;
+        #            "stop" = end the run (recover with `Run resume`)
+        #   resume   phrase releasing a pause:true
+        #   once     true, or a string naming a latch SHARED with other
+        #            reactions (czodiacs has two portal phrases doing one job)
+        #   if_clear skip `do` when a whitelisted mob is in the room, so a
+        #            chest hunt can't burn combat rounds
+        self._run_reactions = [
+            {"on": str(r.get("on", "")).strip().lower(),
+             "do": [str(c) for c in (r.get("do") or []) if str(c).strip()],
+             "after": max(0.0, float(r.get("after") or 0)),
+             "pause": r.get("pause"),
+             "resume": str(r.get("resume") or "").strip().lower(),
+             "once": r.get("once"),
+             "if_clear": bool(r.get("if_clear")),
+             "say": str(r.get("say") or "").strip()}
+            for r in (data.get("reactions") or [])
+            if str(r.get("on", "")).strip()]
+        self._run_fired = set()
+        self._run_hold_until = 0.0
+        self._run_hold_phrase = ""
+        self._run_hold_deadline = 0.0
+        self._run_hold_why = ""
+        self._run_discover = [
+            {"match": str(d.get("match", "")).strip().lower(),
+             "store": str(d.get("store", "found")).strip(),
+             "max": int(d.get("max") or 1)}
+            for d in (data.get("discover") or [])
+            if str(d.get("match", "")).strip()]
+        self._run_pickup = [
+            {"match": str(p.get("match", "")).strip().lower(),
+             "send": str(p.get("send", "")).strip()}
+            for p in (data.get("pickup") or [])
+            if str(p.get("match", "")).strip()
+            and str(p.get("send", "")).strip()]
+        self._run_found = {}
+        self._run_count = [
+            {"match": [str(m).strip().lower()
+                       for m in (c.get("match") or []) if str(m).strip()],
+             "store": str(c.get("store", "count")).strip()}
+            for c in (data.get("count") or [])
+            if any(str(m).strip() for m in (c.get("match") or []))]
+        self._run_counts = {}
+        self._run_strip_tags = bool(data.get("strip_tags"))
+        self._run_in_leg = False
+        seed = data.get("seed_counts") or {}
+        self._run_seed = [
+            {"match": str(i.get("match", "")).strip().lower(),
+             "store": str(i.get("store", "count")).strip()}
+            for i in (seed.get("items") or [])
+            if str(i.get("match", "")).strip()]
+        self._run_seed_cmd = str(seed.get("send") or "").strip()
+        self._run_seeding = bool(self._run_seed and self._run_seed_cmd)
+        self._run_blocked = [str(b).strip().lower()
+                             for b in (data.get("blocked_phrases") or [])
+                             if str(b).strip()]
+        self._run_was_blocked = False
+        self._run_until = dict(data.get("fast_until") or {})
+        self._run_legs = [dict(l) for l in (data.get("legs") or [])]
+        self._run_leg_done = 0
         self._run_lines = []
+        self._run_mob_latch = None
         self._run_room_enter_t = time.time()
+        self._run_waiting_room = False
+        self._run_room_ready = False
+        self._run_wait_t0 = 0.0
         self._run_acted = False
         self._run_killing = False
         self._run_kill_start = 0.0
@@ -6059,10 +6859,40 @@ class MudClient:
                 self.send_line(c)
         self.send_line("pwho")              # seed party whitelist for skipping
         self._bot_pwho_at = time.time()
+        # Look at the room we're STANDING in before stepping off it.
+        # _run_lines was just cleared, so without this the first tick scans
+        # an empty buffer, finds nothing, and walks - skipping whatever is
+        # in the start room (live 2026-09-06: kayos left 'A Noisy
+        # Battleground' unfought every run). The reply refills the buffer
+        # in time for the first tick.
+        self.send_line(self.setting("bot_refresh_command", "glance"))
+        self._run_step_sent()   # wait for THIS room too - the start room's
+                                # mobs matter as much as a stepped-into one's
+        if self._run_seeding:
+            # Seed the tallies from what we ALREADY carry. Without this a
+            # re-run starts at zero keys, so the fast cutoff can never fire
+            # on a grid that has already been cleared - there are no more
+            # keys to drop. The tintin script sent 'i' at startup for the
+            # same reason.
+            self.send_line(self._run_seed_cmd)
+            self.root.after(
+                int(self.setting("run_seed_ms", 2000)), self._run_seed_done)
         self._run_reschedule(0.6)
+
+    def _run_seed_done(self):
+        if not self._run_seeding:
+            return
+        self._run_seeding = False
+        have = ", ".join(f"{k} x{v}" for k, v in
+                         sorted((self._run_counts or {}).items())) or "nothing"
+        self.write_local(f"[run] carrying: {have}", "#88cc88")
 
     def _run_stop(self, why=""):
         self._run_on = False
+        self._run_hold_until = 0.0
+        self._run_hold_phrase = ""
+        self._run_hold_why = ""
+
         if self._run_job:
             self.root.after_cancel(self._run_job)
             self._run_job = None
@@ -6082,6 +6912,28 @@ class MudClient:
 
     def _run_move_s(self):
         return max(0.3, self.setting("run_move_ms", 1300) / 1000.0)
+
+    def _run_step_sent(self, expect_room=False):
+        """A step went out: start waiting for that room's display.
+
+        expect_room=True means this was MOVEMENT, so GMCP Room.Contents
+        will arrive and release the wait at once (gmcp_room_contents).
+        False - the startup glance, the post-kill re-scan - means no room
+        packet is coming and the run_move_ms timer is the only release.
+        """
+        self._run_waiting_room = True
+        self._run_room_ready = False
+        self._run_expect_room = bool(expect_room)
+        self._run_wait_t0 = time.time()
+
+    def _run_on_prompt(self):
+        """Prompt = the room display is complete, so assess NOW.
+
+        run_move_ms stops being the pace and becomes only a ceiling for the
+        case where no prompt arrives."""
+        if getattr(self, "_run_waiting_room", False)                 and not getattr(self, "_run_room_ready", False):
+            self._run_room_ready = True
+            self._run_reschedule(0)
 
     def _run_settle_s(self):
         return max(0.5, self.setting("run_settle_ms", 1500) / 1000.0)
@@ -6112,24 +6964,164 @@ class MudClient:
                 names.append(m.group(1).strip())
         return names
 
-    def _run_scan_mob(self):
-        """Scan the room text since the last step for a whitelisted mob. The
-        3k room shows each mob on its own line as '<Long Name>.' (see the
-        capture), so by default match a line == a botmob's display name; a mob
-        entry with "contains": true matches the keyword anywhere in the line
-        (the looser keyword style the script bot used). Returns
-        (target_keyword, display_name) or (None, None)."""
-        for raw in self._run_lines:
-            s = raw.strip()
-            if not s:
-                continue
-            key = s[:-1].strip() if s.endswith(".") else s
-            key = RUN_COUNT_TAG_RE.sub("", key).strip()  # drop "{2}" etc.
-            kl = key.lower()
-            for match_l, target, contains in self._run_mobs:
-                if (match_l in kl) if contains else (kl == match_l):
-                    return target, key
+    def _run_match_mob_line(self, raw):
+        """Test ONE line against the bot's whitelist. The 3k room shows each
+        mob on its own line as '<Long Name>.' (see the capture), so by default
+        match line == a botmob's display name; a mob entry with
+        "contains": true matches the keyword anywhere in the line (the looser
+        keyword style the script bot used). Returns (target_keyword,
+        display_name) or (None, None)."""
+        s = raw.strip()
+        if not s:
+            return None, None
+        key = s[:-1].strip() if s.endswith(".") else s
+        key = RUN_COUNT_TAG_RE.sub("", key).strip()  # drop "{2}" etc.
+        if getattr(self, "_run_strip_tags", False):
+            key = RUN_STATUS_TAG_RE.sub("", key).strip()
+            key = key[:-1].strip() if key.endswith(".") else key
+        kl = key.lower()
+        # Once Room.Contents has been seen for this room, GMCP decides
+        # WHETHER a name is a mob and the text only decides WHICH. Without
+        # this, `contains: true` matches the keyword anywhere in ANY
+        # buffered line - and `_run_lines` is cleared at the kill, so the
+        # post-mortem damage line lands in the empty buffer and becomes the
+        # target: "[run] You hit Giant Recruit 4 times for 2638 damage ->
+        # kill recruit", then three `There is no recruit here.`
+        # (live 2026-09-20).
+        #
+        # A DAMAGE_RE filter is not enough - "Eris trounced Giant Recruit up
+        # and down." matches too - and a blacklist of combat verbs would be
+        # guesswork about mud text.
+        #
+        # This is NOT the stale monster whitelist rejected earlier: it never
+        # asks whether that mob is still ALIVE (the counts go stale and are
+        # ignored here), only whether the mud ever called that NAME a
+        # monster in this room. The structural discriminator would be the
+        # look_monster italics marker, which is unavailable because
+        # setup_commands has not run since MIP died.
+        if getattr(self, "_gmcp_room_seen", False)                 and kl not in getattr(self, "_gmcp_room_mob_names", {}):
+            return None, None
+        # GMCP said this is scenery, not a mob. The Blood Eagle ritual
+        # scene is italic and sits in the mob-line slot, so only the wire
+        # can tell them apart. A BLACKLIST, not a monster whitelist:
+        # Room.Contents is entry-only, so a whitelist would go stale and
+        # hide a mob that wandered in - while scenery does not change while
+        # you stand in the room, so this stays correct for the whole visit.
+        # Empty set (3k, which has no GMCP at all) = behaviour unchanged.
+        if kl in getattr(self, "_gmcp_room_items", ()):
+            return None, None
+        for match_l, target, contains in self._run_mobs:
+            if (match_l in kl) if contains else (kl == match_l):
+                return target, key
         return None, None
+
+    def _run_scan_mob(self):
+        """The whitelisted mob seen in this room since the last step, as
+        (target_keyword, display_name) or (None, None).
+
+        Prefer the latch set by _run_scan_markers when the line ARRIVED.
+        _run_lines is a 60-line window, so a long reply that lands in the
+        same step - an `i`, a `who`, an auction history, typed by hand or
+        fired by a reaction - can push the mob line out before this runs.
+        That is how Blackguard of Capricorn was walked past on 2026-09-09:
+        the mob line was the 6th of 68 appends and the window kept the last
+        60. Latching on arrival makes the window size irrelevant; the sweep
+        below stays as a fallback so this can only ever find MORE than it
+        used to."""
+        if self._run_mob_latch:
+            return self._run_mob_latch
+        # GMCP's monster list, which arrives with the room and BEFORE any
+        # text - this is what lets the bot act without waiting for the
+        # display. Kept honest across kills by gmcp_room_death; scenery
+        # never reaches it, because Room.Contents types the Blood Eagle
+        # ritual scene as an `item`.
+        names = getattr(self, "_gmcp_room_mob_names", {})
+        for name in getattr(self, "_gmcp_room_monsters", {}):
+            target, _key = self._run_match_mob_line(name)
+            if target:
+                return target, names.get(name, name)
+        for raw in self._run_lines:
+            target, key = self._run_match_mob_line(raw)
+            if target:
+                return target, key
+        return None, None
+
+    def _run_held(self):
+        """Why movement is held right now, or "" if it is not.
+
+        A hold stops the bot STEPPING, nothing else: combat still resolves
+        and room mobs are still killed, which is what the blind and stomp
+        reactions want (stand and fight, just do not walk).
+        """
+        now = time.time()
+        if self._run_hold_phrase:
+            if now >= self._run_hold_deadline:
+                phrase, self._run_hold_phrase = self._run_hold_phrase, ""
+                self._run_hold_why = ""
+                self.write_local(
+                    f"[run] gave up waiting for '{phrase}' - carrying on. "
+                    "(Was the line gagged, or reworded?)", "#cc9933")
+                return ""
+            return self._run_hold_why or "held"
+        if now < self._run_hold_until:
+            return self._run_hold_why or "held"
+        return ""
+
+    def _run_release(self, clean):
+        """A pause:true reaction ends when its `resume` phrase arrives."""
+        if not self._run_hold_phrase:
+            return
+        if self._run_hold_phrase in clean.lower():
+            self._run_hold_phrase = ""
+            self._run_hold_why = ""
+            self.write_local("[run] resumed.", "#88cc88")
+
+    def _run_react(self, clean):
+        """Run the bot's `reactions` against one line of MUD text."""
+        low = clean.lower()
+        for r in self._run_reactions:
+            if r["on"] not in low:
+                continue
+            latch = r["once"]
+            if latch:
+                key = latch if isinstance(latch, str) else r["on"]
+                if key in self._run_fired:
+                    continue
+                self._run_fired.add(key)
+            if r["say"]:
+                self.write_local(f"*** {r['say']} ***", "#ffdd55")
+            # if_clear guards the COMMANDS, not the pause: examining a chest
+            # mid-fight throws away combat rounds, but standing still while
+            # blind is right whether or not something is hitting us.
+            if r["do"] and not (r["if_clear"] and self._run_scan_mob()[0]):
+                self._run_fire(r["do"], r["after"])
+            pause = r["pause"]
+            if pause == "stop":
+                self._run_stop(r["say"] or f"reaction: {r['on']}")
+                return
+            if pause is True:
+                self._run_hold_why = f"waiting for '{r['resume']}'"                     if r["resume"] else "held"
+                if r["resume"]:
+                    self._run_hold_phrase = r["resume"]
+                    # Ceiling: a resume line that never comes (gagged,
+                    # reworded, missed) must not hang the bot forever.
+                    self._run_hold_deadline = time.time() + max(
+                        5.0, float(self.setting("run_hold_max_s", 120)))
+                else:
+                    self._run_hold_until = time.time() + 5.0
+            elif isinstance(pause, (int, float)) and pause > 0:
+                self._run_hold_until = max(self._run_hold_until,
+                                           time.time() + float(pause))
+                self._run_hold_why = f"pausing {pause:g}s"
+
+    def _run_fire(self, cmds, after=0.0):
+        """Send a reaction's commands, optionally after a delay."""
+        if after > 0:
+            self.root.after(int(after * 1000),
+                            lambda: self._run_on and self._run_fire(cmds))
+            return
+        for c in cmds:
+            self.send_line(c)
 
     def _run_scan_markers(self, spans, clean):
         """One room line for Run: buffer it for the mob scan, and flag a
@@ -6138,6 +7130,75 @@ class MudClient:
         (e.g. 3k) there's no marker, so skip_phrases is the cross-mud fallback."""
         self._run_lines.append(clean)
         self._run_lines = self._run_lines[-60:]
+        if self._run_mob_latch is None:          # survives the 60-line window
+            _t, _n = self._run_match_mob_line(clean)
+            if _t:
+                self._run_mob_latch = (_t, _n)
+        # A `find` bot walks its route watching for one phrase - the 3k TV
+        # area's entrance wanders around Chaos, so the job is to spot it,
+        # not to kill anything. Seeing it ends the run.
+        find = getattr(self, "_run_find", None)
+        if find and self._run_on and find[0] in clean.lower():
+            self.write_local(f"*** {find[1]} ***", "#ffdd55")
+            self._run_stop(find[1])
+            return
+        self._run_release(clean)
+        self._run_react(clean)
+        if not self._run_on:            # a "stop" reaction ended the run
+            return
+        low = clean.lower()
+        # `discover`: note WHERE something is while sweeping. Kayos Wars
+        # randomises its bunkers and landing pad each event, so their
+        # rooms can't be data - the route has to find them. The locator
+        # supplies the room, which is why this can't run unlocated.
+        for d in getattr(self, "_run_discover", None) or ():
+            if d["match"] not in low:
+                continue
+            if not (self.locator and self.locator.located):
+                self.write_local(
+                    f"[run] saw '{d['store']}' but we are not located on "
+                    "the map - can't record where.", "#cc9933")
+                continue
+            seen = self._run_found.setdefault(d["store"], [])
+            rid = self.locator.room_id
+            if rid in seen or len(seen) >= int(d.get("max") or 1):
+                continue
+            seen.append(rid)
+            self.write_local(f"[run] {d['store']} {len(seen)}: room {rid}",
+                             "#88cc88")
+        # `pickup`: something worth taking is on the floor.
+        for p in getattr(self, "_run_pickup", None) or ():
+            if p["match"] in low:
+                self.send_line(p["send"])
+        # A refused move. Each area's coder writes their own wording, so
+        # the phrases are per-bot data, not guesswork. Two things follow:
+        # the step must not count as taken, and the map marker must go
+        # back - tin_advance_position moved it when the command was SENT
+        # and we never actually left the room.
+        for b in getattr(self, "_run_blocked", None) or ():
+            if b in low:
+                self._run_was_blocked = True
+                self.tin_undo_last_move()
+                break
+        # Inventory reply during the seed window: '3  An intricate digital
+        # key.' means we start with three, not zero.
+        if getattr(self, "_run_seeding", False):
+            for it in self._run_seed:
+                if it["match"] in low:
+                    m = RUN_INV_COUNT_RE.match(clean)
+                    n = int(m.group(1)) if m else 1
+                    store = it["store"]
+                    self._run_counts[store] = self._run_counts.get(store, 0) + n
+                    break
+        # `count`: tally confirmations, so a fast run can tell when it has
+        # enough (kayos needs 3 keys before the bunkers are any use).
+        for c in getattr(self, "_run_count", None) or ():
+            if any(m in low for m in c["match"]):
+                store = c["store"]
+                n = self._run_counts.get(store, 0) + 1
+                self._run_counts[store] = n
+                self.write_local(f"[run] {store} x{n}", "#88cc88")
+                break
         _ital, under = self._line_markers(spans)
         if under and not self._line_is_party(clean):
             self._run_room_player = True
@@ -6157,8 +7218,162 @@ class MudClient:
     def _run_send_step(self, step):
         for cmd in step.split(";"):
             cmd = cmd.strip()
-            if cmd:
+            if not cmd:
+                continue
+            if cmd.startswith("#"):
+                # A client command, not something to send the MUD. Legs use
+                # this to re-pin the map (#mapgo): all three Kayos bunker
+                # interiors are the SAME mapped rooms, so entering one has
+                # to tell the locator where it now is.
+                self.client_command(cmd)
+            else:
                 self.send_line(cmd)
+
+    def _run_tally_met(self):
+        """Fast run whose counted requirements are already satisfied."""
+        if not getattr(self, "_run_fast", False):
+            return False
+        if getattr(self, "_run_seeding", False):
+            return False
+        needs = (getattr(self, "_run_until", None) or {}).get("counts") or {}
+        if not needs:
+            return False
+        counts = getattr(self, "_run_counts", None) or {}
+        return all(counts.get(k, 0) >= int(v) for k, v in needs.items())
+
+    def _run_combat_pointless(self):
+        """Fast run, on the SWEEP, with the tallies already satisfied.
+
+        The grid is fought for one reason - the keys it drops. Holding
+        enough of them, the rest of the sweep exists only to reveal where
+        the bunkers and the pad are, so fighting is pure delay. Never
+        applies inside a leg: bunker and spaceship mobs BLOCK movement and
+        have to be killed."""
+        if not getattr(self, "_run_fast", False):
+            return False
+        if getattr(self, "_run_in_leg", False)                 and self._run_idx > getattr(self, "_run_leg_travel", 0):
+            # Inside the objective itself (bunker, spaceship) mobs BLOCK the
+            # way and must die. The leg's leading steps are just travel back
+            # across the grid, where they don't - and with the keys already
+            # in hand, stopping to fight there is pure delay.
+            return False
+        if getattr(self, "_run_seeding", False):
+            return False
+        return self._run_tally_met()
+
+    def _run_have_enough(self):
+        """Fast run only: is the sweep's job already done?
+
+        The grid exists to yield the keys and to reveal where the legs
+        go; once both are in hand the remaining rooms are just reps. The
+        bot declares what "enough" means (`fast_until`), so this stays
+        data rather than a guess about the area."""
+        if not getattr(self, "_run_fast", False):
+            return False
+        if getattr(self, "_run_seeding", False):
+            return False        # still counting what we already hold
+        until = getattr(self, "_run_until", None) or {}
+        if not until:
+            return False
+        counts = getattr(self, "_run_counts", None) or {}
+        for store, need in (until.get("counts") or {}).items():
+            if counts.get(store, 0) < int(need):
+                return False
+        found = getattr(self, "_run_found", None) or {}
+        for store, need in (until.get("found") or {}).items():
+            if len(found.get(store) or []) < int(need):
+                return False
+        return True
+
+    def _run_next_leg(self):
+        """Start the next follow-up objective, if there is one.
+
+        Called when the main route finishes. The sweep is what DISCOVERS
+        where the legs go (Kayos moves its bunkers and pad every event),
+        so the legs can only be built now, not loaded up front. Returns
+        True if a leg was queued and the run should continue."""
+        while getattr(self, "_run_legs", None):
+            leg = self._run_legs[0]
+            targets = self._run_leg_targets(leg)
+            done = getattr(self, "_run_leg_done", 0)
+            if done >= len(targets):
+                self._run_legs.pop(0)
+                self._run_leg_done = 0
+                continue
+            steps = self._run_build_leg(leg, targets[done])
+            self._run_leg_done = done + 1
+            if not steps:
+                continue                # unreachable: on to the next target
+            self._run_path = steps
+            self._run_idx = 0
+            # The fast cutoff belongs to the SWEEP only. Its condition stays
+            # true once satisfied, so leaving it armed truncated every leg
+            # the tick after it was queued - all three bunkers and the pad
+            # were queued and abandoned in turn (live 2026-09-06).
+            self._run_in_leg = True
+            self._run_lines = []
+            self._run_mob_latch = None
+            self._run_acted = False
+            self._run_room_player = False
+            self._run_room_enter_t = time.time()
+            label = leg.get("label") or leg.get("each") or leg.get("at")
+            self.write_local(
+                f"[run] {label} {self._run_leg_done}/{len(targets)}: "
+                f"{len(steps)} step(s).", "#88cc88")
+            self.send_line(self.setting("bot_refresh_command", "glance"))
+            return True
+        return False
+
+    def _run_leg_targets(self, leg):
+        """Which discovered rooms this leg runs against.
+
+        `each` runs the leg once per room found under that name (the 3
+        bunkers); `at` runs it once, at the first (the landing pad)."""
+        found = getattr(self, "_run_found", None) or {}
+        if leg.get("each"):
+            return list(found.get(leg["each"]) or [])
+        if leg.get("at"):
+            return (found.get(leg["at"]) or [])[:1]
+        return []
+
+    def _run_build_leg(self, leg, target):
+        """The leg, as path steps: walk there, then do the thing.
+
+        Everything is commands and pathfinding produces commands, so a
+        leg needs no engine of its own - it becomes more path. Returns []
+        when the target can't be reached, and the caller skips it."""
+        here = self.locator.room_id if (self.locator and
+                                        self.locator.located) else None
+        if here is None or not self.tmap:
+            return []
+        walk = self.tmap.path(here, target) if here != target else []
+        if walk is None:
+            self.write_local(f"[run] no path to room {target} - skipping "
+                             "this leg.", "#cc9933")
+            return []
+        if walk and self._run_tally_met():
+            # Nothing left to fight for out here, so don't pace it room by
+            # room waiting to scan each one - send the whole walk at once.
+            # tin_advance_position still runs per command, so the map keeps
+            # up. 3w7s rather than w, wait, w, wait...
+            steps = [";".join(walk)]
+            self._run_leg_travel = 1
+        else:
+            steps = list(walk)
+            self._run_leg_travel = len(walk)
+        if leg.get("send"):
+            steps.append(leg["send"])
+        if leg.get("pin"):
+            steps.append(f"#mapgo {leg['pin']}")
+        path = (leg.get("path_fast") if getattr(self, "_run_fast", False)
+                and leg.get("path_fast") else leg.get("path"))
+        steps.extend(path or [])
+        if leg.get("then"):
+            steps.append(leg["then"])
+        steps.extend(leg.get("exit_path") or [])
+        if leg.get("pin_back"):
+            steps.append(f"#mapgo {target}")
+        return steps
 
     def _run_tick(self):
         self._run_job = None
@@ -6191,12 +7406,15 @@ class MudClient:
                 self._run_combat_end = time.time()
                 self._run_acted = False                  # re-check room for more
                 self._run_lines = []                     # drop the dead mob line
+                self._run_mob_latch = None
                 self._run_room_enter_t = time.time()
                 self._run_room_player = False
                 for c in self._run_after_kill:           # loot, e.g. 'get plate'
                     self.send_line(c)
                 self._arm_post_kill_resume()             # guild revalrie hold
                 self.send_line(self.setting("run_refresh_command", "look"))
+                self._run_step_sent()   # same race after a kill: the re-scan
+                                        # must see the look reply, not guess
                 self._run_reschedule(self._run_postcombat_s()); return
             # Sent the kill but combat hasn't registered yet. 3s lags a beat
             # before the first hit lands (the Hunt bot's hunt_engage_grace_ms
@@ -6214,6 +7432,19 @@ class MudClient:
         if time.time() - self._run_combat_end < self._run_postcombat_s() \
                 or self._post_kill_holding():
             self._run_reschedule(0.4); return            # loot/harvest/revalrie
+        # The room has to have LANDED before its mobs can be scanned. Poll
+        # briefly for the prompt; run_move_ms is only the ceiling, so the
+        # worst case is the old fixed-timer behaviour and the normal case is
+        # ~100-200ms on a nil-lag mud.
+        # getattr, not a bare read: #hotswap swaps the class without re-running
+        # __init__, so a session started before this feature existed has none
+        # of these three - same reason as the pending-move and _sz_restore
+        # defaults above. Defaulting to "not waiting" degrades to the old
+        # fixed-timer path, which is exactly the right fallback.
+        if getattr(self, "_run_waiting_room", False)                 and not getattr(self, "_run_room_ready", False):
+            if time.time() - getattr(self, "_run_wait_t0", 0.0)                     < self._run_move_s():
+                self._run_reschedule(0.05); return
+            self._run_waiting_room = False      # no prompt came - fall back
         # cede a room with a non-party player (or a skip_phrase), else clear
         # its whitelisted mobs before advancing
         if not self._run_acted:
@@ -6229,7 +7460,10 @@ class MudClient:
                 self.write_local(f"[run] {blocked} in room - skipping.",
                                  "#cc9933")
             else:
-                target, name = self._run_scan_mob()
+                if self._run_combat_pointless():
+                    target, name = None, None   # keys in hand: just walk
+                else:
+                    target, name = self._run_scan_mob()
                 if target:
                     self.write_local(f"[run] {name} -> kill {target}",
                                      "#88cc88")
@@ -6238,26 +7472,55 @@ class MudClient:
                     self._run_kill_start = time.time()
                     self.send_line(f"kill {target}")
                     self._run_reschedule(self._run_settle_s()); return
+        # A fast run stops sweeping the moment it holds everything the
+        # follow-up legs need, and goes straight to them.
+        if (not getattr(self, "_run_in_leg", False)
+                and self._run_have_enough() and self._run_legs):
+            self.write_local("[run] have what the objectives need - "
+                             "skipping the rest of the route.", "#88cc88")
+            self._run_idx = len(self._run_path)
+        # A reaction may hold the route (blind, a stomp, a chest to search).
+        # Checked here, after combat and the room's mobs, so a hold never
+        # stops us fighting - only stepping.
+        held = self._run_held()
+        if held:
+            self._run_reschedule(0.5); return
         # advance along the route
         if self._run_idx >= len(self._run_path):
             if self._run_loop:
                 self._run_idx = 0
                 self._run_lines = []
+                self._run_mob_latch = None
                 self._run_room_enter_t = time.time()
                 self._run_acted = False
                 self._run_room_player = False
                 self.write_local("[run] loop complete - restarting route.",
                                  "#88cc88")
                 self._run_reschedule(self._run_move_s()); return
+            if self._run_next_leg():
+                self._run_reschedule(self._run_move_s()); return
             self._run_stop("route complete"); return
+        if getattr(self, "_run_was_blocked", False):
+            # The last step was refused (a walling mob, a shut door). Don't
+            # count it as taken - re-send it instead of walking on down a
+            # route we never actually advanced along.
+            self._run_was_blocked = False
+            self._run_lines = []
+            self._run_mob_latch = None
+            self._run_send_step(self._run_path[self._run_idx - 1]
+                                if self._run_idx else self._run_path[0])
+            self._run_step_sent(expect_room=True)
+            self._run_reschedule(0.05); return
         step = self._run_path[self._run_idx]
         self._run_idx += 1
         self._run_lines = []
+        self._run_mob_latch = None
         self._run_room_enter_t = time.time()
         self._run_acted = False
         self._run_room_player = False
         self._run_send_step(step)
-        self._run_reschedule(self._run_move_s())
+        self._run_step_sent(expect_room=True)
+        self._run_reschedule(0.05)
 
     # -------------------------------------------- guild macros (gated)
     # A guild's cascade "macros" section names a gated step sequence -
@@ -7131,9 +8394,11 @@ class MudClient:
                 if kind in ("line", "prompt"):
                     _, spans, clean = item
                     swallowed = (kind == "line") and (
-                        self.sql_rating_capture(clean)
-                        if self.map_backend == "sqlite"
-                        else self.rating_capture(clean))
+                        self._powers_capture(clean)
+                        or self._cstats_capture(clean)
+                        or (self.sql_rating_capture(clean)
+                            if self.map_backend == "sqlite"
+                            else self.rating_capture(clean)))
                     gagged = swallowed or (
                         (kind == "line") and self.is_gagged(clean))
                     if not gagged:
@@ -7168,19 +8433,16 @@ class MudClient:
                             self._vtradeprices_scan_line(clean)
                             self._missionlist_scan_line(clean)
                             self._vnlist_scan_line(clean)
+                        self._bab_resolve(clean)
                         self.track_combat_line(clean)
                         if self.map_backend == "sqlite":
                             self.vscan_scan_line(clean)
+                            self._glance_scan_line(clean)
+                        self._merc_scan_line(clean)
                         if self._bot_on or self._run_on or self._chaossea_on:
                             self._scan_pwho(clean)       # seed party whitelist
                             self._resume_scan_line(clean)  # post-kill hold
-                        if (self._bot_on and self._hunt_filter
-                                and self._hunt_attacked
-                                and f"there is no {self._hunt_filter}"
-                                    in clean.lower()):
-                            self._bot_room_mob = False
-                            self._hunt_attacked = False
-                            self._bot_reschedule(0)
+                        self._hunt_note_no_target(clean)
                         if self._bot_on and self._bot_waiting_room \
                                 and not self.in_combat:
                             self._bot_scan_markers(spans, clean)
@@ -7213,6 +8475,8 @@ class MudClient:
                             self.changeling_scan_line(clean)
                         if self._bot_on:
                             self._bot_on_prompt()
+                        if self._run_on:
+                            self._run_on_prompt()
                         if self._chaossea_on:
                             if self._chaossea_examine_pending:
                                 self._chaossea_finish_examine()
@@ -7270,7 +8534,17 @@ class MudClient:
     # Room is subscribed deliberately AHEAD of any handler, so Room.Info /
     # Room.Map / Room.Contents land in #log and #raw for the BAD/DDD
     # comparison without yet changing behaviour.
-    GMCP_ROOTS = ("Char 1", "Comm 1", "Mud 1", "Guild 1", "Room 1")
+    # "Merc 1" subscribes the mud's five Merc.* packages. They were OFFERED
+    # and not subscribed in every capture to date - logs/20260922_)marten.txt
+    # line 13 lists all five under "GMCP offered but not subscribed" - which
+    # is why BBC, the MIP mercenary feed, had no GMCP replacement and
+    # _merc_lines has rendered nothing since MIP went on 2026-09-15. marten
+    # fights alongside a hired merc (Eris) all session, so the block is not
+    # decoration. Their PAYLOADS are still uncaptured: subscribing is what
+    # makes a capture possible, and nothing maps BBC's 24 positional fields
+    # onto them until one exists. Unhandled packages dispatch to nothing and
+    # are silent, so this cannot misfire in the meantime.
+    GMCP_ROOTS = ("Char 1", "Comm 1", "Mud 1", "Guild 1", "Room 1", "Merc 1")
 
     # GMCP package -> the MIP tags it FULLY replaces. Both transports run at
     # once on 3s (confirmed 2026-08-30), so without this every chat line
@@ -7290,14 +8564,20 @@ class MudClient:
     GMCP_SUPERSEDES = {
         "Comm.Channel.Text": ("CAA", "BAB", "BAG"),
         "Mud.Status": ("AAF", "AAC"),
-        # BAD only, NOT DDD. Room.Info is a superset of both for MOVEMENT,
-        # but the mud sends NOTHING in reply to look/glance - and glance is
-        # the Bot/Chaossea room-refresh command, whose DDD reply is the only
-        # "the room displayed" signal those bots have. Superseding DDD threw
-        # that reply away unread: 2026-08-31, Chaossea sent 11 glances, 13
-        # DDDs were dropped, 1 Room.Info arrived (at login), room_ready never
-        # flipped and the bot glance-spammed until stopped, with the map
-        # losing its exit lines for the same reason. So DDD stays on MIP.
+        # BAD only, NOT DDD - but for a reason that has EXPIRED. DDD was
+        # kept on MIP because the mud sends nothing in reply to look/glance,
+        # and glance is the Bot/Chaossea room-refresh command whose DDD
+        # reply was the only "the room displayed" signal those bots had
+        # (2026-08-31: 11 glances, 13 DDDs dropped as superseded, room_ready
+        # never flipped, the bot glance-spammed until stopped). MIP is gone
+        # since 2026-09-15, so there is no DDD to supersede OR to keep:
+        # gmcp_room_info synthesizes both halves now. This entry is left
+        # alone because retiring a tag nothing sends is a no-op, and it is
+        # the cheap way back if MIP ever returns.
+        #
+        # STILL OPEN: the glance signal itself. Room.Info fires on MOVEMENT
+        # only, so the bots' in-place room refresh has no GMCP replacement
+        # (Room.Refresh is documented but dead on 3s).
         "Room.Info": ("BAD",),
     }
 
@@ -7498,6 +8778,9 @@ class MudClient:
         can never be seen. Here it is stated outright."""
         if not isinstance(data, dict):
             return
+        # See _login_setup: this is the 3s trigger for it, because FFF -
+        # which used to be - no longer arrives at all.
+        self._login_setup()
         upd, dirty = {}, False
         for key in ("hp", "sp"):
             v = data.get(key)
@@ -7521,6 +8804,22 @@ class MudClient:
         if isinstance(enc, (int, float)) and enc != self.enc:
             self.enc = enc
             self.show_status()
+        # The on_vitals hook, which fired from ONE place - the FFF handler
+        # (mip_vitals_composite). katmud_scripts.on_vitals is where BOTH
+        # psummon rules and the elemental evoke-age live, so with MIP gone
+        # none of them ran at all on 3s and psummon simply stopped firing.
+        #
+        # Fired from HERE and nowhere else on the GMCP side: Char.Vitals is
+        # the closest analogue to FFF's per-round vitals packet and arrives
+        # reliably every round, while firing from Char.Combat as well would
+        # run the rules twice a round.
+        #
+        # NOTE Char.Vitals arrives BEFORE Char.Combat in every capture, so
+        # `enemycond` is one packet stale at hook time. Harmless - rule 1
+        # needs ticks >= 5 - but it is why the two are not interchangeable.
+        # A copy, like the FFF site: a live reference would let a script
+        # mutate client state by accident.
+        self.call_hook("on_vitals", dict(self.vitals))
         if upd or dirty:
             self.update_vitals()
 
@@ -7599,6 +8898,13 @@ class MudClient:
         # overland), not missing data: across 35 rooms the db knew an area
         # for, GMCP agreed every time and never said Unknown where the db had
         # one. It maps to NULL, never to an area literally called "Unknown".
+        # Room.Info ALWAYS precedes Room.Contents (9/9, strictly paired in
+        # logs/gmcp_20260920_203053.log), so clearing here means a room that
+        # sends no Contents cannot inherit the last room's scenery.
+        self._gmcp_room_items = set()
+        self._gmcp_room_monsters = {}
+        self._gmcp_room_mob_names = {}
+        self._gmcp_room_seen = False
         area = data.get("area")
         self.gmcp_room_area = None if area in (None, "Unknown") else str(area)
         self.gmcp_exit_dests = {d: v for d, v in exits.items()
@@ -7628,10 +8934,161 @@ class MudClient:
         prefix = ("[%d]" % self.VIKING_BIOME_VNUM
                   if num in self.VIKING_COLLAPSED_VNUMS else "")
         bad = "%s%s (%s) [%d]~%d" % (prefix, name, ",".join(dirs), num, num)
-        # Only the half this package actually supersedes. The live MIP DDD
-        # still arrives and still drives sql_on_ddd - synthesizing one here
-        # too would run the follow/chart path twice for every move.
         self.mip_room(bad, None)        # dispatches to sql_on_bad on sqlite
+        # BOTH halves, since 2026-09-20. This used to synthesize only BAD,
+        # because the live MIP DDD still arrived and doing both would run
+        # the follow/chart path twice per move. MIP is gone (port.md
+        # 2026-09-15, user-confirmed, wire-proven), so that DDD never comes
+        # again - and sql_on_ddd is reachable ONLY from mip_exits, while
+        # sql_follow_ddd is the ONLY setter of _sql_cur_vnum. Synthesizing
+        # just BAD therefore left the mapper with no location authority at
+        # all: sql_follow_bad refreshes the room NAME and nothing else, so
+        # '@' froze in following mode, and sql_reconcile_chart - which
+        # early-returns until it holds BOTH packets - never charted a room.
+        #
+        # Order matters: BAD first. sql_reconcile_chart's first branch reads
+        # "a DDD with no BAD pending" as an in-place glance refresh and
+        # RELEASES THE GATE, so emitting DDD first would trip that on every
+        # real move. 3s sent BAD before DDD on the wire; this keeps it.
+        #
+        # Routed through mip_exits (not sql_on_ddd directly) so it crosses
+        # the same map_backend guard mip_room does.
+        # dirs + [num], not "join(dirs) + ~num": an exitless room (a dark
+        # room reports none) would otherwise synthesize a leading-tilde
+        # "~280". Both parse the same, but the clean form is what a real
+        # DDD looked like, and the vnum is the whole point here - dropping
+        # the packet because a room has no exits would freeze '@' again.
+        self.mip_exits("~".join(dirs + [str(num)]), None)
+
+    # The room title a glance prints with DISPLAY_ROOMID on:
+    # "Layer one of the Sea of Chaos (w,e,out,n) [60494]" - on a move it is
+    # followed by the minimap on the same line, so only the start anchors.
+    GLANCE_TITLE_RE = re.compile(r"^\S.*?\s\(([^)]*)\)\s\[(\d+)\](?:\s|$)")
+
+    def _glance_scan_line(self, clean):
+        """A glance's room title stands in for the DDD it used to get.
+
+        MIP answered every glance with a lone DDD, and every bot's "show me
+        the room again" recovery waits on that packet. GMCP sends Room.Info
+        on ENTRY only, so a glance now gets no packet at all and Chaossea
+        glanced forever at its start room (logs/normal-20260923.log, 9
+        glances, 0 Room.Info). The title line carries the same exits + vnum,
+        so it is fed to mip_exits exactly as that lone DDD was - DDD only, no
+        BAD, which is what sql_reconcile_chart reads as an in-place refresh.
+
+        Only while a glance is outstanding: on a move Room.Info has already
+        synthesized the DDD, and a second one from the text would be a
+        phantom room packet (and would eat Chaossea's burst skip debt)."""
+        due = getattr(self, "_glance_due", None)
+        if due is None:
+            return
+        if time.time() - due > 5.0:
+            self._glance_due = None
+            return
+        m = self.GLANCE_TITLE_RE.match(clean)
+        if not m:
+            return
+        self._glance_due = None
+        dirs = [d.strip() for d in m.group(1).split(",") if d.strip()]
+        self.mip_exits("~".join(dirs + [m.group(2)]), None)
+
+    def gmcp_room_contents(self, data):
+        """What is in the room, SPLIT into monsters and items.
+
+        The win is the split. A bladesinger's Blood Eagle rite leaves
+        "A ritual scene depicting a <mob>, spread by the Blood Eagle."
+        behind, and that line renders in the MOB-LINE SLOT - italic, exactly
+        like a mob - so no marker can tell them apart (which is why
+        _chaossea_scan_markers carries an explicit text filter). Live
+        2026-09-20 the Run bot sent `kill recruit` at one three times.
+
+        GMCP just says so. Captured verbatim in
+        logs/gmcp_20260920_203053.log, a room holding 5 recruits, 2 guards
+        and 2 scenes:
+
+            {"type":"monster","count":5,"name":"A giant elite recruit in training"}
+            {"type":"item",   "count":1,"name":"A ritual scene depicting a ..."}
+
+        ENTRY-ONLY (9 Room.Info / 9 Room.Contents, strictly paired, never
+        one alone) - so the sets go stale as mobs die. That is fine for the
+        way _run_match_mob_line uses them: it rejects known ITEMS, and
+        scenery does not change while you stand in a room. A monster
+        WHITELIST would not survive the same staleness - a mob wandering in
+        after entry would become invisible.
+
+        Counts are stored but not yet read by anything; they are free here
+        and the obvious next use.
+        """
+        self._gmcp_room_items = set()
+        self._gmcp_room_monsters = {}
+        self._gmcp_room_mob_names = {}
+        if not isinstance(data, dict):
+            return
+        # Separate from the dicts on purpose: once every mob in the room is
+        # dead, gmcp_room_death drains _gmcp_room_mob_names to empty - which
+        # is otherwise indistinguishable from "this mud sends no
+        # Room.Contents at all", and that is EXACTLY the room the
+        # damage-line-as-mob bug happened in.
+        self._gmcp_room_seen = True
+        items = data.get("items")
+        if not isinstance(items, list):
+            return
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            name = str(it.get("name") or "").strip().lower()
+            if not name:
+                continue
+            if it.get("type") == "monster":
+                n = it.get("count")
+                self._gmcp_room_monsters[name] = n if isinstance(n, int) else 1
+                # Keyed lowercase (Room.Death's casing has been seen to
+                # differ - "Giant ant" vs "Giant Ant"), but the bot prints
+                # the name, so the original spelling is kept alongside.
+                self._gmcp_room_mob_names[name] = str(it.get("name")).strip()
+            elif it.get("type") == "item":
+                self._gmcp_room_items.add(name)
+        # THE ROOM HAS LANDED. 3s sends no telnet GA, so `prompt` events
+        # (protocol.py:412) never fire and _run_on_prompt never runs - which
+        # silently turned run_move_ms from a ceiling into the PACE, 1.3s a
+        # step. These packets arrive BEFORE the room text and carry the mob
+        # list outright, so there is nothing left to wait for.
+        #
+        # Only for a wait a MOVEMENT started: the post-kill re-scan calls
+        # _run_step_sent() too, and no Room.Contents will ever come for it
+        # (entry-only), so it keeps the timer.
+        if (getattr(self, "_run_on", False)
+                and getattr(self, "_run_waiting_room", False)
+                and getattr(self, "_run_expect_room", False)):
+            self._run_on_prompt()
+
+    def gmcp_room_death(self, data):
+        """A mob died here - decrement the Room.Contents count.
+
+        Room.Contents is ENTRY-ONLY, so the moment its counts are used as a
+        mob SOURCE they go stale with the first kill. Room.Death is the one
+        thing that fixes that without another look, because it carries the
+        SAME long name form Room.Contents uses ("A giant elite recruit in
+        training") - which is exactly the name form the KILL TEXT does not
+        use (see _is_post_mortem, where that mismatch is why Room.Death
+        cannot be the post-mortem signal).
+
+        Deliberately does NOT end a fight: it arrives BEFORE the killing
+        round's trailing damage line, so clearing in_combat here would be
+        undone one line later, exactly as the kill text already is.
+        """
+        if not isinstance(data, dict):
+            return
+        name = str(data.get("name") or "").strip().lower()
+        if not name:
+            return
+        n = self._gmcp_room_monsters.get(name)
+        if n is None:
+            return          # never counted it (walked in mid-fight, etc.)
+        if n > 1:
+            self._gmcp_room_monsters[name] = n - 1
+        else:
+            self._gmcp_room_monsters.pop(name, None)
 
     def gmcp_guild_state(self, data):
         """Guild pools, and the blur/portal recharge at full precision.
@@ -7688,6 +9145,24 @@ class MudClient:
             v = data.get(src)
             if isinstance(v, (int, float)):
                 setattr(self, attr, float(v))
+        # Bladesinger spendable GXP, stated outright - replaces deriving it
+        # from the prompt's G2N/G2N%, which can't parse a negative G2N and
+        # snaps to a wildly wrong level as G2N nears zero.
+        if str(data.get("guild") or "").lower() == "bladesinger":
+            for src, attr in (("gxp", "_blade_gmcp_gxp"),
+                              ("gtnl", "_blade_gmcp_gtnl")):
+                v = data.get(src)
+                if isinstance(v, int):
+                    setattr(self, attr, v)
+            gxp = getattr(self, "_blade_gmcp_gxp", None)
+            gtnl = getattr(self, "_blade_gmcp_gtnl", None)
+            if gxp is not None and gxp != self.blade_available:
+                self.blade_available = gxp
+                if gtnl is not None:
+                    self.blade_glvl = blade.glvl_from_gmcp(gxp, gtnl)
+                self._refresh_blade_win()
+                if self.tracked:
+                    self.update_info()
 
     # --- Viking guild feed over GMCP -----------------------------------
     # Undeclared and undocumented: none of these packages appears in
@@ -7712,6 +9187,28 @@ class MudClient:
         if not upd:
             return
         self.elem_extra.update(upd)
+        # Consistency = the gp2 bar, which rode MIP's FFF G field until MIP
+        # was removed mud-side. This is its only replacement. It is a
+        # PERCENTAGE - the prompt prints "C:100" with no denominator - so
+        # the max is the constant 100 and must never be high-watered: the
+        # live range is 95-100, and a first sample of 95 would scale a 95-max
+        # bar to read full. The fractions in muds/3s/guilds/elementals.json
+        # (lethal at 0, amber at 70%) only mean what they say against 100.
+        #
+        # Guarded on CHANGE: consistency is 100 in all 44 real packets of
+        # that capture, and an unguarded redraw per packet is precisely
+        # the Viking MIP lag of 2026-08-04 (13 tabs, 41% of wall).
+        cons = upd.get("consistency")
+        if isinstance(cons, (int, float)) and not isinstance(cons, bool):
+            dirty = False
+            if self.vitals.get("gp2") != cons:
+                self.vitals["gp2"] = cons
+                dirty = True
+            if self.vitals_max.get("gp2") != 100:
+                self.vitals_max["gp2"] = 100
+                self._maxes_dirty = dirty = True
+            if dirty:
+                self.update_vitals()
         self.update_info()
         self._refresh_elem_win()
 
@@ -7720,6 +9217,9 @@ class MudClient:
         second death condition (see elemental.info_lines); the rest is
         currency bookkeeping. Vikings send Guild.Info too, as
         {guild, age}, hence the guild gate."""
+        if isinstance(data, dict) and self.guild.lower() == "vikings":
+            self._viking_gmcp("Guild.Info", data)
+            return
         if not isinstance(data, dict) or self.guild.lower() != "elementals":
             return
         upd = {k: v for k, v in data.items()
@@ -7727,6 +9227,19 @@ class MudClient:
         if not upd:
             return
         self.elem_info.update(upd)
+        # Energy = the gp1 bar, the second pool orphaned when MIP went (FFF
+        # E). A DELTA feed - the last packet of logs/gmcp_20260922_204710.log
+        # is {reset, guild, energy} only - so guard the key rather than
+        # assume a full packet. _raise_seen_max bootstraps the scale for the
+        # window before the first prompt states the real maximum; gp1 is
+        # deliberately NOT registered in _gmcp_max_keys, or that bootstrap
+        # could never happen.
+        nrg = upd.get("energy")
+        if isinstance(nrg, (int, float)) and not isinstance(nrg, bool):
+            self._raise_seen_max({"gp1": nrg})
+            if self.vitals.get("gp1") != nrg:
+                self.vitals["gp1"] = nrg
+                self.update_vitals()
         self.update_info()
         self._refresh_elem_win()
 
@@ -7821,13 +9334,64 @@ class MudClient:
         self._viking_gmcp("Guild.Fleet", data)
 
     def gmcp_guild_trade(self, data):
+        before = self.viking_state.get("CIDLE")
         self._viking_gmcp("Guild.Trade", data)
+        if isinstance(data, dict) and self.guild.lower() == "vikings":
+            if self.viking_state.get("CIDLE") != before:
+                self.update_info()
 
     def gmcp_guild_voyage(self, data):
         self._viking_gmcp("Guild.Voyage", data)
 
     def gmcp_guild_city(self, data):
         self._viking_gmcp("Guild.City", data)
+        if isinstance(data, dict) and self.guild.lower() == "vikings":
+            if "cdtime" in data:
+                self._cart_cd_sync(data, time.time())
+                self.update_info()
+
+    def _cart_cd_sync(self, data, now):
+        """Guild.City `cdtime` = seconds left on the trade cart cooldown.
+        Re-sent every push (~22s), so each one re-syncs the end time; a 0
+        ends the countdown if the client clock has not already."""
+        cd = data.get("cdtime")
+        if not isinstance(cd, (int, float)):
+            return
+        if cd > 0:
+            self._cart_cd_until = now + cd
+        elif self._cart_cd_until is not None:
+            self._cart_cd_end()
+
+    def _cart_cd_end(self):
+        self._cart_cd_until = None
+        if self._cart_idle_count():
+            bar = "/" * 60
+            self.write_local("", "#ffcc44")
+            self.write_local(bar, "#ffcc44")
+            self.write_local("CART READY: trade cart cooldown over", "#ffcc44")
+            self.write_local(bar, "#ffcc44")
+            self.write_local("", "#ffcc44")
+            play_sound(self.setting("tell_sound", "beep"))
+        self.update_info()
+
+    def _cart_tick(self, now):
+        if self._cart_cd_until is not None and now >= self._cart_cd_until:
+            self._cart_cd_end()
+
+    def _cart_idle_count(self):
+        """Idle carts, read from the same CIDLE the Trade tab draws; None
+        until the Trade feed has sent it."""
+        if "CIDLE" not in self.viking_state:
+            return None
+        return len(viking.split_entries(self.viking_state["CIDLE"]))
+
+    def _cart_status_text(self, now):
+        if self._cart_cd_until is not None:
+            return self._fmt_dur(self._cart_cd_until - now)
+        idle = self._cart_idle_count()
+        if idle is None:
+            return "?"
+        return "Ready" if idle else "All busy"
 
     def gmcp_guild_settlement(self, data):
         self._viking_gmcp("Guild.Settlement", data)
@@ -7837,6 +9401,63 @@ class MudClient:
 
     def gmcp_guild_roster(self, data):
         self._viking_gmcp("Guild.Roster", data)
+
+    def gmcp_guild_tradegoods(self, data):
+        self._viking_gmcp("Guild.TradeGoods", data)
+
+    def gmcp_guild_warehouse(self, data):
+        self._viking_gmcp("Guild.Warehouse", data)
+
+    def gmcp_guild_citybuildings(self, data):
+        self._viking_gmcp("Guild.CityBuildings", data)
+
+    def gmcp_guild_map(self, data):
+        """Guild.Map: the Viking biome map, its wall grids and the
+        player's position on it.
+
+        Three SEPARATE 8-page sweeps arrive under this one package - one
+        each for `terrain` (VMR), `east` (MEE) and `south` (MES) - and
+        they do not agree on which pages carry rows: terrain runs pages
+        1-7, east and south run 2-8, and south's last page is short
+        because MES has one row fewer than MEE by design. So the row
+        INDEX comes from arrival order within the sweep, never from the
+        page number.
+
+        `w`, `h` and `pos` arrive on whichever page happens to carry them
+        - never the same one - so VMAPH ('cols|rows|x|y') is rebuilt from
+        the value already in viking_state each time a piece of it shows
+        up. `pos` alone arrives on its own packet as the player walks."""
+        if not isinstance(data, dict) or self.guild.lower() != "vikings":
+            return
+        self._viking_gmcp("Guild.Map", data)
+        dims = self._viking_map_dims
+        if not dims:
+            # A reconnect clears the buffer but viking_state keeps the
+            # last VMAPH, so the grid size is recovered from it and a lone
+            # `pos` packet can still move the marker before the next full
+            # sweep arrives.
+            cols, rows, px, py = viking.parse_vmaph(
+                self.viking_state.get("VMAPH", ""))
+            if cols and rows:
+                dims.update(w=cols, h=rows, x=px, y=py)
+        for f in ("w", "h"):
+            if isinstance(data.get(f), int):
+                dims[f] = data[f]
+        pos = data.get("pos")
+        if isinstance(pos, dict):
+            dims["x"], dims["y"] = pos.get("x"), pos.get("y")
+        if all(dims.get(f) is not None for f in ("w", "h", "x", "y")):
+            self._viking_gmcp_apply({"VMAPH": "%s|%s|%s|%s" % (
+                dims["w"], dims["h"], dims["x"], dims["y"])})
+            # Inside a settlement `pos` is (-1,-1): a sentinel meaning "not
+            # on the map", not a cell, so it must not overwrite where we
+            # know we are (see viking_walk_to).
+            if all(isinstance(dims[f], int) for f in ("x", "y", "w", "h"))                     and 0 <= dims["x"] < dims["w"]                     and 0 <= dims["y"] < dims["h"]:
+                self._viking_last_cell = (dims["x"], dims["y"])
+            # mip_viking fires this from its own VMAPH branch; the GMCP
+            # path had no equivalent, so every _viking_after_position wait
+            # (VN's leg gating, and Go's fallback) ran to its timeout.
+            self._viking_pos_fire()
 
     def _viking_gmcp(self, pkg, data):
         """One Viking GMCP package -> synthesized BBE keys.
@@ -7848,6 +9469,30 @@ class MudClient:
         a key that MIP is no longer feeding."""
         if not isinstance(data, dict) or self.guild.lower() != "vikings":
             return
+        if pkg == "Guild.State" and isinstance(data.get("gline1"), str):
+            # The Fury gauge and the Chain counter never had a BBE key of
+            # their own - they came off the FFF hpbar1 I-field, which went
+            # with MIP. gline1 is that same string, so fury_chain still
+            # does the trimming. Gated on the rendered text because
+            # update_info redraws the whole pane and gline1 rides every
+            # combat packet (17 of 56 in logs/gmcp_20260922_075812.log).
+            line = viking.fury_chain(data["gline1"])
+            if line != self.last_deltas:
+                self.last_deltas = line
+                self.update_info()
+        enc = data.get("encounter") if pkg == "Guild.State" else None
+        if isinstance(enc, dict):
+            # The round count. FFF's round field died with MIP, and the
+            # `You hit X N times` line is a paid per-character perk Normal
+            # lacks, so nothing counted and every recent kill read 0
+            # (logs/normal-20260925.log). encounter is the guild's own
+            # fight counter; active:0 is its fight-over.
+            if enc.get("active") and isinstance(enc.get("rounds"), int):
+                self._rounds_watch(enc["rounds"], "Guild.State encounter",
+                                   data)
+                self.rounds = enc["rounds"]
+            elif not enc.get("active"):
+                self._stash_rounds()
         upd = viking.gmcp_bbe_values(pkg, data)
         rows = viking.gmcp_bbe_rows(pkg, data)
         page, pages = data.get("page"), data.get("pages")
@@ -7863,6 +9508,8 @@ class MudClient:
             rows = buf
         for key, rs in rows.items():
             store = self._viking_gmcp_rows.setdefault(key, {})
+            if not rs:                  # an explicit empty list, e.g. cidle []
+                store.clear()
             # Replace only the groups this sweep carried. SHIPS and ROUTES
             # arrive whole (group ""), so the sweep replaces the key; the
             # livestock market arrives ONE LINEAGE at a time, so replacing
@@ -7871,7 +9518,20 @@ class MudClient:
                 store[group] = {}
             for group, ident, rec in rs:
                 store[group][ident] = rec
-            upd[key] = viking.join_rows(key, store)
+            fmt = viking.INDEXED_ROW_KEYS.get(key)
+            if fmt:
+                # These feeds are one state KEY PER ROW (VMR00.., MEE00..,
+                # CPT00.., VCR00..), not one joined value. Row number is
+                # position in the sorted buffer, because the page a sweep
+                # starts on differs between the Guild.Map fields.
+                for i, ident in enumerate(sorted(
+                        k for grp in store.values() for k in grp)):
+                    for grp in store.values():
+                        if ident in grp:
+                            upd[fmt % i] = grp[ident]
+                            break
+            else:
+                upd[key] = viking.join_rows(key, store)
         self._viking_gmcp_apply(upd)
 
     def _viking_gmcp_apply(self, upd):
@@ -7913,6 +9573,26 @@ class MudClient:
             self._voyage_line = line
             self.update_info()
 
+    def _stash_rounds(self):
+        """A fight is over: zero the counter, keeping the count for the pane.
+
+        The mud sends its fight-over packet BEFORE the killing-blow text -
+        106 of 106 fight ends in logs/din-20260909.log, 2 to 8 lines ahead of
+        it - so every handler here runs before track_combat_line records the
+        kill. Zeroing in place made the recent-kills pane read
+        "The Aurothon Guardian (0)" for a ~400-round fight, while the topbar's
+        live readout (which reads self.rounds during the fight) stayed right
+        (reported live 2026-09-11).
+
+        Never stash a zero. Two transports end a fight - Char.Combat's empty
+        snapshot and FFF's `K~~` - and which one lands first is not something
+        the kill line can know, so whichever clears first keeps the real
+        number and the other's zero-over-zero cannot clobber it.
+        """
+        if self.rounds:
+            self._rounds_at_end = self.rounds
+        self.rounds = 0
+
     def gmcp_char_combat(self, data):
         """Char.Combat ends every fight with one empty snapshot (attacker "",
         target "", rounds 0). That is an explicit end-of-combat marker MIP
@@ -7931,16 +9611,110 @@ class MudClient:
         attacking YOU, so a passive mob you are killing may never appear in
         it at all - clearing in_combat here could end a fight that is still
         going. Zeroing rounds is safe in the other direction: the worst case
-        is that a psummon is delayed by a few rounds, never wrongly fired."""
+        is that a psummon is delayed by a few rounds, never wrongly fired.
+
+        SINCE 2026-09-20 it also FEEDS THE ENEMY BAR. That bar reads
+        vitals["enemy"] + vitals["enemycond"], whose only source was FFF's
+        K and L fields (protocol.py COMPOSITE_TEXT/NUMERIC) - and FFF died
+        with MIP, so the bar sat empty for every fight. gmcp.txt states
+        attacker_hp is a health PERCENTAGE, which is exactly what
+        update_vitals wants (bar.set(enemycond, 100)).
+
+        `rounds` is taken ONLY as a last resort (since 2026-09-25): no FFF,
+        no `numbers`-perk damage line, not a viking. Assigning rounds
+        wholesale from the mud is why efdd1b0, e556a16 and 8a918b3 each
+        failed to stop the same psummon misfire - but psummon now counts
+        observed CHANGES (katmud_scripts _ticks), so the value itself no
+        longer drives it.
+
+        KNOWN NARROWING: this reports who is attacking YOU, so a passive mob
+        you kill that never fights back produces no packet and no bar.
+        Room.Contents carries monster health but only when your skills would
+        show it in the look text, so it is not a fallback.
+
+        KNOWN THRASH, deliberately accepted: two mobs on you alternate in
+        `attacker`, so the enemy-change reset below re-zeroes the count each
+        time it flips and rule 1 (rounds >= 5) may never fire in a multi-mob
+        fight. FFF's single K field had the same shape, so this is not a
+        regression - and it errs the way this handler already prefers: a
+        psummon delayed, never one wrongly fired."""
         if not isinstance(data, dict):
             return
         if not str(data.get("attacker") or ""):
             # Same snapshot re-arms the elementals' once-per-fight evoke.
             self.call_hook("evoke_age_rearm")
-            if self.rounds:
-                self.rounds = 0
+            self._stash_rounds()
             self._combat_start_fired = False
             self._combat_if_fired = set()
+            # Now that this handler POPULATES the bar it is the only thing
+            # that empties it again - without this the bar sticks on a dead
+            # mob until the next fight overwrites it.
+            self.vitals["enemy"] = ""
+            self.vitals.pop("enemycond", None)
+            self.update_vitals()
+            self.update_info()
+            return
+        if str(data.get("target") or "") != "you":
+            # gmcp.txt: target is the literal "you" when it is you,
+            # "otherwise that victim's name". Every frame in the capture is
+            # "you", so the other case is UNOBSERVED - ignore it rather than
+            # paint someone else's fight onto this player's bar.
+            return
+        attacker = str(data["attacker"])
+        if attacker != str(self.vitals.get("enemy") or ""):
+            # A different enemy is a different fight, so the old fight's
+            # round count must not carry into it. This is a REGRESSION
+            # GUARD, not bookkeeping: back-to-back aggro sends no clear
+            # packet at all, and katmud_scripts rule 1 (rounds >= 5 and a
+            # fresh enemy) then fires a psummon on round ONE. The FFF
+            # handler guarded exactly this; the guard has to live on
+            # whichever transport supplies `enemy`.
+            self.rounds = self._rounds_at_end = 0
+        # The round count of last resort (user, 2026-09-25). Without FFF
+        # (3s) and without the paid `numbers` perk's damage line, nothing
+        # else counts rounds, and every kill read 0. This is the
+        # ATTACKER's fight duration, not yours - accepted because there is
+        # no better source. Vikings have one (Guild.State.encounter, see
+        # _viking_gmcp), so they keep it. psummon is safe either way: it
+        # counts CHANGES of self.rounds, never its value.
+        r = data.get("rounds")
+        if (isinstance(r, int) and not self._fff_combat
+                and not self._dmg_line_seen
+                and self.guild.lower() != "vikings"):
+            self.rounds = r
+        self.vitals["enemy"] = attacker
+        hp = data.get("attacker_hp")
+        if isinstance(hp, (int, float)):
+            self.vitals["enemycond"] = hp
+        # ARM the fight. Set only, never cleared here (see the empty branch
+        # above) - and that asymmetry is the whole point, not a loophole:
+        # a passive mob you are killing may never appear in Char.Combat at
+        # all, so CLEARING on its say-so could end a live fight, while
+        # SETTING is unconditionally safe - if something is attacking you,
+        # you are in a fight.
+        #
+        # Worth it because in_combat otherwise waits for YOUR first damage
+        # line - and DAMAGE_RE matches the mud's AGGREGATED once-per-round
+        # "You hit X N times for M damage.", so it cannot flip until a full
+        # round has resolved, whoever is tanking. The Run
+        # bot re-pokes `kill <target>` every settle (1.5s) until in_combat
+        # flips, inside a 4s engage grace - so the mud answered
+        # "GEE, what are we fighting then?" twice for every mob
+        # (live 2026-09-20). Char.Combat lands before that first damage
+        # line, which removes the second re-poke; the first is deliberate,
+        # in case the kill whiffed on a keyword.
+        #
+        # AFTER the enemy-change reset above, never before: a new fight
+        # zeroes the round count and only then arms combat.
+        self.in_combat = True
+        # ...and it is a heartbeat for _combat_stale_check, for the same
+        # reason. Not every character gets the aggregated damage line: the
+        # Viking in logs/normal-20260923.log fought a whole Sea of Chaos
+        # fight with ZERO of them against 92 Char.Combat packets, so the
+        # stale check released a live fight 53 times, once a round.
+        self._last_damage_t = time.time()
+        self.update_vitals()
+        self.update_info()
 
     def gmcp_mud_status(self, data):
         """Replaces AAF (uptime) and AAC (reboot eta). MIP sent these
@@ -8054,33 +9828,77 @@ class MudClient:
                 self.last_unknown_mip = (f"{tag} -> unknown handler "
                                          f"{decl.get('handler')!r}")
                 self.update_info()
-        elif tag not in ("AAA", "AAB", "AAD"):
+        # Known-but-uninteresting tags: no handler wanted, and no point
+        # nagging about them in the info pane either. HAB is 3k's per-noun
+        # room-description feed (one packet per noun on every look, fixed
+        # "exa #N/search #N" menu template) - display furniture for a
+        # hyperlinking client, nothing the display needs.
+        elif tag not in ("AAA", "AAB", "AAD", "HAB"):
             self.last_unknown_mip = f"{tag} {data[:48]}"
             self.update_info()
         self.call_hook("on_mip", tag, data)
 
     # --- handler implementations (names referenced by mud.json) ---
-    def mip_vitals_composite(self, data, _decl):
+    def _login_setup(self):
+        """Per-login setup, fired by the first VITALS PACKET of a session.
+
+        Lived inside mip_vitals_composite until 2026-09-20, which meant it
+        was gated on an FFF packet - and FFF died with MIP on 3s
+        (2026-09-15), so NONE of this had run since. `confirm_login` was
+        reachable from nowhere else at all. What stopped:
+
+          * a prompted password is never STORED ("store on success"), so
+            you are re-prompted every login;
+          * the priming `hp` never sends, and nothing backfills it (GMCP
+            only sends a package when its value CHANGES, and the
+            blur/portal charge counts n/m are text-only in the hpbar);
+          * setup_commands never runs -> no room-marker asets, no
+            DISPLAY_ROOMID. That is the mapper's and the bots' own input:
+            `look_monster italics` is the structural way to tell a mob
+            from a Blood Eagle ritual scene, and its absence is why that
+            had to be worked around through Room.Contents instead;
+          * login_commands (guild init) never runs.
+
+        The FOURTH casualty of this shape - a CALL reachable only from
+        FFF, like in_combat (a flag) and the on_vitals hook. None of the
+        three are FIELDS, which is why a field-by-field audit of FFF
+        missed all of them.
+
+        Called from BOTH vitals handlers: FFF for 3k (still MIP-only,
+        no GMCP at all) and Char.Vitals for 3s. Idempotent by the two
+        flags, so whichever arrives first wins and the other is a no-op -
+        which is also what makes it safe on a mud running both.
+
+        Char.Vitals is the right GMCP trigger because it is the direct
+        analogue of the FFF packet this replaces, and it cannot exist
+        before there is a character in the world.
+        """
         if not self._logged_in:
             self.confirm_login()
-        if not self.guild_login_sent:
-            self.guild_login_sent = True
-            # Mud-wide setup first (asets, DISPLAY_ROOMID) so the room
-            # markers + mapping work before anything guild-specific runs.
-            if self.setup_commands:
-                self.write_local(f"[{self.mud} setup: "
-                                 f"{len(self.setup_commands)} "
-                                 "command(s)]", "#557755")
-                for c in self.setup_commands:
-                    self.send_line(c, manual=True)
-            if self.login_commands:
-                self.write_local(f"[guild init: "
-                                 f"{len(self.login_commands)} "
-                                 "command(s)]", "#557755")
-                for c in self.login_commands:
-                    self.send_line(c, manual=True)
-            self._send_on_activate()
+        if self.guild_login_sent:
+            return
+        self.guild_login_sent = True
+        # Mud-wide setup first (asets, DISPLAY_ROOMID) so the room
+        # markers + mapping work before anything guild-specific runs.
+        if self.setup_commands:
+            self.write_local(f"[{self.mud} setup: "
+                             f"{len(self.setup_commands)} "
+                             "command(s)]", "#557755")
+            for c in self.setup_commands:
+                self.send_line(c, manual=True)
+        self._powers_request()      # eternal powers for the info pane
+        if self.login_commands:
+            self.write_local(f"[guild init: "
+                             f"{len(self.login_commands)} "
+                             "command(s)]", "#557755")
+            for c in self.login_commands:
+                self.send_line(c, manual=True)
+        self._send_on_activate()
+
+    def mip_vitals_composite(self, data, _decl):
+        self._login_setup()
         upd = parse_composite(data)
+        prev_enemy = str(self.vitals.get("enemy") or "")
         if self.guild.lower() == "changelings":
             # The FFF E field (parsed as gp1 by the global map) is really LIVE
             # Stamina - route it to gp2 so the Stamina bar tracks every round
@@ -8099,6 +9917,26 @@ class MudClient:
             # (unlike 3s), so this is the always-on source for reset%.
             self.vars["reset"] = upd["gp2"]
             self.update_info()
+        if "enemy" in upd and str(upd["enemy"] or "") != prev_enemy:
+            # A different enemy (or none) is a different fight, so the old
+            # fight's round count must not carry into it. Nothing else does
+            # this: self.vitals is updated above, so the round branch below
+            # already sees the NEW enemy and its guard can't tell a fight-end
+            # N~0 from a stray one - the captured kill packet
+            # `N~0~K~~` therefore left self.rounds stale, as did walking away
+            # (K~~ alone, 3 of 109 fight-ends) and back-to-back aggro (no
+            # clear packet at all). The next fight's first packet carries K
+            # and L but no N, so on_vitals read the old count against a
+            # 100% enemy and katmud_scripts rule 1 fired a psummon on round
+            # one. gmcp_char_combat closed the same leak on the GMCP side
+            # only; FFF is the transport that always runs.
+            if len(str(upd["enemy"] or "")) > 1:
+                # A new fight inherits neither the count nor the stash: a mob
+                # killed before a single round ticks must read 0, not the
+                # previous fight's total.
+                self.rounds = self._rounds_at_end = 0
+            else:
+                self._stash_rounds()
         if "round" in upd:
             self._fff_combat = True
             # Only let a round tick touch rounds/in_combat if we actually
@@ -8248,15 +10086,75 @@ class MudClient:
         text = parts[-1] if parts else data
         if self.chat_is_gagged(text):
             return
-        if flag:
-            line = f"You tell {name}: {text}"
-        else:
-            line = f"{name} tells you: {text}"
+        # NAME "you" is the echo half of an OUTGOING EMOTE - the mud emits
+        # two packets for one, "x~Kedrimond~you scream, ..." plus
+        # "~you~scream, ...". It is never a tell, and dropping it here
+        # restores a 1:1 packet-to-plain-line alignment for the queue.
+        if name.strip().lower() == "you":
+            return
+        # Everything else is EITHER a tell, an emote, or an afk reply, and
+        # the packets are identical - "~Lena~no" (a tell) and
+        # "~Lena~nogs at you." (an emote) differ only in content. Only the
+        # plain line that follows can tell them apart, and packets arrive
+        # in BURSTS ahead of those lines, so they queue rather than
+        # occupying one slot: a second packet used to evict the first and
+        # render it as a tell, complete with the notification sound.
+        # Text is kept from the PACKET because the mud wraps plain lines.
+        # getattr, not a bare read: #hotswap swaps the class without
+        # re-running __init__, so a session started before this feature
+        # existed has no queue yet - same reason _sz_restore uses one.
+        if getattr(self, "_bab_queue", None) is None:
+            self._bab_queue = []
+        self._bab_queue.append((flag, name, text))
+        while len(self._bab_queue) > self.BAB_QUEUE_MAX:
+            # Plain lines have stopped arriving (all gagged?). Show the
+            # oldest rather than drop it - losing a real tell is worse
+            # than an emote reaching the monitor.
+            f, nm, tx = self._bab_queue.pop(0)
+            self._render_tell(nm, tx, incoming=not f)
+
+    def _render_tell(self, name, text, incoming=True):
+        line = (f"{name} tells you: {text}" if incoming
+                else f"You tell {name}: {text}")
+        if incoming:
             play_sound(self.setting("tell_sound", "beep"))
             self._push_ntfy_tell(line)
         self._web_tells.append({"t": time.time(), "line": line,
-                                "incoming": not flag})
+                                "incoming": incoming})
         self.write_local(self._chat_ts() + line, "#ffdd88", widget=self.chat)
+
+    def _bab_resolve(self, clean):
+        """Classify the OLDEST queued BAB packet against this plain line.
+
+        Only the tell forms are distinctive, so they are matched
+        positively and everything else on this channel is dropped:
+
+          "<name> tells you: ..."  -> incoming tell   (monitor + sound)
+          "You tell <name>: ..."   -> your own echo   (monitor, no sound)
+          "From afar, ..."         -> emote           dropped
+          "<name> ..."             -> emote, or an afk reply
+                                      ("Kedrimond is afk: ...")  dropped
+          "you ..."                -> your own emote  dropped
+
+        A dropped one still shows in the main pane as ordinary mud output,
+        so nothing is lost and nothing is doubled.
+
+        Anything matching none of those isn't ours - a wrapped
+        continuation line, or unrelated output - so leave the queue be."""
+        if not getattr(self, "_bab_queue", None):
+            return
+        flag, name, text = self._bab_queue[0]
+        low = clean.strip().lower()
+        nm = name.strip().lower()
+        if low.startswith(f"{nm} tells you:"):
+            self._bab_queue.pop(0)
+            self._render_tell(name, text)
+        elif low.startswith(f"you tell {nm}:"):
+            self._bab_queue.pop(0)
+            self._render_tell(name, text, incoming=False)
+        elif (low.startswith("from afar,") or low.startswith("you ")
+                or low.startswith(nm + " ")):
+            self._bab_queue.pop(0)      # emote or afk reply: not a tell
 
     def _push_ntfy_tell(self, line):
         """Fire-and-forget push for an incoming tell only (spec:
@@ -8353,6 +10251,86 @@ class MudClient:
         self.merc_state = merc
         self.update_info()
 
+    # ---- Mercenary over GMCP (BBC died with MIP) ------------------------
+    # Captured 2026-09-23 (logs/normal-20260923.log, merc Eris). Merc.Vitals
+    # is a delta feed - stam/ap every packet, hp and target only when they
+    # change; its maxima and Merc.Info (levels, dtype, follow, cost) arrive
+    # in the LOGIN burst only, so the mud's own per-round text line keeps
+    # them current after that (see _merc_scan_line).
+    def _merc_merge(self, data, fields):
+        if not isinstance(data, dict) or not data.get("merc"):
+            return
+        m = self.merc_state
+        if m.get("name") != str(data["merc"]):
+            m = self.merc_state = {"name": str(data["merc"])}
+        for src, dst in fields:
+            if src in data:
+                m[dst] = data[src]
+        self.update_info()
+
+    def gmcp_merc_vitals(self, data):
+        self._merc_merge(data, (
+            ("hp", "hp"), ("stam", "stamina"), ("ap", "ap"),
+            ("hp_max", "hpmax"), ("stam_max", "staminamax"),
+            ("ap_max", "apmax"),
+            ("target", "target_name"), ("target_hp", "target_hp_pct")))
+        if isinstance(data, dict) and "abils" in data:
+            self.merc_state["abilities"] = str(data["abils"]).strip()
+
+    def gmcp_merc_info(self, data):
+        # `cost` IS BBC's cost_per_round - user-confirmed 2026-09-23 (9/rd
+        # in game, 9 on the wire). GAME FACT: it rises with PL (persistent
+        # level, survives reboots) and IL (instance level, 0 each reboot,
+        # caps at 30), so it is a live value, not a constant.
+        self._merc_merge(data, (
+            ("dtype", "damage_type"), ("cost", "cost_per_round"),
+            ("perm_level", "perm_level"), ("inst_level", "inst_level")))
+        if isinstance(data, dict) and "follow" in data and self.merc_state:
+            self.merc_state["following"] = bool(data["follow"])
+
+    def gmcp_merc_stats(self, data):
+        self._merc_merge(data, (
+            ("fund", "funds"), ("spent_total", "spent"),
+            ("perm_xp", "perm_xp"), ("inst_xp", "inst_xp")))
+
+    # "[Eris] HP[16200/27250] Stamina[1650/3814] AP[1088/1898]
+    #  PL:[96(23297/121651)] IL:[13(1012/2704)] Abilities [Bandage(8)]" -
+    # printed every round, and wrapped by the mud mid-number ("23297/" then
+    # "121651)]..."), so a head line is held until IL:[...)] is complete.
+    MERC_LINE_HEAD_RE = re.compile(r"^\[([^\]]+)\] HP\[\d+/\d+\]")
+    MERC_LINE_RE = re.compile(
+        r"^\[(?P<name>[^\]]+)\] HP\[(?P<hp>\d+)/(?P<hpmax>\d+)\]\s*"
+        r"Stamina\[(?P<stamina>\d+)/(?P<staminamax>\d+)\]\s*"
+        r"AP\[(?P<ap>\d+)/(?P<apmax>\d+)\]\s*"
+        r"PL:\[(?P<perm_level>\d+)\((?P<perm_xp>\d+)/(?P<perm_xp_next>\d+)\)\]\s*"
+        r"IL:\[(?P<inst_level>\d+)\((?P<inst_xp>\d+)/(?P<inst_xp_next>\d+)\)\]"
+        r"\s*(?P<abilities>.*)$")
+
+    def _merc_scan_line(self, clean):
+        held = getattr(self, "_merc_line_held", "")
+        if held:
+            clean = held + clean
+            self._merc_line_held = ""
+        elif not self.MERC_LINE_HEAD_RE.match(clean):
+            return
+        m = self.MERC_LINE_RE.match(clean)
+        if not m:
+            # still wrapped - hold one more line, never more than that
+            if not held:
+                self._merc_line_held = clean
+            return
+        name = m.group("name")
+        if self.merc_state.get("name") != name:
+            self.merc_state = {"name": name}
+        for k, v in m.groupdict().items():
+            if k == "name":
+                continue
+            if k == "abilities":
+                self.merc_state[k] = v.strip()
+            else:
+                self.merc_state[k] = int(v)
+        self.update_info()
+
     def mip_viking(self, data, _decl):
         """All Viking guild feeds arrive under the BBE tag as KEY^^VALUE
         pairs, chunked across packets - so merge by key into one running
@@ -8397,7 +10375,11 @@ class MudClient:
             # A grid the cache was not saved at means the map was redrawn;
             # cached rows are indexed by row number and would be garbage, so
             # drop every wall row and let the feed resend them.
-            cols, rows, _px, _py = viking.parse_vmaph(upd["VMAPH"])
+            cols, rows, px, py = viking.parse_vmaph(upd["VMAPH"])
+            # Inside a settlement the mud sends (-1,-1): a sentinel, not a
+            # position, so it must not overwrite where we know we are.
+            if px is not None and 0 <= px < cols and 0 <= py < rows:
+                self._viking_last_cell = (px, py)
             if self._viking_map_dims not in (None, (cols, rows)):
                 for k in [k for k in self.viking_state
                           if k[:3] in ("MEE", "MES")]:
@@ -8712,14 +10694,17 @@ class MudClient:
         if cb:
             cb()
 
-    def viking_walk_to(self, gx, gy, on_done=None):
+    def viking_walk_to(self, gx, gy, on_done=None, retry=True):
         """Pathfind from the current map position to cell (gx, gy) over
         the MEE/MES graph and send the n/s/e/w moves. Used by both
         click-to-move and #go on the guild map. on_done (if given) fires
         once the walk reaches the cell - the hook VN uses to chain enter /
         fetch after arrival. It does NOT fire if the walk can't start
         (no path / position unknown), so a botched leg halts the errand
-        rather than blundering on."""
+        rather than blundering on.
+
+        retry=False marks the one re-attempt an off-map position schedules,
+        so waiting for a position can never loop."""
         graph = viking.build_graph(self.viking_state)
         if not graph:
             self.write_local("[viking nav] no map loaded - enable "
@@ -8729,6 +10714,37 @@ class MudClient:
         if player[0] is None:
             self.write_local("[viking nav] position unknown.", "#cc6666")
             return
+        if not (0 <= player[0] < cols and 0 <= player[1] < rows):
+            # Inside a lineage city the map sends pos (-1,-1) / active 0,
+            # and the real cell only lands a round or two after `leave`.
+            # Pathfinding from an off-grid start used to raise IndexError
+            # (_neighbors reads mes[-1][-1], and MES's last row is the one
+            # the MUD never sends) straight out of the Tk callback - so
+            # `Go` right after leaving vanished with no message at all
+            # (2026-09-17).
+            #
+            # GAME FACT (user, 2026-09-17): the biome is only ever walked
+            # settlement to settlement - leave the guildhall, Go, enter, do
+            # the missions, leave, Go again. So the cell the last `Go` was
+            # aimed at IS where you are standing when the next one is typed,
+            # and waiting for the mud to confirm it buys nothing. Trust it
+            # and walk. A real on-map packet always overwrites it, so the
+            # assumption only ever covers the gap the mud leaves.
+            if self._viking_last_cell:
+                player = self._viking_last_cell
+                self.write_local(
+                    f"[viking nav] no position yet - assuming "
+                    f"{player[0]},{player[1]} (where the last Go went).",
+                    "#8899aa")
+            elif retry:
+                self._viking_after_position(
+                    lambda: self.viking_walk_to(gx, gy, on_done,
+                                                retry=False))
+                return
+            else:
+                self.write_local("[viking nav] not on the guild map yet - "
+                                 "try again in a moment.", "#cc9933")
+                return
         if not (0 <= gx < cols and 0 <= gy < rows):
             self.write_local("[viking nav] target off the map.",
                              "#cc6666")
@@ -8754,19 +10770,32 @@ class MudClient:
                 on_done()
             return
         self.walk = moves
+        self._viking_last_cell = (gx, gy)
         self._walk_done_cb = on_done        # set AFTER cancel_walk wipes it
         self.write_local(f"[viking map: {len(moves)} steps to "
                          f"({gx},{gy})]", "#aa88cc")
         self._walk_step()
 
+    # `Go 35,17` / `Go 35 17` - a guild-map cell, not a landmark name.
+    _GO_COORD_RE = re.compile(r"^\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*$")
+
     def viking_go(self, name, on_done=None):
-        """Resolve a name against the live VMAPL POIs and walk there.
-        Returns True if it handled the request (a matching landmark
-        existed); on_done fires on arrival. Requires mip_map on - with
-        no VMAPL in the state this returns False and Go falls through
-        to the room-map walker."""
+        """Resolve a destination against the guild map and walk there.
+        Returns True if it handled the request; on_done fires on arrival.
+
+        Two forms. A NAME is resolved against the live VMAPL POIs - and
+        since 2026-09-15 the mud sends no VMAPL over GMCP at all, so that
+        half is dead until it does (see docs/gmcp/port.md). A pair of
+        COORDINATES needs no POI feed: pathfinding runs on the MEE/MES
+        wall grid and the live `Guild.Map.pos`, both of which arrive, so
+        `Go 35,17` works where `Go midgard` cannot."""
         if self.guild.lower() != "vikings":
             return False
+        m = self._GO_COORD_RE.match(name or "")
+        if m:
+            self.viking_walk_to(int(m.group(1)), int(m.group(2)),
+                                on_done=on_done)
+            return True
         marks = viking.map_landmarks(self.viking_state)
         if not marks:
             return False
@@ -9013,9 +11042,20 @@ class MudClient:
         corpses and veil are NOT in this feed (text prompt only). Caller
         runs update_info."""
         p = necro.parse_hpbar(stripped)
-        for k in ("worth", "protection", "circle", "glamor", "tport"):
+        for k in ("worth", "protection", "circle", "glamor", "glamor_pct",
+                  "glamor_left", "glamor_max", "tport"):
             if k in p:
                 self.vars[k] = p[k]
+        # The glamor slot holds EITHER a running glamor or the usage pool,
+        # never both, so whichever pair is absent this push is now stale -
+        # drop it. Otherwise an expired `{furious:2%}` would leave `glamor`
+        # sitting there forever next to the fresh `Blaz:8/9`.
+        if "glamor" in p:
+            self.vars.pop("glamor_left", None)
+            self.vars.pop("glamor_max", None)
+        elif "glamor_left" in p:
+            self.vars.pop("glamor", None)
+            self.vars.pop("glamor_pct", None)
         if "circle" in p:
             tp = necro.tier_progress(p["circle"])
             if tp:
@@ -9070,6 +11110,18 @@ class MudClient:
         the prompt simply prints a shorter list. The line arrives on every
         prompt (129 times in one captured session), so this reports only
         on CHANGE; a steady state, healthy or not, stays quiet."""
+        # First, and with its own return: the prompt's NRG:cur/max is the
+        # ONLY source for max Energy anywhere on the wire, GMCP included.
+        # The `!=` is load-bearing, NOT a lazy `>`: the high-water guess
+        # that carries the bar until this line arrives can overshoot (see
+        # _raise_seen_max), and only a stated max can pull it back down.
+        mx = elemental.parse_energy_max(clean)
+        if mx is not None:
+            if self.vitals_max.get("gp1") != mx:
+                self.vitals_max["gp1"] = mx
+                self._maxes_dirty = True
+                self.update_vitals()
+            return
         if elemental.scrape_score(self.elem_score, clean):
             # `guild score` / `skills` is the ONLY complete skill table:
             # GMCP's Guild.State sweep truncates at 32 of 48 fields and
@@ -9209,7 +11261,9 @@ class MudClient:
                 if name in self.tracked:
                     refresh = True
         g = blade.parse_g2n(clean)
-        if g:
+        if getattr(self, "_blade_gmcp_gxp", None) is not None:
+            pass    # GMCP Guild.State states it exactly (gmcp_guild_state)
+        elif g:
             avail = blade.available_gxp(*g)
             got = blade.glvl_from_g2n(*g)
             if got:
@@ -9260,10 +11314,101 @@ class MudClient:
         if self.viking_win is not None and self.viking_win.winfo_exists():
             self.viking_win.set_vskills(data)
 
+    # ---- Viking settlement list (see viking.parse_settlements) ----------
+    def cmd_vsettlements(self, _arg=""):
+        """`Vsettlements`: send `settlements` and read the reply into the
+        POI table that `Go <name>` resolves against.
+
+        MIP's VMAPL used to push those names; no GMCP package carries it,
+        so the table is seeded from the last VMAPL captures and would
+        otherwise never learn a settlement founded after them. This is the
+        one command that refreshes it - the same on-demand read `Vskills`
+        does for skill costs."""
+        if self.guild.lower() != "vikings":
+            self.write_local("[settlements] only available on a Viking.",
+                             "#cc9933")
+            return
+        self._vsettle_capture = True
+        self._vsettle_lines = []
+        self.send_line("settlements")
+        self.write_local("[settlements] reading the settlement list...",
+                         "#55aacc")
+
+    def _vsettle_finish(self):
+        read = viking.parse_settlements(self._vsettle_lines)
+        self._vsettle_capture = False
+        self._vsettle_lines = []
+        if not read:
+            self.write_local("[settlements] nothing parsed (unexpected "
+                             "format?) - the POI table is unchanged.",
+                             "#cc9933")
+            return
+        before = set(viking.WORLD_POIS)
+        viking.merge_settlements(read)
+        added = sorted(set(viking.WORLD_POIS) - before)
+        gone = sorted(before - set(viking.WORLD_POIS))
+        self.write_local(
+            f"[settlements] {len(read)} settlement(s) loaded - Go <name> "
+            "now resolves them.", "#66cc66")
+        if added:
+            self.write_local("  new: " + ", ".join(added), "#66cc66")
+        if gone:
+            self.write_local("  gone: " + ", ".join(gone), "#cc9933")
+
+    # ---- Viking mushroom-pouch trim (see viking.parse_vpouch) ----------
+    def cmd_pouchtrim(self, _arg=""):
+        """`Pouchtrim`: send `vpouch`, read it, then discard all but one
+        of every T1 mushroom. T2+ is never touched."""
+        if self.guild.lower() != "vikings":
+            self.write_local("[pouchtrim] only available on a Viking.",
+                             "#cc9933")
+            return
+        self._vpouch_capture = True
+        self._vpouch_lines = []
+        self.send_line("vpouch")
+        self.write_local("[pouchtrim] reading the pouch...", "#55aacc")
+
+    def _vpouch_finish(self):
+        rows = viking.parse_vpouch(self._vpouch_lines)
+        self._vpouch_capture = False
+        self._vpouch_lines = []
+        if not rows:
+            self.write_local("[pouchtrim] nothing parsed (unexpected "
+                             "format?) - nothing discarded.", "#cc9933")
+            return
+        # The tier is explicit so a bare name can never hit the T2 copy,
+        # which the readout lists first.
+        cmds = [f"vpouch discard {name.lower()} t1"
+                for name, tier, count in rows if tier == 1
+                for _ in range(count - 1)]
+        if not cmds:
+            self.write_local("[pouchtrim] no T1 extras to discard.",
+                             "#66cc66")
+            return
+        self.write_local(f"[pouchtrim] discarding {len(cmds)} extra T1 "
+                         "mushroom(s).", "#66cc66")
+        for c in cmds + ["vpouch"]:
+            self.send_line(c)
+
     def viking_scan_line(self, clean):
-        """While a `Vskills` read is armed, accumulate the readout lines and
-        finalize on the footer (or a safety line cap), then parse. Lines are
-        still displayed normally - capture only reads them."""
+        """While a `Vskills`, `Vsettlements` or `Pouchtrim` read is armed,
+        accumulate the readout lines and finalize on the footer (or a safety
+        line cap), then parse. Lines are still displayed normally - capture
+        only reads them."""
+        if self._vpouch_capture:
+            self._vpouch_lines.append(clean)
+            if "Total:" in clean or len(self._vpouch_lines) > 200:
+                self._vpouch_finish()
+            return
+        if self._vsettle_capture:
+            self._vsettle_lines.append(clean)
+            # The list ends on its closing border; the cap is the backstop
+            # for a reply that never shows one.
+            if (len(self._vsettle_lines) > 6
+                    and set(clean.strip()) <= set("-~* ")
+                    and len(clean.strip()) > 20)                     or len(self._vsettle_lines) > 400:
+                self._vsettle_finish()
+            return
         if not self._vskills_capture:
             return
         self._vskills_lines.append(clean)
@@ -9719,6 +11864,20 @@ class MudClient:
             self.write_local(f"[reminder] cleared {n[0]} reminder(s).",
                              "#ffcc44")
             return
+        if low in ("clear expired", "clearexpired"):
+            gone = [0]
+
+            def drop_expired(d):
+                keep = [r for r in d.get("reminders", [])
+                        if not r.get("expired_at")]
+                gone[0] = len(d.get("reminders", [])) - len(keep)
+                d["reminders"] = keep
+            paths.update_json(paths.REMINDERS_FILE, drop_expired,
+                              {"reminders": [], "next_id": 1})
+            self._reminders_mtime = None
+            self.write_local(f"[reminder] cleared {gone[0]} expired.",
+                             "#ffcc44")
+            return
         m = re.match(r"(?:clear|del|delete|cancel|rm)\s+(\d+)$", low)
         if m:
             rid = int(m.group(1))
@@ -9747,7 +11906,8 @@ class MudClient:
                 "wore off, Reminder 3.67 = 3m40s, Reminder 1h30m reboot "
                 "soon).  "
                 "Reminder every <time> <text> repeats.  "
-                "Reminder = list, Reminder clear [<id>|all].", "#cc6666")
+                "Reminder = list, Reminder clear [<id>|all|expired].",
+                "#cc6666")
             return
         if low.startswith("every "):
             repeat = secs
@@ -9780,7 +11940,8 @@ class MudClient:
             self.write_local(f"[reminder] {err}", "#cc6666")
             return
         rems = sorted(data.get("reminders", []),
-                      key=lambda r: r.get("due", 0))
+                      key=lambda r: (1 if r.get("expired_at") else 0,
+                                     r.get("due", 0)))
         if not rems:
             self.write_local("[reminder] none set.", "#ffcc44")
             return
@@ -9788,16 +11949,19 @@ class MudClient:
         self.write_local("Reminders (shared across all characters):",
                          "#ffcc44")
         for r in rems:
-            eta = self._fmt_dur(r.get("due", 0) - now)
             rpt = (f" (every {self._fmt_dur(r['repeat'])})"
                    if r.get("repeat") else "")
             by = r.get("set_by", "")
             tag = f" [{by}]" if by and by != self.character else ""
+            when = (f"expired {self._fmt_dur(now - r['expired_at'])} ago"
+                    if r.get("expired_at")
+                    else f"in {self._fmt_dur(r.get('due', 0) - now)}")
             self.write_local(
-                f"  #{r.get('id')}  in {eta}{rpt}{tag}: "
+                f"  #{r.get('id')}  {when}{rpt}{tag}: "
                 f"{r.get('text', '')}", "#ffcc44")
 
     _LAST_SEEN_EVERY = 60      # seconds between last_seen refreshes
+    _EXPIRED_KEEP = 3600       # a fired reminder stays visible this long
 
     def _reminder_age(self, r, now):
         """'set 2d ago, due 31h ago' - as much of it as the record supports.
@@ -9859,19 +12023,45 @@ class MudClient:
                 return                          # leave a hand-edit alone
             self._reminders_cache = data.get("reminders", [])
             self._reminders_mtime = mtime
-        if not any(r.get("due", 0) <= now for r in self._reminders_cache):
+        # An expired entry satisfies `due <= now` for the whole hour it is
+        # retained, so it must be excluded here or the claim pass - and its
+        # file write - would run on every one-second tick until it is purged.
+        due_now = any(r.get("due", 0) <= now and not r.get("expired_at")
+                      for r in self._reminders_cache)
+        purge_due = any(
+            r.get("expired_at")
+            and now - r["expired_at"] >= self._EXPIRED_KEEP
+            for r in self._reminders_cache)
+        if not due_now and not purge_due:
             return
         fired = []
+        # Whether a reminder LAPSED while every client was shut has to be
+        # decided in here, not after: a missed one is dropped outright
+        # (it gets the login list instead of a pane entry - user's call,
+        # 2026-09-12), while a normal fire is retained as expired.
+        seen_at_start = self._last_seen_at_start
+        can_miss = first and isinstance(seen_at_start, (int, float))
 
         def claim(d):
             keep = []
             for r in d.get("reminders", []):
+                if r.get("expired_at"):
+                    if now - r["expired_at"] < self._EXPIRED_KEEP:
+                        keep.append(r)      # still within its hour
+                    continue                # otherwise: purged
                 if r.get("due", 0) <= now:
                     fired.append(r)
                     if r.get("repeat"):         # reschedule repeaters
                         nxt = dict(r)
                         nxt["due"] = now + r["repeat"]
                         keep.append(nxt)
+                    elif not (can_miss and r.get("due", 0) > seen_at_start):
+                        # Fired with a client watching: keep it on the list,
+                        # marked, so a banner that scrolled past in a combat
+                        # window is still recoverable for an hour.
+                        done = dict(r)
+                        done["expired_at"] = now
+                        keep.append(done)
                 else:
                     keep.append(r)
             d["reminders"] = keep
@@ -9918,9 +12108,120 @@ class MudClient:
         self.write_local("", "#ffcc44")
         play_sound(self.setting("tell_sound", "beep"))
 
+    # Attributes added after a build shipped, and the shape a dict must
+    # have. #hotswap swaps the class but never re-runs __init__, so a
+    # session started on an older build is missing the new ones - and a
+    # dict whose SHAPE changed is present but WRONG, which is worse.
+    _HOTSWAP_DEFAULTS = (
+        ("powers", dict), ("_bab_queue", list),
+        ("taken", lambda: {"rounds": 0, "damage": 0}),
+        ("_cstats_prev", lambda: None), ("_cstats_pending", lambda: False),
+        ("_cstats_sent_at", lambda: 0.0),
+        ("_powers_pending", lambda: False), ("_powers_seen_row", lambda: False),
+        ("_powers_polled_at", lambda: 0.0), ("_powers_sent_at", lambda: 0.0),
+        ("_sz_restore", lambda: None), ("_sz_restore_at", lambda: 0.0),
+        ("_sz_noted_at", lambda: None), ("_dmg_burst", lambda: False),
+        ("_map_debug", lambda: False), ("_rounds_at_end", lambda: 0),
+        # Added 2026-09-20 with _combat_stale_check. The read site guards
+        # with getattr too, but this list is the project's answer to
+        # "guarding each read site individually kept missing the next one".
+        ("_last_damage_t", lambda: 0.0),
+        ("_dmg_line_seen", lambda: False),
+        ("_last_kill_name", str), ("_last_kill_at", lambda: 0.0),
+        ("_gmcp_room_items", set), ("_gmcp_room_monsters", dict),
+        ("_gmcp_room_mob_names", dict),
+        ("_gmcp_room_seen", lambda: False),
+        ("_glance_due", lambda: None), ("_merc_line_held", str),
+        ("_chaossea_floor_wants", list),
+        # Added 2026-09-15 with the Guild.Map handler. Without it a
+        # hotswapped instance raises on the first `pos` packet, and an
+        # exception in the packet loop stops tick being rescheduled -
+        # which looks exactly like a frozen client.
+        ("_viking_map_dims", dict), ("_viking_last_cell", lambda: None),
+        ("_vsettle_capture", lambda: False), ("_vsettle_lines", list),
+        ("_vpouch_capture", lambda: False), ("_vpouch_lines", list),
+        ("_last_tick_error", lambda: None),
+        ("_cart_cd_until", lambda: None),
+    )
+
+    def _hotswap_fixups(self):
+        """Heal an instance carried across a #hotswap from an older build.
+
+        Runs from tick, so the repair happens within a second rather than
+        the first packet raising in the loop - and an exception in the
+        packet loop stops it being rescheduled, which looks exactly like
+        a frozen client (live 2026-09-07). Guarding each read site
+        individually kept missing the next new attribute; doing it once,
+        here, does not."""
+        for name, factory in self._HOTSWAP_DEFAULTS:
+            if not hasattr(self, name):
+                setattr(self, name, factory())
+        # #dmg buckets were re-keyed portals/noportals -> with/without.
+        # Carry the counts over rather than zeroing someone's session.
+        d = getattr(self, "dmg", None)
+        if isinstance(d, dict) and "with" not in d:
+            self.dmg = {"with": d.get("portals")
+                        or dict(rounds=0, hits=0, damage=0),
+                        "without": d.get("noportals")
+                        or dict(rounds=0, hits=0, damage=0)}
+
     def tick(self):
+        """The one-second heartbeat, and the only thing that reschedules it.
+
+        The body is wrapped because EVERY caller below is unguarded and a
+        single throw used to end the heartbeat for the rest of the session
+        - deadman, reminders, the status bar and webstate all stop, with no
+        traceback anywhere, because katmud.pyw has no console for stderr to
+        land in. `_poll_webcmd` and `_write_webstate` each already carried
+        their own guard and their comments say exactly this; the guard just
+        belongs one level up, around all of it.
+
+        The reschedule is in `finally`, so the heartbeat survives whatever
+        happened, and the traceback goes to logs/crash.log so the next
+        occurrence is diagnosable instead of being inferred from which
+        timestamps on disk stopped moving."""
+        try:
+            self._tick_body()
+        except Exception:
+            self._log_tick_failure()
+        finally:
+            self.root.after(1000, self.tick)
+
+    def _log_tick_failure(self):
+        import traceback
+        tb = traceback.format_exc()
+        try:
+            with open(paths.CRASH_LOG, "a", encoding="utf-8") as f:
+                f.write("katmud tick error %s profile=%s\n"
+                        % (time.strftime("%Y-%m-%d %H:%M:%S"),
+                           self.profile_id))
+                f.write(tb + "\n")
+        except OSError:
+            pass
+        # Say it once per distinct failure rather than once a second: a
+        # tick that throws every second would otherwise bury the screen.
+        # Keyed on the exception, not the whole traceback - the same fault
+        # reached by a slightly different path is still the same fault.
+        last = tb.strip().splitlines()[-1] if tb.strip() else "?"
+        if last != getattr(self, "_last_tick_error", None):
+            self._last_tick_error = last
+            self.write_local(
+                "!! tick error (heartbeat kept alive, see logs/crash.log): "
+                + last, "#cc6666")
+
+    def _tick_body(self):
+        self._hotswap_fixups()
         self._poll_webcmd()
         self._room_refresh_expire()
+        # Before anything that gates on in_combat: the bots reschedule
+        # themselves, so a flag released here is acted on by their next
+        # tick rather than a second later.
+        self._combat_stale_check()
+        # Cooldowns count down locally from a stored ready-at, so this is
+        # only to catch a power fired outside the client (or by someone
+        # else's action) drifting the list out of date.
+        if self.conn and self.conn.alive and self._powers_due():
+            self._powers_request()
         now = time.time()
         idle = now - self.last_sent
         manual_idle = now - self.last_manual
@@ -9962,11 +12263,12 @@ class MudClient:
                 fg="#66cc66")
         self._poll_reminders(now)
         self._touch_last_seen(now)
-        if self._reminders_cache:        # keep the info-pane countdown live
+        self._cart_tick(now)
+        if self._reminders_cache or self._cart_cd_until is not None:
+            # keep the info-pane countdowns live
             self.update_info()
         self._write_webstate(now)
         self.call_hook("on_tick")
-        self.root.after(1000, self.tick)
 
     def _poll_webcmd(self):
         """Phone/web dashboard (spec: docs/superpowers/specs/
@@ -10165,6 +12467,7 @@ class MudClient:
             expanded = self.expand_alias(cmd, depth, manual, gated)
             if expanded is None:
                 continue
+            self._sz_hook(expanded)
             words = expanded.split()
             # Capitalized `Go` / `Landmark` are the client commands (no #
             # needed); the lowercase forms pass straight through to the
@@ -10176,17 +12479,23 @@ class MudClient:
                     "Maplink", "Mapunlink", "Mapcheck",
                     "Mapwipe", "Toggle", "Toggles",
                     "VN", "Track", "Untrack", "Bot",
-                    "Hunt", "Scan", "Gswap", "Run",
+                    "Hunt", "Fence", "Scan", "Gswap", "Run",
                     "Reagents", "Explore", "Agent",
                     "Reminder", "Reminders", "Corpse", "Combat",
                     "Mapfind", "Mapgo",
                     "Vskills", "Missionlist", "VNlist",
-                    "Chaossea")
-                    # a guild "macros" entry (e.g. bladesinger Autoregen) -
-                    # capitalized like every other client command, but the
-                    # name comes from data, not this hardcoded list.
-                    or (words[0][:1].isupper()
-                        and words[0].lower() in self._macro_defs())):
+                    "Chaossea", "Pouchtrim")
+                    # a guild "macros" entry (e.g. bladesinger autoregen).
+                    # ANY capitalisation, unlike the list above: the name
+                    # comes from the user's own config, not this hardcoded
+                    # list, and the capital exists there only to keep the
+                    # lowercase form free for the MUD (a mud `go home` exit
+                    # must not collide with a `home` landmark). Macro names
+                    # like 'autoaconly' are far too odd for an area or guild
+                    # to want, so the client takes them in every case rather
+                    # than silently sending 'autoac' to the MUD, which
+                    # answers "What?".
+                    or words[0].lower() in self._macro_defs()):
                 self.client_command("#" + expanded)
                 continue
             # sqlite single-word movement: a charted special exit (mapfix
@@ -10332,6 +12641,9 @@ class MudClient:
             if m:
                 self._newbie_fulfilled(int(m.group(1)))
         if self.conn and self.conn.send(cmd):
+            if cmd.strip().lower() == str(self.setting(
+                    "bot_refresh_command", "glance")).strip().lower():
+                self._glance_due = time.time()
             self._last_move = cmd.strip()
             self.last_sent = time.time()
             if manual:
@@ -10362,8 +12674,9 @@ class MudClient:
 
     # TEMPORARY DIAGNOSTIC (2026-08-31) for the viking round-counter bug:
     # rnd has been seen at ~27000 where a real fight is a few hundred. There
-    # are exactly two writers - the FFF assignment and the per-damage-line
-    # increment - and this says which one did it. A jump over JUMP cannot
+    # are three writers - the FFF assignment, the per-damage-line increment
+    # and (since 2026-09-25) the viking Guild.State encounter assignment -
+    # and this says which one did it. A jump over JUMP cannot
     # come from the increment (it moves by 1), so an alert naming FFF is the
     # assignment misreading a field; one naming the damage line means the
     # climb is gradual and the kill-text reset is not firing. Delete this
@@ -10389,28 +12702,339 @@ class MudClient:
                 except (OSError, ValueError):
                     pass
 
+    def note_corpse_line(self, clean):
+        """Remember that a corpse is lying here.
+
+        The Chaossea deadman fix keyed off self.kills growing, i.e. off the
+        killing-blow TEXT matching. It doesn't always: the blow can land
+        from a merc or a hirdmadr, or be worded in a way kill_patterns
+        don't cover, and then a real kill leaves no trace to react to.
+        The corpse itself can't be missed (live 2026-09-07: glanced, saw
+        'The skinless, slightly moldy corpse of Abomination.', walked
+        out)."""
+        pat = self.setting("corpse_line", "")
+        if pat:
+            if pat.strip().lower() in clean.lower():
+                self._corpse_seen = True
+        elif CORPSE_LINE_RE.search(clean):
+            self._corpse_seen = True
+
+    # Lines of the `(cstats` block. Conservative, like the rating
+    # swallow: only these are eaten, so anything interleaved - combat
+    # spam, chat - still reaches the screen.
+    _CSTATS_LINE_RE = re.compile(
+        r"^\s*(?:-+\s*Combat Statistics\s*-+"
+        r"|(?:Overall\s+)?Combat Rounds\s*:"
+        r"|Damage Taken\s*:|X?GXP?\s|XP (?:Gained|Per Hour|Per Kill)\s*:"
+        r"|GXP (?:Gained|Per Hour|Per Kill)\s*:"
+        r"|Total Kills\s*:|Top \d+ kills\s*:|Last \d+ kills\s*:"
+        r"|Rooms Explored\s*:|Total Time Spent online\s*:"
+        r"|[\d,]+\s*:\s)\s*", re.I)
+    _CSTATS_TAKEN_RE = re.compile(r"^\s*Damage Taken\s*:\s*([\d,]+)", re.I)
+    # anchored so "Overall Combat Rounds:" - a LIFETIME counter - can
+    # never be read as the per-boot one it contains.
+    _CSTATS_ROUNDS_RE = re.compile(r"^\s*Combat Rounds\s*:\s*([\d,]+)", re.I)
+    _CSTATS_END = "total time spent online"
+    # Bounded for the same reason the powers poll is: a block whose
+    # terminator never arrives must not swallow indefinitely.
+    CSTATS_WINDOW_S = 8.0
+
+    def _cstats_capture(self, clean):
+        """True = this line belongs to a `(cstats` block we asked for.
+
+        `(cstats` reports Damage Taken and Combat Rounds cumulatively for
+        the boot, so consecutive snapshots diff to the damage taken in
+        between. A snapshot LOWER than the last means the mud rebooted
+        and the counters restarted - re-baseline rather than record a
+        negative."""
+        if not getattr(self, "_cstats_pending", False):
+            return False
+        if time.time() - getattr(self, "_cstats_sent_at", 0.0)                 > self.CSTATS_WINDOW_S:
+            self._cstats_pending = False
+            return False
+        if not clean.strip():
+            return True                     # blank lines inside the block
+        if not self._CSTATS_LINE_RE.match(clean):
+            return False                    # not ours; let it through
+        m = self._CSTATS_TAKEN_RE.match(clean)
+        if m:
+            self._cstats_seen_damage = int(m.group(1).replace(",", ""))
+        m = self._CSTATS_ROUNDS_RE.match(clean)
+        if m:
+            self._cstats_seen_rounds = int(m.group(1).replace(",", ""))
+        if self._CSTATS_END in clean.lower():
+            self._cstats_finish()
+        return True
+
+    def _cstats_finish(self):
+        self._cstats_pending = False
+        dmg = getattr(self, "_cstats_seen_damage", None)
+        rnd = getattr(self, "_cstats_seen_rounds", None)
+        self._cstats_seen_damage = self._cstats_seen_rounds = None
+        if dmg is None or rnd is None:
+            return
+        snap = {"damage": dmg, "rounds": rnd}
+        prev = self._cstats_prev
+        self._cstats_prev = snap
+        if prev is None:
+            return                          # first one is just a baseline
+        dd, dr = dmg - prev["damage"], rnd - prev["rounds"]
+        if dd < 0 or dr < 0:
+            return                          # counters restarted; re-baselined
+        self.taken["damage"] += dd
+        self.taken["rounds"] += dr
+
+    def _cstats_request(self):
+        """Fire the configured `(cstats` at the end of a fight."""
+        cmd = str(self.setting("cstats_command", "") or "").strip()
+        if not cmd or self._cstats_pending:
+            return
+        self._cstats_pending = True
+        self._cstats_sent_at = time.time()
+        self._cstats_seen_damage = self._cstats_seen_rounds = None
+        self.send_line(cmd, gated=False)
+
+    # `(powers` row: " 12/16 duplicate item       :   35   1.4D  13.4h ..."
+    # The ':' splits name from numbers - names contain spaces, so
+    # whitespace cannot. Owned rows leave the last two columns blank.
+    _POWER_ROW_RE = re.compile(
+        r"^\s*(\d+)\s*/\s*(\d+)\s+(\S.*?)\s*:\s*(\S+)\s+(\S+)\s+(\S+)")
+    POWERS_POLL_S = 3600.0
+    # How long a poll waits for its table. BOUNDED on purpose: the window
+    # used to stay open until a power row appeared, so a table that did
+    # not parse swallowed every line for the rest of the session - and
+    # blade_scan_line and friends run only on UNSWALLOWED lines, so the
+    # hp bars went blank while MIP-driven things carried on (live
+    # 2026-09-07). A poll that finds nothing must cost one window, not
+    # the session.
+    POWERS_WINDOW_S = 8.0
+    # The two non-row lines of the table. Recognised explicitly so the
+    # window never eats anything it has not identified - a failed poll
+    # should cost nothing at all, not 8s of output.
+    _POWER_HDR_RE = re.compile(r"^\s*(?:Tier\s+Power|-{3,}\s+-{3,})")
+
+    @staticmethod
+    def _power_seconds(field):
+        """A CooldR value in seconds, or None if it is not a duration.
+
+        RDY is availability, not a time; `2.0xB` is uses-per-reboot (the
+        few powers limited that way rather than by a timer); `--` is a
+        power you do not own and have no use count for."""
+        m = POWER_DUR_RE.match((field or "").strip())
+        if not m:
+            return None
+        n = float(m.group(1))
+        return n * {"s": 1, "m": 60, "h": 3600, "D": 86400,
+                    "S": 1}[m.group(2)]
+
+    def _powers_capture(self, clean):
+        """Parse one `(powers` row. True = swallow it.
+
+        Parsed whichever way it was asked for, but only SWALLOWED when
+        the client polled: if the player typed `(powers` they want to
+        read it."""
+        if getattr(self, "_powers_pending", False) and (
+                time.time() - getattr(self, "_powers_sent_at", 0.0)
+                > self.POWERS_WINDOW_S):
+            self._powers_pending = False    # never turned up; give it back
+            self._powers_seen_row = False
+        m = self._POWER_ROW_RE.match(clean)
+        if not m:
+            if not getattr(self, "_powers_pending", False):
+                return False
+            # The header and rule arrive BEFORE the first row, so the
+            # window cannot close on them - but nothing else is eaten
+            # either. Anything unrecognised flows through untouched.
+            if self._POWER_HDR_RE.match(clean) or not clean.strip():
+                return True
+            if not getattr(self, "_powers_seen_row", False):
+                return False
+            self._powers_pending = False
+            self._powers_seen_row = False
+            return False
+        have, mx, name, _enrg, _cool, left = (
+            int(m.group(1)), int(m.group(2)), m.group(3).strip(),
+            m.group(4), m.group(5), m.group(6))
+        self._powers_seen_row = True
+        secs = self._power_seconds(left)
+        self.powers[name.lower()] = {
+            "have": have, "max": mx,
+            "ready": left.strip().upper() == "RDY",
+            "ready_at": (time.time() + secs) if secs else None,
+        }
+        return bool(getattr(self, "_powers_pending", False))
+
+    def _power_remaining(self, p):
+        """'RDY', or the time left, recomputed from the stored ready-at so
+        it ticks down between polls."""
+        if p.get("ready"):
+            return "RDY"
+        at = p.get("ready_at")
+        if not at:
+            return "?"
+        left = at - time.time()
+        if left <= 0:
+            return "RDY"
+        if left >= 86400:
+            return f"{left / 86400:.1f}D"
+        if left >= 3600:
+            return f"{left / 3600:.1f}h"
+        return f"{max(1, round(left / 60))}m"
+
+    def _powers_due(self):
+        return (time.time() - getattr(self, "_powers_polled_at", 0.0)
+                >= self.POWERS_POLL_S)
+
+    def _powers_request(self):
+        cmd = str(self.setting("powers_command", "") or "").strip()
+        if not cmd:
+            return
+        self._powers_pending = True
+        self._powers_seen_row = False
+        self._powers_polled_at = self._powers_sent_at = time.time()
+        self.send_line(cmd, gated=False)
+
+    @staticmethod
+    def _power_tag(line):
+        """Which colour a `_powers_lines` row takes, or None for the
+        heading. Keyed on the ' - RDY' SUFFIX, not on 'RDY' appearing
+        anywhere, so a power whose name contained it could not colour
+        itself green while on cooldown."""
+        if " - " not in line:
+            return None
+        return "power_rdy" if line.rstrip().endswith(" - RDY") else "power_cd"
+
+    def _tag_powers(self, at, rows):
+        """Colour the powers rows just inserted into the info pane.
+
+        Tagged BY POSITION, not by searching the pane text: `at` comes
+        from the same list that built the block, so a tag cannot drift
+        onto another section that happens to read similarly.
+
+        A method rather than an inline loop so the APPLICATION is
+        testable, not just the colour decision - the first version of
+        this was silently dropped by a bad edit and every test still
+        passed, because they only ever checked _power_tag."""
+        for i, row in enumerate(rows):
+            tag = self._power_tag(row)
+            if tag:
+                n = at + i + 1              # tk Text lines are 1-based
+                self.info.tag_add(tag, f"{n}.0", f"{n}.end")
+
+    def _powers_lines(self):
+        """Info-pane block: the powers you OWN, ready ones first.
+
+        A power you do not own still prints a duration in CooldR - what
+        the cooldown would be at tier 1 - so tier is what separates
+        "43m left" from "you cannot do this at all"."""
+        owned = [(n, p) for n, p in (self.powers or {}).items()
+                 if p.get("have")]
+        if not owned:
+            return []
+        # Alphabetical, so a power keeps the same position every time and
+        # can be found without reading the list. Ready-vs-cooling is
+        # carried by colour, so grouping by it would only move things
+        # around as cooldowns expire.
+        return ["powers:"] + [f"  {n} - {self._power_remaining(p)}"
+                              for n, p in sorted(owned)]
+
+    def _dmg_report(self):
+        """`#dmg`. The split rows appear only once the burst has actually
+        fired: a character who cannot do it (no portals, or below the
+        level eradication needs) would otherwise read the same numbers
+        twice under two headings."""
+        o = {k: sum(d[k] for d in self.dmg.values())
+             for k in ("rounds", "hits", "damage")}
+        rows = [("Overall", o)]
+        if self.dmg["with"]["rounds"]:
+            label = (self.setting("dmg_split_label", "") or "boost").strip()
+            rows.append((f"no {label}", self.dmg["without"]))
+            rows.append((label, self.dmg["with"]))
+        self.write_local(
+            f"{'':12}{'Rounds':>10}{'Hits':>10}{'Damage':>15}"
+            f"{'DPR':>9}{'DPH':>9}")
+        for label, d in rows:
+            dpr = d["damage"] / d["rounds"] if d["rounds"] else 0
+            dph = d["damage"] / d["hits"] if d["hits"] else 0
+            self.write_local(
+                f"{label:12}{d['rounds']:>10,}{d['hits']:>10,}"
+                f"{d['damage']:>15,}{dpr:>9,.0f}{dph:>9,.0f}")
+        t = getattr(self, "taken", None) or {}
+        if t.get("rounds"):
+            dpr = t["damage"] / t["rounds"]
+            self.write_local(
+                f"{'Taken':12}{t['rounds']:>10,}{'':>10}"
+                f"{t['damage']:>15,}{dpr:>9,.0f}")
+
+    # "You cannot go east." - the MUD refusing a move. Wire-confirmed for
+    # every cardinal across the logs (2026-09-17).
+    REFUSED_MOVE_RE = re.compile(r"^You cannot go [a-z]+\.$")
+
+    def _note_refused_move(self, clean):
+        """A refused move voids the assumed guild-map cell.
+
+        `Go` assumes the last Go's target is where you are standing. That
+        holds only if the walk actually got there - and a biome walk that
+        headbutts a mountain stops partway, leaving the assumption pointing
+        at a settlement you never reached. There is no way to tell how many
+        of a burst's moves landed, so the cell is dropped rather than
+        corrected: `Go` then waits for the MUD's own position, which is the
+        behaviour this feature exists to skip but is never wrong."""
+        if self._viking_last_cell and self.REFUSED_MOVE_RE.match(clean):
+            self._viking_last_cell = None
+
     def track_combat_line(self, clean):
+        self.note_corpse_line(clean)
+        self._note_refused_move(clean)
+        # The burst line lands BEFORE the round's damage line, never
+        # after it, so latching here attributes it to the right round.
+        # str(): this runs on EVERY combat line, and the value comes from
+        # JSON - a number left in the config must not crash the tracker.
+        split = str(self.setting("dmg_split_text", "") or "").strip()
+        if split and split.lower() in clean.lower():
+            self._dmg_burst = True
         m = DAMAGE_RE.match(clean)
         if m:
+            # Only characters with the paid `numbers` perk get this line
+            # (both muds; Din has it). Once seen, this count owns
+            # self.rounds and Char.Combat's stops writing it.
+            self._dmg_line_seen = True
             hits = int(m.group(2))
             dmg = int(m.group(3).replace(",", ""))
-            bucket = ("portals" if self.vars.get("portals_active")
-                      else "noportals")
-            d = self.dmg[bucket]
+            boosted = bool(self.vars.get("portals_active"))                 or getattr(self, "_dmg_burst", False)
+            self._dmg_burst = False
+            d = self.dmg["with" if boosted else "without"]
             d["rounds"] += 1
             d["hits"] += hits
             d["damage"] += dmg
-            if not self._fff_combat:
+            if not self._fff_combat and not self._is_post_mortem(m.group(1)):
+                # The #dmg tallies above still count it - the damage was
+                # really dealt. Only the "a fight is happening" half is
+                # skipped for a swing landing on a corpse.
                 self._rounds_watch(self.rounds + 1, "damage line", clean)
                 self.rounds += 1
                 self.in_combat = True
+                # The heartbeat _combat_stale_check reads. This branch is
+                # the ONLY thing that sets in_combat once FFF is gone, so
+                # it is also the only honest "the fight is still going"
+                # signal there is.
+                self._last_damage_t = time.time()
                 self._try_combat_if()
         for _p, rx in self.kill_res:
             km = rx.search(clean)
             if km:
                 mob = (km.group(km.re.groups) if km.re.groups
                        else "?").strip()
-                self.kills.append((mob, self.rounds))
+                # self.rounds is already 0 here whenever the mud's
+                # fight-over packet beat the kill text (the normal case) -
+                # fall back to what that packet cleared. Consumed, so the
+                # next kill cannot read this fight's number.
+                # Stamped BEFORE rounds/in_combat are cleared below, so a
+                # trailing swing from this same round cannot re-arm them.
+                self._last_kill_name = mob.strip().lower()
+                self._last_kill_at = time.time()
+                self.kills.append((mob, self.rounds or self._rounds_at_end))
+                self._rounds_at_end = 0
                 self.kills = self.kills[-8:]   # newest 8; oldest rolls off
                 if self._run_on:
                     self._run_kills += 1
@@ -10429,6 +13053,10 @@ class MudClient:
                 if self._maxes_dirty:
                     self.persist_seen_max()
                 self._fire_corpse(mob)
+                # Damage TAKEN: `(cstats` is cumulative for the boot, so
+                # a snapshot per fight diffs to that fight's incoming
+                # damage. Free to call - an eternal COMMAND, not a power.
+                self._cstats_request()
                 # A killing blow from ANYONE (merc, hirdmadr, player)
                 # ends the fight a Chaossea engage started - mark it
                 # fought so the tick takes the kill-landed path even if
@@ -10449,6 +13077,8 @@ class MudClient:
         cfg = self.corpse_cfg
         if not cfg:
             return
+        if not cfg.get("on", True):
+            return           # `Corpse off` - switched off, string kept
         tog = cfg.get("toggle")
         if tog and not self.trigger_toggles.get(tog, True):
             return                              # routine switched off
@@ -10499,8 +13129,30 @@ class MudClient:
             if tog:
                 state = "on" if self.trigger_toggles.get(tog, True) else "off"
                 self.write_local(f"  gated by Toggle {tog} (now {state})")
-            self.write_local(f"  fires in {'PARTY' if self.party_on() else 'SOLO'}"
-                             " mode right now.")
+            if not cfg.get("on", True):
+                self.write_local("  SWITCHED OFF ('Corpse on' to re-arm; "
+                                 "the commands above are kept).", "#cc9933")
+            else:
+                self.write_local(
+                    f"  fires in {'PARTY' if self.party_on() else 'SOLO'}"
+                    " mode right now.")
+            return
+        # on/off switch the routine WITHOUT losing it - `Corpse off` used
+        # to delete, and from the role scope at that, so a routine set in
+        # the character layer was reported "cleared" and kept firing.
+        # `Corpse clear` is the one that wipes. Mirrors Combat's `on`.
+        if low in ("on", "off"):
+            err = self.cascade.save_entry(scope, "corpse", "on",
+                                          low == "on")
+            if err:
+                self.write_local(f"[corpse] {err}", "#cc6666")
+                return
+            self.load_layers()
+            self.write_local(
+                f"[corpse] routine switched {low}"
+                + ("." if low == "on"
+                   else " - commands kept; 'Corpse on' to re-arm."),
+                "#66cc66" if low == "on" else "#cc9933")
             return
         # which key?
         key = "solo"
@@ -10509,12 +13161,30 @@ class MudClient:
             key = m.group(1).lower()
             arg = m.group(2).strip()
             low = arg.lower()
-        if low in ("", "off", "clear", "none"):
+        if low in ("", "clear", "none"):
             err = self.cascade.delete_entry(scope, "corpse", key)
             if err:
                 self.write_local(f"[corpse] {err}", "#cc6666")
                 return
             self.load_layers()
+            # Deleting only removes it from THIS layer. A routine set
+            # before the role scope existed lives in the character layer,
+            # where delete_entry is a silent no-op - which is how `Corpse
+            # off` used to report success and keep firing. If it survived
+            # the delete it was inherited, so suppress it with an empty
+            # override at the write scope and say so.
+            if (self.corpse_cfg or {}).get(key):
+                err = self.cascade.save_entry(scope, "corpse", key, "")
+                if err:
+                    self.write_local(f"[corpse] {err}", "#cc6666")
+                    return
+                self.load_layers()
+                src = self.cascade.source_of("corpse", key) or "a broader"
+                self.write_local(
+                    f"[corpse] {key} routine was inherited from {src} "
+                    f"scope - overridden as empty here "
+                    f"({self.cascade.label_for(scope)}).", "#cc9933")
+                return
             self.write_local(f"[corpse] {key} routine cleared "
                              f"({self.cascade.label_for(scope)}).", "#cc99ee")
             return
@@ -10658,6 +13328,97 @@ class MudClient:
         it gets."""
         return ("role" if "role" in self.cascade.active_scopes()
                 else "character")
+
+    # How long in_combat may stand with no blow landing before the fight is
+    # assumed over. 3s rounds are 2s, so the default is ~4 roundless rounds.
+    COMBAT_STALE_S = 8
+
+    # How long after a kill a damage line naming that same mob is read as
+    # the tail of the killing round rather than a new fight.
+    POSTMORTEM_S = 5
+
+    def _is_post_mortem(self, target):
+        """Is this damage line landing on the mob we just killed?
+
+        A kill's last swings arrive AFTER the kill text - observed
+        2026-09-20, eight bot commands and an hpbar block later:
+
+            Din dealt the killing blow to Giant Recruit.
+            You hit Giant Recruit 4 times for 5055 damage.
+
+        That second line used to re-arm in_combat past the kill text, the
+        only thing that clears it - a phantom fight that cost a whole
+        second fight-resolution and a redundant 40s post-kill hold.
+
+        Matched BY NAME, not by a blanket timer, so killing the recruit
+        cannot silence damage against the guard beside it. The kill text
+        and the damage line share a name form ("Giant Recruit") while
+        Room.Death uses the long one ("A giant elite recruit in
+        training"), so Room.Death CANNOT substitute here.
+
+        Time-bound, never count-bound: one round can land several trailing
+        lines. The window also stops a respawn of the same name minutes
+        later being swallowed.
+
+        FRAGILITY: this hangs off the kill-text pattern. Gag it or let the
+        mud reword it and suppression silently stops, and the 40s hold
+        comes back. Every caller is inside `if not self._fff_combat`, so
+        this is 3s-only by construction - 3k still runs FFF, which ends
+        fights properly on its own.
+        """
+        name = getattr(self, "_last_kill_name", "")
+        if not name or not target:
+            return False
+        if str(target).strip().lower() != name:
+            return False
+        secs = self.setting("postmortem_s", self.POSTMORTEM_S)
+        return time.time() - getattr(self, "_last_kill_at", 0.0) <= secs
+
+    def _combat_stale_check(self):
+        """Release a stuck in_combat flag. Called once a second from tick().
+
+        FFF's K field used to be "the sole authority for ending a fight"
+        (client.py:9461). MIP is gone on 3s, so in_combat is now set by the
+        damage-line branch and cleared ONLY by a kill-text match - and a
+        fight that ends any other way (fled, outrun, wandered off, killed by
+        someone else) leaves it True forever. Run/Bot/Hunt all gate on it:
+        _run_tick latches _run_killing and then reschedules every 1.0s with
+        NO output, which is the silent hang reported 2026-09-20.
+
+        Gated on `not _fff_combat` - the same gate the damage-line branch
+        uses - so 3k, which still runs MIP, keeps FFF as its authority and
+        no timeout can override it. (GAME FACT, user 2026-09-20: 3k has no
+        GMCP at all; only 3s switched.)
+
+        A damage line is the heartbeat rather than Char.Combat's empty
+        snapshot, because Char.Combat only reports what is attacking YOU -
+        a passive mob you are killing may never appear in it, so its end
+        marker could fire while that fight is still going. Whiffing a whole
+        round sends no damage line either, which is why this is a timeout
+        and not a single missed round.
+
+        It ANNOUNCES. A bot that walks off a fight with no explanation is
+        what made this take a session to find.
+        """
+        if not self.in_combat or self._fff_combat:
+            return
+        secs = self.setting("combat_stale_s", self.COMBAT_STALE_S)
+        # getattr: #hotswap does not re-run __init__, so a session started
+        # before this existed has no timestamp - and a stale flag with no
+        # damage ever recorded is exactly the case to release.
+        if time.time() - getattr(self, "_last_damage_t", 0.0) <= secs:
+            return
+        self.in_combat = False
+        # Zero the round count too. Without a death there is no kill text,
+        # so nothing else clears it and it survives into the next fight -
+        # which ALSO defeats the psummon _ticks reset, since that reads a
+        # DROP in self.rounds as its new-fight signal
+        # (katmud_scripts._fight_stopped). _stash_rounds, not `= 0`: the
+        # recent-kills pane reads _rounds_at_end.
+        self._stash_rounds()
+        self.write_local(
+            f"[combat] no blow landed for {int(secs)}s - fight assumed "
+            "over (#cstats to check, combat_stale_s to tune).", "#888899")
 
     # ---- Combat (baseline per-fight routine) ------------------------------
     def _combat_enemy_live(self):
@@ -10843,6 +13604,8 @@ class MudClient:
             lines.append(f"vnum: {self.room_vnum}")
         if self.show_mapdetail:
             lines.extend(self._mapdetail_lines())
+        pwr_at, pwr = len(lines), self._powers_lines()
+        lines.extend(pwr)
         if self.guild.lower() == "changelings":
             lines.append(f"bioplasts: {changeling.bioplasts(self.vitals)}")
         if self.last_deltas:
@@ -10873,10 +13636,16 @@ class MudClient:
         self.info.configure(state="normal")
         self.info.delete("1.0", "end")
         self.info.insert("end", "\n".join(lines))
+        self._tag_powers(pwr_at, pwr)
         self._render_blade_bars()
         self._render_necro_status()
         self._render_bard_status()
         self._render_tracked()
+        if self.guild.lower() == "vikings":
+            if self.info.index("end-1c") != "1.0":
+                self.info.insert("end", "\n")
+            self.info.insert("end", "Carts: ", "track_hdr")
+            self.info.insert("end", self._cart_status_text(time.time()) + "\n")
         self._render_reminders()
         self._render_missions()
         self._render_newbie_missions()
@@ -10991,9 +13760,11 @@ class MudClient:
             self.info.insert("end", f"  Circle: {v['circle']}\n")
             tp = v.get("tier")
             if tp:
+                # Position only - the phrase is on the Circle line above,
+                # and the steps are not evenly spaced (see necro.py).
                 self.info.insert(
-                    "end", f"  Tier: {tp['idx'] + 1}/{tp['total']}  "
-                    f"({tp['pct']}%)\n", "necro_ok")
+                    "end", f"  Tier: {tp['idx'] + 1}/{tp['total']}\n",
+                    "necro_ok")
 
     def _render_tracked(self):
         """Append the Track section to the info pane: one line per tracked
@@ -11104,7 +13875,9 @@ class MudClient:
         (all characters), counting down. Shown on EVERY character by default,
         guild-independent, so a pending Reminder is always in view. The tick
         re-renders while any reminder is pending so the ETA stays live."""
-        rems = sorted(self._reminders_cache, key=lambda r: r.get("due", 0))
+        rems = sorted(self._reminders_cache,
+                      key=lambda r: (1 if r.get("expired_at") else 0,
+                                     r.get("due", 0)))
         if not rems:
             return
         if self.info.index("end-1c") != "1.0":
@@ -11119,8 +13892,17 @@ class MudClient:
             text = r.get("text", "")
             if len(text) > 22:
                 text = text[:21] + "…"
-            line = f"  {self._fmt_dur(left)}{rpt}{tag}: {text}\n"
-            self.info.insert("end", line, "track_low" if left <= 0 else ())
+            # A fired reminder stays here for _EXPIRED_KEEP, showing how
+            # long ago it went: the banner scrolls out of a combat window in
+            # seconds, so this is the only place it survives.
+            if r.get("expired_at"):
+                head = f"expired {self._fmt_dur(now - r['expired_at'])} ago"
+            else:
+                head = f"{self._fmt_dur(left)}{rpt}"
+            line = f"  {head}{tag}: {text}\n"
+            self.info.insert(
+                "end", line,
+                "track_low" if (left <= 0 or r.get("expired_at")) else ())
 
     def _render_missions(self):
         """Append a Missions section to the info pane: the Missionlist
@@ -11184,10 +13966,13 @@ class MudClient:
         extra = []
         if m.get("damage_type"):
             extra.append(m["damage_type"])
-        extra.append("following" if m["following"] else "not following")
+        if "following" in m:
+            extra.append("following" if m["following"] else
+                         "not following")
         if "cost_per_round" in m:
             extra.append(f"{m['cost_per_round']}/rd")
-        lines.append("  " + ", ".join(extra))
+        if extra:
+            lines.append("  " + ", ".join(extra))
         if "funds" in m:
             lines.append(
                 f"  Funds: {m['funds']}  Spent: {m.get('spent', 0)}")
@@ -11195,10 +13980,55 @@ class MudClient:
             lines.append(f"  {m['abilities']}")
         return lines
 
+    def _tin_detail_lines(self):
+        """The current room for the info pane on the tin backend (3k).
+
+        Name and exits come off the WIRE (the BAD room packet and the DDD
+        exit packet), not off the map: 3k sends no vnum, its room names
+        repeat heavily, and `auto_mapping` is off precisely because the
+        locator can't be trusted to say which room this is. The wire is
+        always right about the room you are standing in.
+
+        Landmarks and the map's note are keyed by room id, so they can only
+        be shown once the locator has actually placed us - and they are
+        marked as the map's guess, not fact.
+        """
+        name, exits, _v = mapdata.split_name(self.room or "")
+        if not name and not exits:
+            return []
+        out = [f"room: {name}" if name else "room: ?"]
+        # The DDD packet is the better exit list (BAD's parenthetical can
+        # lag a beat behind it), so prefer it and fall back to the name.
+        ex = self.exits or exits
+        out.append("exits: " + (", ".join(ex) if ex else "(none)"))
+        loc = self.locator
+        if not (loc and loc.located):
+            return out
+        rid = loc.room_id
+        # Room number after the name, e.g. "room: Section 47 [12345]".
+        # It is the LOCATOR's id, not the wire's - 3k sends no vnum - so
+        # it is the map's claim about where you are, and showing it is
+        # what makes a drifting locator visible instead of silent. No
+        # bracket at all means the locator has not placed us.
+        out[0] += f" [{rid}]"
+        tags = sorted(nm for nm, d in self.landmarks.items()
+                      if d.get("rid") == rid)
+        if tags:
+            out.append("landmark: " + ", ".join(tags))
+        room = self.tmap.rooms.get(rid) if self.tmap else None
+        note = (getattr(room, "note", "") or "").strip() if room else ""
+        if note:
+            out.append("notes:")
+            for ln in note.splitlines():
+                out.append(f"  {ln}")
+        return out
+
     def _mapdetail_lines(self):
         """The current room's exits + notes for the info pane (sqlite
         backend, `Toggle mapdetail` on). Cheap reads off the open db."""
-        if self.map_backend != "sqlite" or self.mapdb is None:
+        if self.map_backend != "sqlite":
+            return self._tin_detail_lines()
+        if self.mapdb is None:
             return []
         v = self._sql_cur_vnum
         if v is None:
@@ -11382,6 +14212,12 @@ class MudClient:
             self.connect()
         elif name == "disconnect":
             self.disconnect()
+        elif name == "mapdebug":
+            self._map_debug = not getattr(self, "_map_debug", False)
+            self.write_local(
+                "[map] debug " + ("ON - narrating every send and room "
+                                  "packet." if self._map_debug else "off."),
+                "#66cc66" if self._map_debug else "#8899aa")
         elif name == "reload":
             self.reload_cascade()
             self.load_scripts(announce=True)
@@ -11591,20 +14427,7 @@ class MudClient:
                     d.update(rounds=0, hits=0, damage=0)
                 self.write_local("Damage tracker reset.")
                 return
-            o = {k: sum(d[k] for d in self.dmg.values())
-                 for k in ("rounds", "hits", "damage")}
-            rows = [("Overall", o),
-                    ("noportals", self.dmg["noportals"]),
-                    ("portals", self.dmg["portals"])]
-            self.write_local(
-                f"{'':12}{'Rounds':>10}{'Hits':>10}{'Damage':>15}"
-                f"{'DPR':>9}{'DPH':>9}")
-            for label, d in rows:
-                dpr = d["damage"] / d["rounds"] if d["rounds"] else 0
-                dph = d["damage"] / d["hits"] if d["hits"] else 0
-                self.write_local(
-                    f"{label:12}{d['rounds']:>10,}{d['hits']:>10,}"
-                    f"{d['damage']:>15,}{dpr:>9,.0f}{dph:>9,.0f}")
+            self._dmg_report()
         elif name == "party":
             a = arg.strip().lower()
             if a in ("on", "off"):
@@ -11837,20 +14660,47 @@ class MudClient:
                 pass            # handled by guild-map coordinate nav
             elif self.guild.lower() == "vikings" and                     not viking.map_landmarks(self.viking_state):
                 # Otherwise the room-map walker answers "No landmark or
-                # speedrun '<name>'", which reads as a typo when the POI
-                # feed simply hasn't finished a push cycle yet.
-                self.write_local("[viking nav] guild-map POIs still "
-                                 "loading - try again in a moment.",
-                                 "#cc9933")
+                # speedrun '<name>'", which reads as a typo. It is not one:
+                # the POI names come from MIP's VMAPL, and since MIP went
+                # away (2026-09-15) no GMCP package carries them - so this
+                # is permanent, not a push cycle that has not finished.
+                # The grid and the live position both arrive, so point the
+                # player at the form that still works.
+                self.write_local(
+                    "[viking nav] no POI names - the mud sends no VMAPL "
+                    "over GMCP, so landmarks cannot be looked up by name. "
+                    "Walk to a cell instead: Go <x>,<y>  (#vmarks "
+                    "lists what is on the map).", "#cc9933")
             else:
                 self.start_go(arg.strip())
         elif name == "vmarks":
             marks = viking.map_landmarks(self.viking_state)
-            if not marks:
-                self.write_local("No guild-map landmarks "
-                                 "(POIs need mip_map on).")
             for nm, (x, y, label) in sorted(marks.items()):
                 self.write_local(f"  ({label}) {nm} @ {x},{y}")
+            # Anything the grid shows as a POI that no name covers. With
+            # VMAPL gone the names come from WORLD_POIS, which cannot know
+            # about a settlement founded since the last capture - so list
+            # the leftovers rather than let them be invisible. Go takes a
+            # cell, so they are still reachable.
+            pois = viking.map_glyph_pois(self.viking_state)
+            if not pois and not marks:
+                self.write_local("No guild map loaded yet.", "#cc9933")
+                return
+            placed = {(x, y) for x, y, _lab in marks.values()}
+            spare = [(x, y, ch) for x, y, ch in pois if (x, y) not in placed]
+            if spare:
+                self.write_local(
+                    f"  {len(spare)} map feature(s) with no known name "
+                    f"(founded since the last VMAPL capture?) - "
+                    f"reach one with Go <x>,<y>:", "#cc9933")
+                for x, y, ch in spare:
+                    label = viking.POI_LABEL.get(
+                        viking.GLYPH_POI.get(ch, ""), ch)
+                    self.write_local(f"  ({label}) ? @ {x},{y}")
+        elif name == "vsettlements":
+            self.cmd_vsettlements(arg)
+        elif name == "pouchtrim":
+            self.cmd_pouchtrim(arg)
         elif name == "vn":
             self.cmd_vn(arg)
         elif name == "track":
@@ -11861,6 +14711,8 @@ class MudClient:
             self.cmd_bot(arg)
         elif name == "hunt":
             self.cmd_hunt(arg)
+        elif name == "fence":
+            self.cmd_fence(arg)
         elif name == "chaossea":
             self.cmd_chaossea(arg)
         elif name == "run":
@@ -11898,16 +14750,15 @@ class MudClient:
                 self.write_local(f"  {nm:<16} {'landmark':<9} "
                                  f"{d.get('desc','')}")
                 shown += 1
-            self.write_local(f"{shown} entries. 'go <name>' to "
+            self.write_local(f"{shown} entries. 'Go <name>' to "
                              "travel; filters: shop mob area eq misc "
                              "clan crafting landmark")
         elif name == "landmark" and self.map_backend == "sqlite":
             self.sql_landmark(arg)
         elif name == "landmark":
             bits = arg.split(None, 2)
-            if not bits:
-                self.write_local("Usage: #landmark add <name> [desc] "
-                                 "| #landmark del <name>", "#cc6666")
+            if not bits or bits[0] == "list":
+                self._tin_landmark_list()
             elif bits[0] == "add" and len(bits) > 1:
                 if not (self.locator and self.locator.located):
                     self.write_local("Not located on the map - can't "
@@ -12271,11 +15122,17 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
       landmarks; #go <name> walks there, or click the Map tab)
   VN <id> <start> <dest>          (Vikings: run a newbie fetch errand -
       accept <id>, walk to <start>, fetch, walk to <dest>, submit)
-  Corpse | Corpse [solo] <cmds> | Corpse party <cmds> | Corpse off
+  Corpse | Corpse [solo] <cmds> | Corpse party <cmds> |
+  Corpse on | Corpse off | Corpse [solo|party] clear
       (on-kill loot routine: bare Corpse shows the solo/party commands,
       their source layer and which is active. Separate commands with '/',
       NOT ';' - 'Corpse bury corpse/glance' is stored as
-      'bury corpse;glance'. Saved to the character layer.)
+      'bury corpse;glance'. Saved to the role layer (this character, in
+      this guild, on this mud).
+      'Corpse off' SWITCHES IT OFF but keeps the commands, so 'Corpse on'
+      re-arms without retyping them; 'Corpse clear' is the one that wipes
+      the string. A routine inherited from a broader layer can't be
+      deleted from here, so clear overrides it as empty and says so.)
   Mapfind <text> | Mapgo <id>
       (tin-backend map, e.g. 3k: Mapfind lists every room whose name or
       area matches, with each one's id and EXIT LIST - which is how you
@@ -12295,9 +15152,11 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
       finished) unless a bot/walker is driving. '/' inside one entry for
       multiple commands, same as Corpse. Saved to the character layer.)
   Reminder <time> <text> | Reminder every <time> <text> | Reminder |
-      Reminders | Reminder clear [id|all]   (timer shared across muds and
-      characters, e.g. 'Reminder 5m buff wore off', 'Reminder 1h30m
-      reboot soon'. Bare Reminder/Reminders lists what is pending.)
+      Reminders | Reminder clear [id|all|expired]   (timer shared across
+      muds and characters, e.g. 'Reminder 5m buff wore off', 'Reminder
+      1h30m reboot soon'. Bare Reminder/Reminders lists what is pending.
+      A fired reminder stays listed as expired for an hour, then goes;
+      'Reminder clear expired' drops them early.)
   Track <name> [low] | Untrack <name> | Track   (Necro: watch a power/
       reagent count in the info pane; dim-red when below <low>. Counts
       refresh from 'powers' / 'gs' readouts. Bladesinger: Track a skill
@@ -12341,16 +15200,34 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
       (the post-kill glance), NOT during a fight - a watch mob that arrives
       and leaves mid-fight is missed; one still standing there is caught by
       that glance. Both keywords are
-      single words. Works with the mapless and <dir> forms too:
-      'Hunt mapless einherjer eihwaz', 'Hunt north einherjer eihwaz'.)
-  Hunt debug | Bot debug   (toggle per-room reporting: ready time, trigger,
-      mob/player flags, decision.)
+      single words. Works with the mapless and Fence forms too:
+      'Hunt mapless einherjer eihwaz', 'Fence se einherjer eihwaz'.)
+  Fence <dir> [target] [watch]   (THE DIRECTION IS THE WAY YOU WILL *NOT*
+      GO. Hunts in any direction from this room EXCEPT <dir> - so
+      'Fence se' beside a se exit you want left alone hunts everything
+      else and never takes it. It DOES fight in the room you are standing
+      in. <dir> must be a real exit of that room, and may be a NAMED one
+      ('Fence leave', 'Fence enter'), not just a compass point.
+      Fence is for staying on ONE level: another level usually means
+      another difficulty band, so a Fence run is locked to the eight
+      compass directions for its whole duration - no u, d, enter or leave,
+      whatever Toggle flat says (the toggle itself is left alone).
+      Typical use: speedrun in, step past the entrance room, then Fence
+      the way back so the roam can't wander out or re-hit a non-combat
+      NPC at the door. Was 'Hunt <dir>', which meant the opposite - the
+      direction to START in - and is now refused with a pointer here.)
+  Hunt debug | Bot debug | Fence debug   (toggle per-room reporting: ready
+      time, trigger, mob/player flags, decision.)
   Chaossea | Chaossea fight | Chaossea resume | Chaossea clear |
       Chaossea off  (Sea of Chaos: builds a
       session-local fake-room map from directions taken (no roomid - that
       zone shares one vnum and regenerates per visit). Movement always
       dives a 'down' exit on sight, else prefers unexplored directions,
       else BFS-retraces the temp map to the nearest still-unexplored room.
+      Never goes UP (nor 'out'): the Sea is descended, and climbing let
+      the frontier plan a route the dive rule then cancelled on arrival,
+      oscillating between two rooms forever. A room whose only way on is
+      up is a dead end and stops the bot.
       Plain Chaossea: examines every mutant it meets ('examine mutant'/
       'mutant 2'/...), fights ones carrying 'a chaotic charm' or 'a cube of
       raw chaos' (whichever you still need), or that aggro/block you, loots
@@ -12360,6 +15237,18 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
       condition besides deadman/manual off. Deadman trip stops either mode
       in place - no verified path home. 'Chaossea clear' wipes the temp map
       and re-seeds from this room without restarting.)
+  Run <bot> here          (start at the step for the room you are in -
+      Mapgo to the room first, then this picks up where the run left off,
+      e.g. after Section Z's 'pause game'. Reports the choices when the
+      route passes through the room twice, and says so plainly when the
+      bot's path can't be placed on the map.)
+  pause game / unpause game   (Section Z, 3k: not client commands - they
+      go to the MUD as typed - but 'pause game' notes the room you are in
+      (saved per character, so it survives a relaunch) and 'unpause game'
+      pins the map back to it on arrival, so you can go straight to
+      'Run <bot> here' instead of Mapfind/Mapgo. If the unpause is refused
+      mud-side - dungeon cleared or expired, or 'reset dungeon' made a new
+      instance - the room text won't match and the map is left alone.)
   Run <bot> [loop] [step] | Run resume | Run | Run off   (path bot from
       muds/<mud>/bots/*.json: walks the route; kills target mobs (whole-
       line match, or a keyword via "contains"); loots via after_kill;
@@ -12397,6 +15286,8 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
   Vskills                  (Viking: send 'vskills' and READ it (not swallow)
       to refresh the Stats tab's GXP pools + per-skill training costs. Daler
       and the 4 pools stream live over MIP; the skill list updates on demand.)
+  Pouchtrim                (Viking: read 'vpouch' and discard all but one
+      of every T1 mushroom; T2+ is left alone.)
   Missionlist [top5]        (Viking: send 'vtrade prices' + 'vmission
       list' and recommend which missions to accept for the highest total
       NET daler (reward minus the market value of the goods delivered)
@@ -12414,9 +15305,16 @@ CLIENT COMMANDS   (full reference: docs/COMMANDS.md)
   Scan [name] | #mobs | #mob <name>   (mob database: Scan/#mob <name>
       searches, no arg = count. Any character can look up; auto-filled from
       Din's 'vscan1' reports, keyed by name+area of the current room.)
+  #landmark | #landmark list                  (tin: list saved landmarks)
+  Landmark | #landmark [list]   (list saved landmarks with their room
+      numbers; 'Go <name>' travels to one. Both backends.)
   #landmark add <name> [desc] | #landmark del <name>
   #map here | on | off | rate | new   (mapping mode & room info;
       'new' bootstraps a blank map from the current room)
+  #mapdebug   (tin maps: narrate every sent command and room packet -
+      what the map said the exit led to, whether the marker moved,
+      and whether a packet spent a move credit or went to on_room.
+      For diagnosing a marker that stops advancing. Off by default.)
   #clearchat | #chatclear         (clear the chat/tell pane)
   speedwalk: line starts with ';' -> ;15el8esr(open gate)q
       letters from cascading 'speedwalk' map (see global.json);

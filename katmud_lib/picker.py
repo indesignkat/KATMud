@@ -12,7 +12,7 @@ import sys
 import tkinter as tk
 from tkinter import messagebox, simpledialog
 
-from . import credentials, hub, paths, profiles
+from . import credentials, hub, paths, profiles, widgets
 
 BG = "#1a1a1a"
 FG = "#ccccdd"
@@ -243,10 +243,11 @@ class Picker(tk.Tk):
         super().__init__()
         self.title("KatMUD")
         self.configure(bg=BG)
-        self.geometry("460x440")
         self.data, err = profiles.load()
         if err:
             messagebox.showerror("katmud", f"profiles.json: {err}")
+        self.geometry(self.data["settings"].get("picker_geometry")
+                      or "460x440")
         self.rows = []          # listbox line index -> profile id or None
 
         tk.Label(self, text="KatMUD - choose a character", bg=BG,
@@ -254,7 +255,7 @@ class Picker(tk.Tk):
             .pack(pady=(10, 4))
         self.lb = tk.Listbox(self, bg=FIELD_BG, fg=FG,
                              selectbackground=SEL_BG,
-                             font=("Consolas", 11), activestyle="none")
+                             font=(widgets.MONO, 11), activestyle="none")
         self.lb.pack(fill="both", expand=True, padx=12, pady=4)
         self.lb.bind("<Double-Button-1>", lambda e: self._launch())
         self.lb.bind("<Return>", lambda e: self._launch())
@@ -281,7 +282,13 @@ class Picker(tk.Tk):
     def _close(self):
         if self._first_run_job:
             self.after_cancel(self._first_run_job)
+        self._save_geometry()
         self.destroy()
+
+    def _save_geometry(self):
+        # Merged, not a whole-file save - a running client may have
+        # written profiles.json since the picker loaded it.
+        profiles.save_settings({"picker_geometry": self.geometry()})
 
     # -------------------------------------------------------- list
     def _fill(self):
@@ -326,6 +333,7 @@ class Picker(tk.Tk):
         profiles.touch(self.data, pid)
         ensure_hub_running()
         spawn_client(pid)
+        self._save_geometry()
         self.destroy()          # transient: picker exits after spawn
 
     def _new(self):

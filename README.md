@@ -1,7 +1,8 @@
 # KatMUD v7
 
 MIP-integrated MUD client for 3Scapes/3Kingdoms. Formerly pymud.
-Tkinter, Windows-native, one process per character.
+Tkinter, built on Windows (macOS support is new - see below), one
+process per character.
 
 ## Install
 
@@ -35,6 +36,29 @@ using muds/3s/guilds/vikings.json as the section reference.
 The picker spawns each client as a detached process and exits. A
 crash in one character can never take down another. Startup failures
 land in logs/crash.log (pythonw has no console).
+
+## Running on macOS (untested)
+
+The client is plain Python + Tkinter, so it should run on a Mac, but
+it has only ever been played on Windows. The Mac-specific pieces -
+tell sounds (via the built-in `afplay`), right-click / Ctrl-click
+menus, Cmd +/- font size, and the Menlo monospace font - were written
+without a Mac to test on.
+
+1. Install Python 3.10+ from python.org. Use that installer, not
+   Homebrew's Python: it bundles a working Tk.
+2. In Terminal:
+
+        pip3 install keyring
+        cd /path/to/KATMud
+        python3 katmud.pyw
+
+   Passwords go in the macOS Keychain.
+
+Expect cosmetic rough edges: macOS ignores background colours on
+standard Tk buttons, so some coloured buttons may show grey. If you
+run it on a Mac, reports of what looks or works wrong are very
+welcome - screenshots plus the contents of logs/crash.log help most.
 
 ## Configuration cascade
 

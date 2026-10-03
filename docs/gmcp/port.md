@@ -232,6 +232,29 @@ wrongly fired.
 hence the 1253 on an orc that had been scrapping long before you arrived.
 Only the empty snapshot is used.)
 
+**2026-09-11: this closed the GMCP half only, and the leak stayed open.**
+FFF has its own fight-over and fight-start packets, and none of them touched
+`self.rounds`. `mip_vitals_composite` does `self.vitals.update(upd)` *before*
+the round branch, so that branch's `len(enemy) > 1` guard already sees the
+new value — a fight-end `N~0~K~~` (106 of 109 ends in
+`logs/din-20260909.log`) was skipped by its own guard, `K~~` with no `N~0`
+(the other 3) had nothing to skip, and back-to-back aggro sends no clear
+packet at all. The first packet of the next fight carries `K` and `L` but no
+`N`, so `on_vitals` read the previous fight's count against a 100% enemy.
+Fixed by zeroing `self.rounds` whenever the FFF `K` field *changes*, ahead of
+the round branch, so a packet carrying both `K` and `N` still ends on `N`.
+FFF is the transport that always runs; `Char.Combat` stays as-is, additive
+and covering the passive-mob case. Tests: `FffRoundResetTest`.
+
+**Same day, that zeroing broke the recent-kills pane.** The mud sends its
+fight-over packet *before* the killing-blow text — 106 of 106 fight ends in
+`logs/din-20260909.log`, 2 to 8 lines ahead — so `track_combat_line` recorded
+every kill as `(mob, 0)`; a ~400-round Aurothon Guardian logged as `(0)` while
+the topbar's live readout stayed right. Both fight-end handlers now call
+`_stash_rounds`, which keeps the count it clears so the kill line can still
+read it, and never stashes a zero — so whichever transport clears first keeps
+the real number. A *new* enemy still drops both. Tests: `test_kill_rounds.py`.
+
 ### Guild.State: pools, and blur timing at full precision
 
 Guild.State has no shared schema — the field names are guild-specific — so
@@ -757,3 +780,929 @@ biome.
   `WSTOCK` sweep (batch identity, optional grade, wire order), and
   `PerConnectionResetTest`, which reads `connect()`'s source to guard
   that all four per-connection GMCP attributes are cleared there.
+
+## 2026-09-15: MIP is gone, and the Viking window filled up again
+
+The mud disabled MIP. `logs/mip_20260915_132858.log` carries **zero BBE
+packets** against 25125 in `logs/mip_20260903_135126.log` of the same
+feeds, and the guild channel confirms it ("had to be disabled for now",
+then "eventually mip will definitely go away"). The user has since
+confirmed it is not coming back. The wire is the proof; the chat is
+corroboration.
+
+That check is only meaningful because `handle_mip` writes to the
+`#mipraw` buffer and the session log at the TOP of the function, before
+the supersession test and before `mip_viking`'s per-key filtering. Zero
+BBE in the log means zero BBE on the wire, not zero surviving our own
+filter.
+
+### Why it was empty for everyone, not just some tabs
+
+`gmcp_on` read `self.setting("gmcp", False)`. GMCP was opt-in while both
+transports ran, which was right then and wrong the moment MIP stopped: a
+player who never ran `Toggle gmcp` got *nothing*. Now defaults to `True`.
+`set_setting("gmcp", ...)` is written only from `_toggle_gmcp`, so a
+character who never touched the toggle has no stored value and picks the
+new default up; only someone who explicitly turned it off stays off.
+
+### THE RULE is relaxed
+
+"Synthesize only when every field the parser reads is present" existed to
+stop a partial record retiring a working BBE feed. There is no feed to
+retire any more, so holding a key back just leaves a tab blank. Now:
+synthesize what GMCP sends and leave absent fields empty.
+
+Per-KEY supersession STAYS - inert with no BBE arriving, and the only
+cheap way back if it ever returns. And a POSITIONAL record missing a
+MIDDLE field is still dropped whole (`_req`), because every later field
+would shift one slot and the parser would read garbage rather than
+nothing. `_rec` (fill with empty) is used only where the gap keeps its
+slot.
+
+### The login burst is the whole surface
+
+Packets carry `"full": 1` at login and not after - `Guild.City`: **0 of
+40** mid-session packets, **8 of 8** at login. Two mid-session captures
+that day looked like most of the feed was missing; it was not. Every
+mapping added here is pinned to `logs/gmcp_20260915_135025.log`.
+
+Four packages had no handler at all. `Guild.TradeGoods` already had a
+synthesis written, but `handle_gmcp` dispatches to
+`gmcp_<package lowercased>` and `gmcp_guild_tradegoods` did not exist -
+so TGOODS was dead code. `Guild.Warehouse`, `Guild.CityBuildings` and
+`Guild.Map` are new.
+
+### What the held-back keys were waiting for
+
+| Key | was missing | GMCP sends |
+|---|---|---|
+| `LONGSHIP`, `VOYAGE` | `crew_traits`, `ship_traits` | `longship_crew_traits`, `longship_ship_traits`, and the `voyage_*` pair |
+| `CARTS` | `legs` | `cart_legs` |
+| `FARM` | `shroom_id`, `meta\|weather_mod` | `farm_plots[].name`, `farm_meta.wmod` |
+| `BQUEUE` | the `used/cap` header | `bqueue_used`, `bqueue_max` |
+| `BLOT` | an object, not a string | `blot` |
+| `WSTOCK` | the real capacity header | `wstock_cap` = **8085**, the exact number the tier table got wrong |
+| `THRALLS` | 20 named vs 16 positional | GAME FACT (user): thralls assigned per building, **all 20 valid**. `parse_thralls` reads the named form now |
+
+### Three shapes that needed more than a field list
+
+**Parent + child on different pages.** A raid and its plundered goods, a
+cart and its legs, a refinery and its curing grades arrive as two flat
+lists on DIFFERENT pages of one sweep (refinery on page 5, its grades on
+page 3). Stitching them inside one packet silently drops every child.
+They are buffered as two groups and joined once the sweep is whole, with
+the child keyed `<parent id>#<page><index>`.
+
+**Guild.Map is three separate sweeps** under one package, and they
+disagree about which pages carry rows: `terrain` runs pages 1-7, `east`
+and `south` run 2-8, and south's last page is short because MES has one
+row fewer than MEE by design. Row index is therefore ARRIVAL ORDER within
+the sweep, never the page number. `w`, `h` and `pos` never share a
+packet, so VMAPH is assembled from `_viking_map_dims`, which a reconnect
+reseeds from the VMAPH already in `viking_state`.
+
+**CPEND is the outer grid side, not the interior.** `colony_grid` indexes
+`CPT00..CPT<CPEND-1>` over 20 terrain rows while GMCP's `dim` is 12;
+`margin` is 4 and so is `COLONY_INTERIOR_OFFSET`, so `CPEND = dim +
+2*margin`.
+
+### Verified
+
+Replaying all 540 `Guild.*` packets of the login capture through the real
+`_viking_gmcp` produces **197 state keys**, every consuming `parse_*`
+returns data, and the real `VikingStatus` window renders **all 12 tabs**
+with content - the Map canvas draws 2451 items, `warehouse_cap` reads
+8085, `colony_grid` builds 20x20 with 47 buildings, `wall_rows_missing`
+is 0. Tests: `tests/test_viking_gmcp_only.py`, plus the four
+`test_viking_gmcp.py` cases that asserted the old hold-back rule, updated.
+
+### Still dark
+
+`VMAPL` - the named landmark/POI list - has **no GMCP source in any
+capture**. The map draws and pathfinding has its graph (VMAPH + MEE/MES),
+but `map_landmarks` returns nothing, so `Go <name>`/`VN` name resolution
+and the Map tab's click-to-walk POI list have no targets. Worth an admin
+question.
+
+`STANDINGS`, `VREP`, `GRUDGES`, `SEVENTS`, `CELLAR`, `ENN`, `VCHH` and
+`GOD_POWER*` did not appear in any capture either, but these are the
+command-triggered class (the same shape as `Vskills`) - they should
+arrive when the player runs the matching in-game command, and will show
+up in live testing.
+
+### `Go` by coordinate (2026-09-15, same day)
+
+`Go <name>` resolves against `map_landmarks`, which reads **VMAPL** - the
+one Viking feed with no GMCP source in any capture. Names are therefore
+dead until the mud sends it, and the old failure message ("POIs still
+loading - try again in a moment") was wrong in a way that wasted the
+player's time: nothing was loading.
+
+Nothing else about the walk needs VMAPL. `Guild.Map.pos` arrives on
+**every step** (`logs/gmcp_20260915_211225.log`: 35,17 -> 35,16 -> 36,16
+-> 36,17 -> 35,17, one packet each) and the MEE/MES grid is complete, so
+`viking_walk_to` has everything it wants. `Go 35,17` (or `Go 35 17`) now
+goes straight to it. A single number or a triple is still treated as a
+name, so nothing that used to resolve stops resolving.
+
+`#vmarks` falls back to the terrain grid when there are no names,
+listing every non-ground cell by GLYPH and coordinate - 70 features on
+the live map. Deliberately no invented names.
+
+**What the glyphs mean is NOT pinned**, and the code says so. The one
+datum: the lone `M` at (35,17) is the Midgard ENTRANCE - the player
+walked there and the room carried an `enter` exit to 50957 that its three
+neighbours did not. `L` occurs 13 times against the 13 non-capital
+villages in `Guild.Trade.routes`, which is suggestive and nothing more.
+
+**GAME FACT (user, 2026-09-15): "Midgard" names the biome AND the
+guildhall, and the whole biome reports `Room.Info.area` "Midgard".** So
+the area field identifies nothing inside the biome. An earlier note here
+offered it as supporting evidence for the `M` cell and as a possible way
+to learn POI names by walking - both wrong, and the idea is dead: the
+`enter` exit is the only evidence, and no walk will ever yield a second
+name. Getting out of the biome means reaching that entrance cell, which
+is exactly what `Go 35,17` is for.
+
+Incidentally this confirmed the VMR synthesis outright: a full grid
+diffed against the mud's own `vmap` agrees **cell for cell**, 35x70, with
+only a glyph substitution between them (`A`/`^`, `+`/`.`, `.`/`c`,
+`W`/`~`) and exactly one leftover - the `X` the mud overlays at the
+player's own position.
+
+Tests: `GoByCoordinateTest`, `GlyphPoiFallbackTest`.
+
+### `Go <name>` recovered from the old MIP logs
+
+The user's point: the coordinates never changed, and MIP used to send
+them. Both halves check out, and the logs say exactly how far to trust it.
+
+Every VMAPL capture from **2026-07-17 onward** agrees with every other
+AND with tonight's grid - **0 mismatches** across 61 POIs. The
+**2026-06-14** capture disagrees on 16 of 46, every one of them by the
+same `(+3, +1)`: a grid RE-ANCHOR, not settlements moving. (The
+`map_landmarks` docstring used to say "settlements move, so this is
+always read fresh" - that re-anchor is what it was really describing.)
+
+Unioning the post-re-anchor captures recovers **21 world POIs**, and the
+cross-check against the live VMR grid is exact: all 21 land on their
+type's glyph, and **zero M/L cells are left unnamed**. That also pins the
+legend outright - `M` capital, `L` lineage, `P` player village, `*`
+mentor, `S` seer, `T` blot, `F` farm, `R` ruins - which accounts for all
+70 features (21 world + 49 player villages).
+
+So `WORLD_POIS` stands in when VMAPL is absent, **but only for entries
+whose cell still carries the right glyph in the live grid**. That check
+is the whole safety of it: the map was re-anchored once already, and a
+frozen table across the next one would walk the player confidently to the
+wrong cell. Verifying against the grid means a re-anchor silently empties
+the table and `Go` says it has no names, rather than lying.
+
+**Player villages are included.** GAME FACT (user, 2026-09-15): a player
+CANNOT move their settlement - and the grid agrees, 48 of the 49 in the
+old VMAPL still sitting on a `P`. The 49th, Callheim (3,21), reads plain
+ground: it was razed, and the glyph check drops it rather than the table
+having to know. A village founded since the last capture simply does not
+resolve (one such cell on the 2026-09-15 grid).
+
+**Names come from the LONGEST form seen at each cell, never the most
+frequent.** A VMAPL chunk that starts mid-record loses the head of the
+name, and that truncation can be the majority form: `VMAPL_3of4^^ormhofn
+|29|12|normal` appears 651x against `player|stormhofn|29|12|normal` 147x.
+There is no ormhofn (user confirmed) - a cut name is always a SUFFIX of
+the real one, so longest wins. `player|ein|30|6|walker` and
+`player|riya|62|21|camma` arrive as complete records, so those short
+names are genuine.
+
+69 POIs resolve by name again - all 14 `Guild.Trade.routes` villages, the
+mentors and landmarks, and 48 player settlements. `VN` works, and
+`Go 35,17` still handles anything unnamed.
+Tests: `WorldPoiFallbackTest`.
+
+
+### `settlements` is authoritative, and `Vsettlements` reads it
+
+The mud has a `settlements` command that prints every settlement with its
+coordinate. It is the source the VMAPL reconstruction was standing in
+for, and it validated that reconstruction outright: **62 shared entries,
+zero coordinate disagreements.**
+
+It added two things the logs could not:
+
+* **Kattegat (39,14)**, founded after the last VMAPL capture - the single
+  unnamed `P` the grid had been showing all along.
+* The real spelling of the names a chunk boundary had clipped
+  (`Stormhofn`, `Ein`, `Riya`, `Nethells`, `Darkcity`, `Jarn-hesturheim`).
+
+It also closed out Callheim. GAME FACT (user): it never existed - Jarl
+Call's settlement is Kattegat, and Callheim was a transient from a spell
+when Skuggis was debugging the biome and it had to be re-made. The glyph
+check had already dropped it, which is the safety property working on a
+real case before anyone asked it to.
+
+`Vsettlements` sends `settlements` and merges the reply, the same
+on-demand read `Vskills` does for skill costs. The readout is
+authoritative for the three SETTLEMENT types, so those are replaced
+wholesale - which is what retires a razed one - while the POIs it does
+not list (mentors, seer, blot grove, farm, ruins) keep their
+VMAPL-derived entries. A garbled capture merges nothing rather than
+half-replacing the table.
+
+So the table is no longer frozen: a settlement founded next month needs
+one command, not an edit. 70 POIs resolve by name today.
+Tests: `SettlementsReadoutTest`.
+
+
+## 2026-09-20: the room path had not caught up, and the mapper was dead
+
+`logs/gmcp_20260920_190531.log` / `logs/din-20260920.log` (Din,
+bladesinger). The mapper tracked nothing on 3s: no `@` movement, no
+charting.
+
+**It was not a mapper bug.** The 2026-09-15 MIP removal was applied to the
+Viking feeds but never to the room path, and the room path was the one
+thing still leaning on a MIP packet that stopped coming.
+
+### The proof
+
+`logs/din-20260920.log` line census over 27 real moves: **96 GMCP, 134
+LOCAL, 0 MIP**. That census is only meaningful because `handle_mip` tees
+to the log at the TOP of the function, *before* the supersession test —
+same property that proved the BBE removal. Zero `^MIP ` means zero on the
+wire, not zero surviving our own filter.
+
+### Why zero DDD killed both modes
+
+`sql_on_ddd` is reachable **only** from `mip_exits`, which is reachable
+**only** from the MIP `DDD` tag. So with MIP gone:
+
+* `sql_follow_ddd` is the **only** setter of `_sql_cur_vnum`, the value
+  `@` follows. `gmcp_room_info` synthesized the BAD half only, and
+  `sql_follow_bad` refreshes the room NAME and nothing else — so
+  **following froze**, showing the right name in the wrong place.
+* `sql_reconcile_chart` early-returns while `_sql_bad is None or
+  _sql_ddd is None`. `_sql_ddd` could never arrive, so **charting never
+  charted a room**.
+
+### The fix: synthesize both halves
+
+`gmcp_room_info` now emits the DDD string as well
+(`"~".join(dirs + [str(num)])`) and feeds it to `mip_exits`. The old
+objection — doing both would run the follow/chart path twice per move —
+died with the live DDD.
+
+Three things the synthesis has to get right:
+
+* **BAD before DDD.** `sql_reconcile_chart`'s first branch reads *a DDD
+  with no BAD pending* as an in-place glance refresh and **releases the
+  gate**. Emitting DDD first would trip that on every real move. 3s sent
+  BAD first on the wire; the synthesis keeps that order.
+* **Through `mip_exits`, not `sql_on_ddd`.** Same `map_backend` guard
+  `mip_room` crosses.
+* **After the `_room_refresh_info_due` guard**, so a solicited
+  `#roomrefresh` reply still charts nothing.
+
+An exitless room (dark rooms report none) still emits its DDD — the vnum
+*is* the location, and dropping the packet for want of exits would freeze
+`@` for exactly the rooms least able to afford it. `"280"`, not `"~280"`.
+
+Tests: `RoomInfoDrivesLocationTest` asserts on `_sql_cur_vnum` through the
+real `sql_*` chain rather than on a mock call, and fails `None != 11`
+against the pre-fix code.
+
+### STILL OPEN: the glance signal has no replacement
+
+`Room.Info` fires on **movement only** — the mud still sends nothing for
+`look`/`glance`. The bots' in-place "the room displayed" signal
+(`_chaossea_on_room_packet`, reached via `sql_follow_ddd`) is therefore
+restored *on movement* and still absent *in place*. `Room.Refresh` is
+documented but dead on 3s, so there is no structured replacement yet.
+Post-kill re-scan is the case to check first.
+
+
+## 2026-09-20 (2): the enemy bar, and a full FFF casualty audit
+
+`logs/gmcp_20260920_192707.log` (Din, bladesinger, mid-fight). The enemy
+status bar never populated.
+
+Same root cause as the mapper: `vitals["enemy"]` and `vitals["enemycond"]`
+came from FFF's `K` and `L` fields (`protocol.py` `COMPOSITE_TEXT` /
+`COMPOSITE_NUMERIC`) and **nothing else writes them**. FFF died with MIP.
+
+`Char.Combat` carries both — `attacker` and `attacker_hp`, which
+`gmcp.txt` states is a health **percentage**, exactly what
+`update_vitals` wants (`bar.set(enemycond, 100)`). The handler existed but
+only consumed the *empty* end-of-fight snapshot.
+
+### What the fix had to carry over, not just the two fields
+
+* **The empty snapshot must now CLEAR the bar.** Once this handler
+  populates it, it is the only thing that empties it.
+* **The enemy-change round reset** (`client.py:9430` on the FFF side).
+  Back-to-back aggro sends no clear packet at all, so the old fight's
+  count survives and `katmud_scripts` rule 1 (`rounds >= 5` + a fresh
+  enemy) fires a psummon on round ONE. Four psummon leaks trace to this.
+  The guard has to live on whichever transport supplies `enemy`.
+* **`rounds` is NOT taken from the packet.** `katmud_scripts.py:252-262`
+  is explicit that assigning it wholesale from the mud is why `efdd1b0`,
+  `e556a16` and `8a918b3` each failed to stop the same misfire. With FFF
+  gone `_fff_combat` is permanently False, so the damage-line branch
+  (`client.py:12353`) is a genuine client-side count. Left alone.
+* **`in_combat` still untouched**, for the reason already documented.
+* **`target` gated to `"you"`.** `gmcp.txt`: target is the literal `"you"`
+  when it is you, "otherwise that victim's name". Every frame in the
+  capture is `"you"`, so the other case is UNOBSERVED — gate rather than
+  paint another player's fight onto this bar.
+
+Accepted narrowings, both stated in the docstring: a **passive mob** that
+never fights back produces no packet and no bar; and **two mobs on you**
+alternate in `attacker`, re-zeroing the count each flip. Both err the way
+this handler already prefers — a psummon delayed, never wrongly fired.
+
+Tests: `CharCombatEnemyBarTest`. Two pre-existing `CharCombatTest` cases
+were updated, not deleted: they asserted a live packet left the counter
+alone, which was right only while FFF also ran and did the reset.
+
+### FFF casualty audit — every field, and whether anything feeds it now
+
+| FFF field | source today | status |
+|---|---|---|
+| `hp` `sp` | `Char.Vitals` | OK |
+| `hpmax` `spmax` | `Char.Vitals` `maxhp`/`maxsp` -> `vitals_max` | OK |
+| `enemy` `enemycond` | `Char.Combat` | **FIXED HERE** |
+| `round` | damage-line trigger, client-side | OK, and preferred |
+| `gp1/max` `gp2/max` | `Guild.State` via `GMCP_GUILD_POOLS` | **BLADESINGER ONLY** — every other guild's pool bars have no source |
+| `hpbar1` `hpbar2` | nothing | **DEAD** — bard song timer + 8-buff maintenance, changeling bioplasts, necro reset%/Status, gentech status bars |
+
+### Second casualty: per-login setup has not run since MIP died
+
+`mip_vitals_composite` opens with the whole login block — `confirm_login`,
+`setup_commands` (the 3s room-marker `aset`s and `DISPLAY_ROOMID`),
+`_powers_request`, `login_commands`, `_send_on_activate`. All of it is
+gated on an FFF packet arriving. **Not ported, not fixed here** — flagged
+because it silently disables room markers, which is the mapper's own
+input.
+
+
+## 2026-09-20 (4): in_combat lost its authority, and every bot hung on it
+
+Reported as "`Run recruits` kicked off but didn't move." Confirmed live:
+
+    [cstats] in_combat=True fff_combat=False enemy=''
+             run_on=False run_killing=True run_engaged=True
+
+`in_combat=True` with `enemy=''` is the signature: it believes it is
+fighting nothing.
+
+### Why
+
+FFF's `K` field was "the sole authority for ending a fight"
+(`client.py:9461`). With MIP gone on 3s, `in_combat` is set by the
+damage-line branch and cleared **only** by a kill-text match — so a fight
+that ends any other way (fled, outrun, wandered off, killed by someone
+else) leaves it True permanently.
+
+`_run_tick` then latches:
+
+```
+if self.in_combat and not self._run_killing:   # _run_killing = True
+if self._run_killing:
+    if self.in_combat:
+        self._run_reschedule(1.0); return      # forever, NO output
+```
+
+Every other branch that returns without stepping is bounded and
+announces itself (`_run_waiting_room` 1.3s ceiling, `_post_kill_holding`
+deadline + message, `_run_held` deadlines + message, `_run_room_blocked`
+prints). This one is the only silent unbounded loop — which is why it
+presented as "nothing happened at all". `Bot`, `Hunt` and `Chaossea` gate
+on the same flag.
+
+### Fix: a damage-line staleness release
+
+`_combat_stale_check`, called once a second from `_tick_body` ahead of
+anything that gates on `in_combat`. Every landed blow stamps
+`_last_damage_t`; if `in_combat` stands longer than `combat_stale_s`
+(default **8s**, ~4 roundless rounds at 3s's 2s round) the fight is
+assumed over and the flag is released.
+
+* **Gated on `not _fff_combat`** — the same gate the damage-line branch
+  uses. 3k still runs MIP, where FFF ends fights correctly, and no
+  timeout may override it. (GAME FACT, user 2026-09-20: **3k has no GMCP
+  at all**; only 3s switched.)
+* **A damage line, not Char.Combat's empty snapshot.** Char.Combat only
+  reports what is attacking YOU, so a passive mob you are killing may
+  never appear in it and its end marker could fire while that fight is
+  still going. Whiffing a whole round sends no damage line either, which
+  is why this is a timeout rather than a single missed round.
+* **It announces.** A bot walking off a fight with no explanation is what
+  made this take a session to find.
+
+Tests: `tests/test_combat_stale.py`, including one that drives
+`_tick_body` to guard the WIRING (the method existed unwired for a
+commit) and one pinning `DAMAGE_RE` to the real line.
+
+### Related, still open
+
+`pwho` is rejected in some rooms ("There is no reason to 'pwho' here"), so
+the party whitelist seeds empty there. And the bots' mob/player detection
+reads the `look_monster italics` / `look_player underline` markers, which
+are `setup_commands` — part of the dead login block above. On 3s right now
+the bots likely cannot see mobs or players by marker at all.
+
+
+## 2026-09-20 (5): Room.Death captured; the stale release LIVE-CONFIRMED
+
+`logs/gmcp_20260920_200313.log` (Din, bladesinger, giant training
+grounds). `Room.Death` is a NEW package, added mud-side last boot (user).
+
+**The stale release worked live.** `[combat] no blow landed for 8s -
+fight assumed over` fired once, correctly, and the bot resumed. The long
+sit the user reported was that 8s on top of the bladesinger revalrie
+post-kill hold (`_arm_post_kill_resume`), which is intentional.
+
+### What the capture settles about Room.Death
+
+```
+Char.Combat { "target":"you","rounds":141,
+              "attacker":"A giant elite recruit in training","attacker_hp":1 }
+Room.Death  { "corpse":1,"killer":"Din","npc":1,
+              "name":"A giant elite recruit in training" }
+Char.Combat { "target":"","rounds":0,"attacker":"","attacker_hp":0 }
+```
+
+* It **fires for your own kills** (`killer: "Din"`), not just a merc's.
+* Ordering, consistent across both captures: `Room.Death` arrives
+  **before** the empty `Char.Combat`, and **both arrive before the next
+  damage line**.
+* `name` is the **long formal name** and does NOT match the kill text's
+  short name ("A giant elite recruit in training" vs "Giant Recruit").
+  Do **not** match these two by name. (The earlier Giant Ant pair differed
+  only in case, which understated this.)
+* NOT yet observed: an uncredited kill (`killer: ""`) or a player death
+  (`npc: 0`).
+
+### Room.Death cannot end a fight
+
+Tempting, because it is an explicit kill event. But it arrives BEFORE the
+trailing damage line, so clearing `in_combat` on it is undone one line
+later - exactly as the kill text already is. It is worth wiring for kill
+counting, the recent-kills pane and `corpse: 1` (which the corpse cascade
+currently has to guess), and for nothing else.
+
+### OPEN: is the trailing damage line post-mortem, or a second mob?
+
+`You hit Giant Recruit 4 times for 5055 damage.` lands AFTER
+`Din dealt the killing blow to Giant Recruit.` Two readings, and they
+demand opposite fixes:
+
+* **Same mob** - the tail of the killing round hitting a corpse. A short
+  post-death suppression window would remove the 8s wait entirely.
+* **Different mob** - `Char.Combat` and `Room.Death` both name the elite
+  recruit while the text names "Giant Recruit", the room holds 11
+  monsters, and `Char.Combat` is blind to mobs that do not attack you. Then
+  the damage line is a REAL ongoing fight and suppressing it would walk
+  the bot off a live mob.
+
+The name evidence cuts both ways (short name vs long name of one mob, or
+two genuinely different mobs). **Do not build the suppression until this
+is answered** - ask the user, per [[feedback-no-game-mechanic-assumptions]].
+
+
+### CONFIRMED: the phantom fight costs a redundant 40s hold
+
+`[bot: resume condition never came - resuming]` was observed, proving the
+chain:
+
+1. kill text -> fight ends -> kill-trigger runs `mw`/`revalrie`, and the
+   post-kill hold releases correctly on *"Fully refreshed you end your
+   revalrie."*
+2. the trailing damage line re-arms `in_combat` -> **phantom fight**
+3. `_combat_stale_check` clears it 8s later -> the Run bot reads that as
+   another fight ending -> `_arm_post_kill_resume()` fires AGAIN (the lone
+   `look` is the tell; `recruits.json` has `after_kill: []`)
+4. that second hold waits for revalrie text that already arrived in (1),
+   so it burns the full `post_kill_resume_timeout` - **40s** for a
+   bladesinger
+
+`combat_stale_s` is NOT the knob for this; the 40s dominates.
+
+CORRECTION to the note above: `_post_kill_holding` is NOT always bounded.
+`post_kill_resume_timeout: 0` sets `_resume_deadline = None` and holds
+**forever, silently** - deliberate (`client.py:4988`), because a full sp
+refill is ~23 minutes and a 40s net was cutting real revalries short.
+Bladesinger is 40, so the "every other branch is bounded" claim held for
+Din but is not a property of the code.
+
+### NOT the cause: the ritual scene (checked, negative)
+
+`_run_match_mob_line` returns the WHOLE matched line as the display name,
+so a ritual-scene match would have printed
+`A ritual scene depicting a giant elite recruit in training, spread by
+the Blood Eagle -> kill recruit`. The observed line was
+`[run] A giant elite recruit in training -> kill recruit`, i.e. a real
+mob line.
+
+**LATENT GAP though:** the ritual-scene filter exists ONLY in
+`_chaossea_scan_markers` (client.py:5876). `Run`, `Bot` and `Hunt` have
+none - and a bladesinger leaves *"A ritual scene depicting a <mob>, spread
+by the Blood Eagle."* in every room it kills in. On a LOOPING route that
+scene is still there next lap, contains the mob keyword, and would match
+as a target - costing a whiffed `kill` plus the engage grace each lap.
+Not yet observed; worth watching on a second lap.
+
+### FIX: post-mortem damage suppression (root cause of all of it)
+
+GAME FACT (user, 2026-09-20): the training grounds hold exactly **two**
+mobs, *A giant elite recruit in training* and *A giant elite guard in
+training*. The combat text renders them "Giant Recruit"/"Giant Guard" -
+so the trailing damage line IS the killing round's tail landing on a
+corpse, not a second mob.
+
+`_is_post_mortem(target)` - a damage line naming the mob we just killed,
+within `postmortem_s` (default 5s), does not re-arm `in_combat` or tick
+`rounds`. The `#dmg` tallies still count it; the damage was real.
+
+* **Matched BY NAME, not by a blanket timer** - killing the recruit
+  cannot silence damage against the guard beside it. That is the test
+  worth keeping (`test_a_second_mob_still_starts_a_fight`).
+* The kill text and the damage line share the SHORT name form while
+  `Room.Death` uses the long one, so **Room.Death cannot substitute
+  here** - the one place its name field would have been the obvious
+  source and is the wrong one.
+* Time-bound, never count-bound: one round can land several trailing
+  lines, and the window stops a same-named respawn being swallowed later.
+* 3s-only by construction: every caller sits inside
+  `if not self._fff_combat`, and 3k still runs FFF.
+
+`_combat_stale_check` STAYS. This fix covers fights that end in a death;
+the timeout still covers fights that end with no death at all - fled,
+outrun, killed by someone else. Two mechanisms, two cases.
+
+**FRAGILITY:** this hangs off the kill-text pattern. Gag it, or let the
+mud reword it, and suppression silently stops working and the 40s hold
+returns.
+
+Tests: `PostMortemDamageTest` (predicate) + `PostMortemEndToEndTest`
+(drives `track_combat_line` with the two real lines in order, so the
+WIRING is covered too). 1353 green.
+
+
+## 2026-09-20 (6): psummon stopped firing - the on_vitals HOOK
+
+`call_hook("on_vitals", ...)` fired from exactly ONE place: the FFF
+handler `mip_vitals_composite` (`client.py:9570`).
+`katmud_scripts.on_vitals` is where **both psummon rules** and the
+elemental **evoke-age** live, so with MIP gone none of them ran at all.
+
+Same class as `in_combat` and `confirm_login`: not a FIELD FFF wrote, but
+something reachable **only** from FFF. The field audit could not have
+found any of the three - worth remembering the next time a feed "looks
+covered".
+
+**FIX:** fire it from `gmcp_char_vitals`, and nowhere else on the GMCP
+side. Char.Vitals is the closest analogue to FFF's per-round vitals
+packet and arrives reliably every round; firing from Char.Combat as well
+would run the rules twice a round.
+
+Char.Vitals arrives BEFORE Char.Combat in every capture, so `enemycond`
+is one packet stale at hook time. Harmless (rule 1 needs `ticks >= 5`),
+but it is why the two are not interchangeable.
+
+**The transport under these rules changed completely and the rules did
+not have to.** `client.rounds` now comes from the damage-line branch
+client-side instead of FFF's N, and `enemycond` from Char.Combat's
+`attacker_hp` - but `_ticks` counts OBSERVED MOVEMENTS of the counter, so
+it never cared where the number came from. Pinned by
+`GmcpEraTicksTest`, including that rule 1 actually sends `psummon` again.
+
+Note five packets give FOUR ticks: the first packet of a fight is a first
+SIGHT, not a movement, and is deliberately uncounted - that is the whole
+defence against a sprint's destination packet reading as fresh.
+
+
+## 2026-09-20 (7): Room.Contents settles the ritual scene
+
+Live: `[run] A ritual scene depicting a giant elite recruit in training,
+spread by the Blood Eagle -> kill recruit`, then three `There is no
+recruit here.`
+
+The scene renders in the **mob-line slot** and is italic, so no marker can
+tell it from a mob (hence `_chaossea_scan_markers`' explicit text filter).
+The asets that set italics are `setup_commands` and currently dead anyway.
+
+**GMCP just says so.** `logs/gmcp_20260920_203053.log`, a room the user
+confirmed holds 5 recruits, 2 guards and 2 scenes:
+
+```
+{"type":"monster","count":5,"name":"A giant elite recruit in training"}
+{"type":"monster","count":2,"name":"A giant elite guard in training"}
+{"type":"item",   "count":1,"name":"A ritual scene depicting a giant elite recruit in training, spread by the Blood Eagle"}
+{"type":"item",   "count":1,"name":"A ritual scene depicting a giant elite guard in training, spread by the Blood Eagle"}
+```
+
+New `gmcp_room_contents` stores both sets; `gmcp_room_info` clears them
+(the two are strictly paired, 9/9, Info always first).
+
+**A BLACKLIST, not a monster whitelist.** `_run_match_mob_line` rejects a
+line whose normalised name is a known ITEM. Room.Contents is **entry-only**
+(never once arrives alone in the capture), so the sets go stale as mobs
+die - but *scenery does not change while you stand in the room*, so the
+blacklist stays correct for the whole visit. A whitelist would go stale the
+other way and hide a mob that wandered in after entry.
+
+Empty set = behaviour unchanged, which is the regression guard for **3k,
+which has no GMCP at all**.
+
+Counts are stored but read by nothing yet - free here, and the obvious
+next use.
+
+Not touched: `Bot`/`Hunt` match through `_bot_scan_markers`/italics, a
+different path. The same blacklist would apply there.
+
+Tests: `tests/test_room_contents.py`, driven with the room's REAL printed
+lines including the `{5}`/`{2}` count tags - including
+`test_a_contains_whitelist_is_saved_by_the_blacklist`, i.e. the exact
+`{"match":"recruit","contains":true}` config that broke.
+
+### Room.Contents arrives BEFORE the room text (user, 2026-09-20)
+
+Confirmed in every capture: `Room.Info` -> `Room.Contents` -> `Room.Map`,
+then the rendered room. So a bot need not wait for the text at all - the
+monster list is already in hand when the step's reply starts arriving.
+`_run_step_sent`/`_run_on_prompt` currently poll for the PROMPT with a
+`run_move_ms` (1300ms) ceiling. NOT YET DONE; this is the obvious speedup.
+
+
+## 2026-09-20 (8): the 1300ms per-step wait was never meant to exist
+
+`_run_on_prompt`'s docstring says *"run_move_ms stops being the pace and
+becomes only a ceiling."* **On 3s that is false.** `prompt` events require
+telnet GA/EOR (`protocol.py:412`) and **3s sends no GA**, so
+`_run_on_prompt` never fires, `_run_room_ready` never flips, and every
+step burns the full ceiling. 27 steps x 1.3s = ~35s of dead time a lap,
+and `_run_send_step` has no throttle of its own - the wait WAS the pace.
+
+### Release on Room.Contents instead
+
+The GMCP room packets arrive BEFORE the rendered room text (user-confirmed
+and visible in every capture: Info -> Contents -> Map -> text), and
+Contents carries the mob list outright. So the room has landed the moment
+Contents arrives and there is nothing left to wait for. The new pace is
+one network round trip, self-limiting because the bot cannot step until
+the mud answers the last step.
+
+Three things this needed to be safe:
+
+* **A GMCP mob source.** Releasing early without one means scanning an
+  empty `_run_lines` and walking past mobs - the exact failure the startup
+  `glance` + `_run_step_sent()` was added to prevent ("kayos left 'A Noisy
+  Battleground' unfought every run"). `_run_scan_mob` now consults
+  `_gmcp_room_monsters` between the latch and the text sweep.
+* **`gmcp_room_death` to keep the counts honest.** Room.Contents is
+  entry-only, so counts go stale with the first kill the moment they are a
+  mob SOURCE rather than an item blacklist. Room.Death carries the SAME
+  long name form Contents uses - which is exactly the form the kill text
+  does NOT use, the mismatch that stopped it being the post-mortem signal.
+  Still does not end a fight, for the reason in (5).
+* **`expect_room`.** Only a MOVEMENT step releases on a packet. The
+  startup glance and the post-kill re-scan call `_run_step_sent()` too and
+  no Contents will ever come for them, so they keep the timer. A failed
+  move sends no room packet either and correctly falls back to it.
+
+Names are keyed lowercase (Room.Death casing has differed - "Giant ant" vs
+"Giant Ant") with the original spelling kept alongside, because the bot
+prints it.
+
+**KNOWN LOSS, deliberate:** `_run_room_attackers` reads `RUN_ATTACKING_RE`
+off buffered TEXT to hold movement when a mob is already mid-attack and
+`in_combat` has not caught up. On the fast path that buffer is empty, so
+the guard is effectively off. Room.Contents cannot replace it - `gmcp.txt`
+says monster health and target appear there only if your skills would show
+them in the look text.
+
+Scope: **Run only.** `Bot`/`Hunt`/`Chaossea` have the same GA problem via
+their own gates, but each has different room-ready semantics and
+Chaossea's glance-spam history makes it the worst place to experiment.
+Verify Run live first, then port.
+
+Tests: `NoGaNoWaitTest` (release on movement, timer kept for the post-kill
+re-scan, and the mob found with ZERO text lines) + `RoomDeathDecrementsTest`.
+
+**LIVE-CONFIRMED 2026-09-20** (user): *"Runs right to the first mob instead
+of parking in every empty room for a second."*
+
+
+## 2026-09-20 (9): psummon fires - but on a counter that never reset
+
+`logs/gmcp_20260920_205413.log`. **The on_vitals fix works**: both rules
+fired and the shadow portal opened twice.
+
+```
+[auto-psummon: 114 rounds fought, fresh enemy (98%)]
+Char.Combat { "rounds": 2,  "attacker_hp": 98 }
+[auto-psummon: long fight (131 rounds), enemy at 78%]
+Char.Combat { "rounds": 22, "attacker_hp": 78 }
+```
+
+114 against a real round 2. `_ticks` reset **only on a change of enemy
+NAME**, and the Angarboda training grounds hold nothing but
+*"A giant elite recruit in training"* - so the name never changed between
+mobs and the counter accumulated across every one the bot killed. Rule 1
+("round 5+, enemy still fresh") therefore fired on round ~1 of every
+fight, spending a limited `psummon_left` each time.
+
+**FIX:** also reset when `client.rounds` **drops**. It is zeroed by the
+kill-text branch, so a drop can only mean the last fight ended. Guarded
+for `_rounds_seen is None` on a fresh session.
+
+**NOT fixed by reading `Char.Combat.rounds`** - tempting, because it
+resets 0->31 cleanly in this capture, but `katmud_scripts.py:206-213`
+documents the trap: it is the ATTACKER's fight duration (an orc reported
+1253). A mob already fighting someone else when you engage hands you an
+inflated number, which is the original sin `_ticks` exists to avoid. The
+capture only looks clean because that mob was fresh.
+
+**Gap closed with it:** `_combat_stale_check` cleared `in_combat` but left
+`self.rounds` high - a fight ending with NO death has no kill text, so
+nothing zeroed it and no drop ever occurred. It now calls `_stash_rounds`
+(not `= 0`, so the recent-kills pane keeps `_rounds_at_end`).
+
+Tests: `SameNamedMobsTest` (two consecutive identically-named mobs: ticks
+reset, rule 1 does NOT fire on round 1, and still fires once the new fight
+earns it) + `StaleReleaseZeroesRoundsTest`.
+
+
+## 2026-09-20 (10): "GEE, what are we fighting then?" x2 per mob
+
+The Run bot sent `kill recruit` three times for one mob. Not a bug in the
+re-poke - a bug in what it is waiting for.
+
+`_run_tick`'s engage-grace branch re-issues the kill every
+`run_settle_ms` (1500) until `in_combat` flips, inside
+`run_engage_grace_ms` (4000). Ticks land at 1.5s and 3.0s, so **two**
+re-pokes - and the mud answers each with *"GEE, what are we fighting
+then?"*, its already-in-combat reply.
+
+`in_combat` was waiting for **YOUR first damage line** - and `DAMAGE_RE`
+matches the mud's AGGREGATED once-per-round
+`"You hit X N times for M damage."`, so it cannot flip until a full round
+has resolved. (Not a tanking artefact - user corrected that; it is just
+the round cadence.)
+
+**FIX: `Char.Combat` now ARMS `in_combat`.** It lands before that first
+damage line, so the 3.0s re-poke goes away. The 1.5s one stays, and
+should - it is the design's own guard against a kill that whiffed on a
+keyword. Three sends -> two.
+
+**LIVE-CONFIRMED 2026-09-20** (user): *"It didn't keep spamming kill
+recruit this time."*
+
+### The asymmetry is the point, not a loophole
+
+`gmcp_char_combat` still **never clears** `in_combat`, for the reason it
+always did: it reports who is attacking YOU, so a passive mob you are
+killing may never appear in it and clearing on its empty snapshot could
+end a live fight. **Setting** carries no such hazard - if something is
+attacking you, you are in a fight. Half the original decision is reversed
+and half stands; `CharCombatEnemyBarTest` now pins both halves separately
+so neither gets "restored" by mistake.
+
+Gated on `target == "you"` (another player's fight must not arm yours) and
+sequenced AFTER the enemy-change reset, so a new fight zeroes the round
+count and only then arms combat.
+
+### Why not the "GEE" line
+
+It is definitive, but it is 3s-specific text and it only arrives AFTER a
+wasted send. Char.Combat carries the same fact earlier and structurally.
+
+
+## 2026-09-20 (11): a damage line became the target
+
+```
+[run] You hit Giant Recruit 4 times for 2638 damage -> kill recruit
+> kill recruit
+There is no recruit here.        (x3)
+```
+
+`_run_lines` is **cleared at the kill**, so the post-mortem damage line
+lands in the freshly-empty buffer - and `{"match":"recruit",
+"contains":true}` matches "recruit" anywhere in any buffered line. It also
+**latches** (`client.py:7041`), and `_run_scan_mob` prefers the latch over
+everything, including the GMCP monster list.
+
+A `DAMAGE_RE` filter is NOT the fix: *"Eris trounced Giant Recruit up and
+down."* matches too, and a blacklist of combat verbs is guesswork about
+mud text.
+
+**FIX: once Room.Contents has been seen for this room, GMCP decides
+WHETHER a name is a mob; the text only decides WHICH.**
+
+This is **not** the stale monster whitelist rejected in (7). It never asks
+whether that mob is still ALIVE - the counts go stale and are ignored
+here - only whether the mud ever called that NAME a monster in this room.
+
+* `_gmcp_room_seen` is tracked **separately from the dicts**: once
+  `gmcp_room_death` drains the last mob, `_gmcp_room_mob_names` is empty,
+  which is otherwise indistinguishable from "this mud sends no
+  Room.Contents at all" - and an emptied room is exactly where this bug
+  happened.
+* The rejection lives **inside `_run_match_mob_line`**, so the latch path
+  at 7041 crosses it too (`LatchIsGatedTooTest`).
+* Never seen = unchanged behaviour = the 3k regression guard.
+
+**The structural discriminator would be italics** - `look_monster
+italics` - and it is unavailable because `setup_commands` has not run
+since MIP died. **Third symptom now pointing at the login block**; this is
+a workaround for a missing input, not a fix for it.
+
+**Still worth the data change:** `contains: true` is documented as "the
+looser keyword style the script bot used". Exact names in
+`muds/3s/bots/recruits.json` kill the ritual scene, the damage line and
+the ally lines outright, and add the guard the recruit-only entry skips.
+
+
+## 2026-09-20 (12): per-login setup, the fourth casualty
+
+The whole login block sat inside `mip_vitals_composite` - the FFF handler
+- so it was gated on a packet that stopped coming on 2026-09-15.
+`confirm_login` was reachable from **nowhere else at all** (one caller).
+Since MIP died:
+
+* a prompted password is never **stored** ("store on success"), so the
+  prompt returns every login;
+* the priming `hp` never sends, and nothing backfills it - GMCP only
+  sends a package when its value CHANGES, and the blur/portal charge
+  counts `n/m` are text-only in the hpbar with no packet equivalent;
+* **`setup_commands` never runs** - no room-marker asets, no
+  `DISPLAY_ROOMID`. That is the mapper's and the bots' own input, and
+  `look_monster italics` is the structural way to tell a mob from a Blood
+  Eagle ritual scene. Its absence is why (7) and (11) had to be worked
+  around through Room.Contents instead of just reading the marker;
+* `login_commands` (guild init) never runs.
+
+**FIX:** extracted to `_login_setup()`, called from **both** vitals
+handlers - FFF for 3k (still MIP-only, no GMCP at all) and `Char.Vitals`
+for 3s. Idempotent by `_logged_in` / `guild_login_sent`, so whichever
+arrives first wins and the other is a no-op, which is also what makes it
+safe on a mud running both transports.
+
+`Char.Vitals` is the right GMCP trigger: it is the direct analogue of the
+FFF packet it replaces, and it cannot exist before there is a character
+in the world.
+
+### The shape, now with four instances
+
+| casualty | kind | found by |
+|---|---|---|
+| `enemy`/`enemycond` | fields | the FFF field audit |
+| `in_combat` | a FLAG FFF cleared | a silent bot hang |
+| `on_vitals` | a HOOK FFF fired | psummon never firing |
+| `confirm_login` + setup | a CALL only FFF made | this |
+
+Only the first was a field, which is why the field-by-field audit found
+one of four. **When a transport dies, grep for every flag, call and hook
+reachable only from it - not just the fields it wrote.**
+
+### How to verify live
+
+The block announces itself; no capture needed. On the next login:
+
+```
+[3s setup: N command(s)]
+[guild init: N command(s)]
+[password stored in credential manager]     (only if one was typed)
+```
+
+If those print but mobs still are not italic, the trigger fires before
+the mud will accept commands and the block should hang off `Room.Info`
+instead - THEN a `tools/gmcp_probe.py` capture earns its keep, because it
+logs from the first byte with no race.
+
+Tests: `tests/test_login_setup.py`, including that the FFF path is
+unchanged for 3k.
+
+**LIVE-CONFIRMED 2026-09-20** on a LINKDEAD reconnect. `[3s setup: 3
+command(s)]` printed and the mud answered every one:
+
+```
+look_monster_pref set to: <ESC>[3m
+look_player_pref  set to: <ESC>[4m
+Property: DISPLAY_ROOMID   Value: 1
+```
+
+...followed by the hpbar, i.e. `confirm_login`'s priming `hp`. So
+Char.Vitals arrives EARLY ENOUGH that the mud accepts the commands - the
+Room.Info fallback is not needed.
+
+Two harmless things visible in the same capture, neither worth changing:
+`[MIP handshake sent, pin 19011]` still fires (the trigger is the generic
+"elcome", here from *"3Scapes welcomes you back from linkdeath"*, and 3k
+still needs the handshake), and no `[guild init:]` line because
+`login_commands` is empty for this guild.
+
+**The italics marker is live again**, which means (7) and (11) are now
+working around an input that exists. Both stay as they are: the GMCP
+classification is structured and does not depend on an aset the mud could
+drop again.

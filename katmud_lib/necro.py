@@ -93,7 +93,8 @@ def parse_powers_block(text):
 # veil). Those three live ONLY in the full text hpbar prompt (parse_prompt).
 def parse_hpbar(stripped):
     """Necro FFF hpbar1 text, AFTER strip_mip_colors -> {worth, protection,
-    glamor, tport, circle} for the fields present."""
+    tport, circle} plus EITHER glamor+glamor_pct (one is running) OR
+    glamor_left+glamor_max (the per-reset pool), for the fields present."""
     out = {}
     m = re.search(r"Worth:\s*(-?\d+)", stripped)
     if m:
@@ -101,9 +102,27 @@ def parse_hpbar(stripped):
     m = re.search(r"Prot:\s*(\w+)", stripped)
     if m:
         out["protection"] = m.group(1).upper().startswith("ON")
-    m = re.search(r"Blaz:\s*(\S+)", stripped)
+    # ONE slot, two states - SETTLED by logs/mip_20260909_183450.log, which
+    # captured the changeover mid-fight:
+    #   `{furious:78%}` while a glamor RUNS - the active glamor's name and
+    #                   the % of its duration left;
+    #   `Blaz:8/9`      the moment it expires - the per-reset USAGE POOL.
+    # The pool is SHARED across glamors and always labelled `Blaz`: that
+    # 8/9 followed a FURY, not a blaze (Dru is a reaper carrying werebeast's
+    # fury as the Ordained I second glamor). So `Blaz` is a misnomer for
+    # anyone with two glamors - never render it as "blaze".
+    # The braced form is matched on STRUCTURE, not on the word, so
+    # spark/rage/illume will be captured unseen; `furious` is the only
+    # non-blaze name sampled so far.
+    m = re.search(r"\{(\w+):\s*(\d+)%\}", stripped)
     if m:
         out["glamor"] = m.group(1)
+        out["glamor_pct"] = int(m.group(2))
+    else:
+        m = re.search(r"Blaz:\s*(\d+)/(\d+)", stripped)
+        if m:
+            out["glamor_left"] = int(m.group(1))
+            out["glamor_max"] = int(m.group(2))
     m = re.search(r"Tport:\s*(\S+)", stripped)
     if m:
         out["tport"] = m.group(1)
@@ -200,7 +219,18 @@ def parse_inv_line(line):
 # --- tier advancement (max-Circle Cr[...] messages) -------------------
 # Once a necro hits max Circle, Cr[...] stops being a % and cycles these
 # wordy messages toward the next tier. Ordered 0 (just started) -> last
-# (ready). tier_progress maps a message to (index, total, pct).
+# (ready). tier_progress maps a message to (index, total).
+#
+# The ORDER is player-reported - necros who have been through the tiers -
+# not documented anywhere, and it is the only thing the position rests on.
+#
+# No percentage is derived from that index, deliberately. The MUD sends a
+# phrase and nothing else, so any % would be interpolation over 15 steps
+# we know are NOT evenly spaced: the first tier is much longer than the
+# rest and they get quicker after it (player-reported, 2026-09-07). The
+# old '6/15 -> 36%' also mixed bases - a 1-based position beside a
+# 0-based i/(total-1) fraction - which read as a bug on top of being a
+# guess. The phrase itself is already shown on the Circle line.
 TIER_MESSAGES = [
     "you are miles from advancement",
     "you still have a long road to travel",
@@ -221,14 +251,13 @@ TIER_MESSAGES = [
 
 
 def tier_progress(circle_text):
-    """Cr[...] wordy message -> {"idx", "total", "pct"} or None when the
-    text isn't a tier message (e.g. it's still a plain 'NN%')."""
+    """Cr[...] wordy message -> {"idx", "total"} or None when the text
+    isn't a tier message (e.g. it's still a plain 'NN%')."""
     norm = (circle_text or "").strip().rstrip(".").lower()
     for i, msg in enumerate(TIER_MESSAGES):
         if norm == msg:
             total = len(TIER_MESSAGES)
-            return {"idx": i, "total": total,
-                    "pct": round(i / (total - 1) * 100)}
+            return {"idx": i, "total": total}
     return None
 
 
@@ -241,8 +270,11 @@ def format_status_bar(v):
     """self.vars-shaped dict -> the compact 'Status[w.%|p..|v..|r.%] Cr[.]'
     bar string. Each Status[] field is included only if present, so the
     bar degrades gracefully before all data has arrived. Cr[] shows the
-    tier % once Circle is capped (v["tier"] set by tier_progress) instead
-    of the wordy advancement message, which doesn't fit the bar."""
+    tier POSITION once Circle is capped (v["tier"] set by tier_progress)
+    instead of the wordy advancement message, which doesn't fit the bar.
+    Position, not a percentage: the 15 steps are not evenly spaced, so a
+    derived % would be a guess dressed as a measurement (see
+    TIER_MESSAGES)."""
     parts = []
     if "worth" in v:
         parts.append(f"w{v['worth']}%")
@@ -255,7 +287,7 @@ def format_status_bar(v):
     out = f"Status[{'|'.join(parts)}]" if parts else ""
     tier = v.get("tier")
     if tier:
-        cr = f"{tier['pct']}%"
+        cr = f"{tier['idx'] + 1}/{tier['total']}"
     else:
         cr = v.get("circle")
     if cr is not None:

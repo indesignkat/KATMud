@@ -1,11 +1,15 @@
 """3s Elemental guild helpers.
 
 Small by design: the guild's numbers already arrive on feeds the client
-handles generically. FFF carries Energy (gp1) and Consistency (gp2),
-GMCP's Guild.Extra carries the ability counters, and Char.Vitals states
-the real hp/sp maxima. What is NOT on any structured feed is elemental
-negation, which appears only as a line of plain prompt text - hence this
-module.
+handles generically. GMCP's Guild.Info carries Energy (gp1) and
+Guild.Extra Consistency (gp2), Guild.Extra also carries the ability
+counters, and Char.Vitals states the real hp/sp maxima. What is NOT on
+any structured feed is elemental negation, which appears only as a line
+of plain prompt text - hence this module.
+
+Both pools used to ride MIP's FFF feed (E = Energy, G = Consistency).
+MIP was removed mud-side on 2026-09-15, so those bars had no source at
+all until the GMCP wiring below - see parse_energy_max.
 """
 import re
 import tkinter as tk
@@ -259,6 +263,33 @@ def parse_g2n_size(line):
     return int(m.group(1).replace(",", "")) if m else None
 
 
+# The prompt's vitals line, e.g.
+#   " HP:3216/3372 SP:582/526 NRG:1399/1412 C:100 E:92%"
+# Wire-confirmed 28x in logs/20260922_)marten.txt, interleaved with the
+# GMCP feed in logs/gmcp_20260922_204710.log.
+#
+# NRG is Energy, the pool the Energy bar draws. Its LIVE value comes off
+# GMCP Guild.Info's `energy`, which is the same series one tick earlier
+# (GMCP fires before the swing's cost is deducted - every pairing in that
+# capture is exactly 8 apart) and, unlike the prompt, keeps ticking while
+# energy regenerates with no prompt printing at all. What GMCP does NOT
+# carry anywhere is the MAXIMUM, so this line is parsed for that alone.
+#
+# E: is NOT parsed: it is a separate percentage that also prints EMPTY
+# ("E:" with nothing after it, line 35 of that log), so it is neither
+# needed nor safe to require. Anchoring on NRG only keeps this immune.
+_NRG_RE = re.compile(r"\bNRG:(\d+)/(\d+)\b")
+
+
+def parse_energy_max(line):
+    """Prompt vitals line -> max Energy (gp1max), or None.
+
+    Only the maximum: the current value is GMCP's job, and writing both
+    would walk the bar backwards by one swing's worth every prompt."""
+    m = _NRG_RE.search(line or "")
+    return int(m.group(2)) if m else None
+
+
 def scrape_score(state, line):
     """Accumulate one line of `guild score` / `skills` into `state`.
 
@@ -349,7 +380,7 @@ class ElementalStatus(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._closed)
         widgets.add_window_menu(self, topmost)
         f = fonts or {}
-        self.mono = f.get("mono", ("Consolas", 11))
+        self.mono = f.get("mono", (widgets.MONO, 11))
         sb = tk.Scrollbar(self)
         sb.pack(side="right", fill="y")
         self.txt = tk.Text(self, bg=BG, fg="#cccccc", font=self.mono,
@@ -365,7 +396,7 @@ class ElementalStatus(tk.Toplevel):
             self.txt.tag_configure(tag, foreground=colour)
         self.txt.tag_configure("sec", foreground="#d79030",
                                font=f.get("mono_bold",
-                                          ("Consolas", 11, "bold")))
+                                          (widgets.MONO, 11, "bold")))
 
     def _closed(self):
         if self.on_close:
@@ -411,7 +442,7 @@ class ElementalStatus(tk.Toplevel):
             self.txt.insert("end", "\n")
 
         # Energy: GMCP first (it updates all session), score box as the
-        # fallback for a MIP-only run.
+        # fallback before the first Guild.Info packet arrives.
         self.txt.insert("end", "Energy\n", "sec")
         got = False
         for label, key, tag in (("link (lethal at 0)", "link_energy", "warn"),

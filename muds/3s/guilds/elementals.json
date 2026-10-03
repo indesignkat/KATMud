@@ -1,9 +1,14 @@
 {
   "_comment": [
-    "3s Elemental. Pools are wire-confirmed against",
-    "logs/mip_20260903_154157.log: FFF E = Energy (gp1, seen 1303-1407,",
-    "the mud's own prompt states max 1412) and FFF G = Consistency (gp2,",
-    "a percentage). GAME FACT (user, 2026-09-03): consistency reaching",
+    "3s Elemental. Both pools rode MIP's FFF feed (E = Energy, G =",
+    "Consistency) until MIP was removed mud-side on 2026-09-15. They now",
+    "come off GMCP, wire-confirmed against logs/gmcp_20260922_204710.log",
+    "interleaved with logs/20260922_)marten.txt: Guild.Info `energy` =",
+    "Energy (gp1, seen 1353-1412) and Guild.Extra `consistency` =",
+    "Consistency (gp2, a percentage, so gp2max is the constant 100).",
+    "GMCP carries no Energy MAXIMUM, so gp1max is parsed off the prompt's",
+    "own 'NRG:1399/1412' - see elemental.parse_energy_max.",
+    "GAME FACT (user, 2026-09-03): consistency reaching",
     "ZERO kills you, which is why it carries warn thresholds - the only",
     "guild pool in the repo that is lethal at the bottom.",
     "Note hp/sp maxima are NOT ceilings here: 'evoke corpse drain' takes",

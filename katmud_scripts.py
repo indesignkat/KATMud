@@ -38,6 +38,7 @@ PSUMMON_COOLDOWN = 30          # seconds between automatic psummons
 PORTAL_LIFETIME = 120          # assume the portal gone after this long
 PSUMMON_FRESH_PCT = 90         # rule 1: enemy above this = worth it
 PSUMMON_LONG_PCT = 40          # rule 2: long fight, enemy above this
+ROUNDS_STALE_SECS = 10         # a frozen round counter = no fight (~5 rounds)
 
 # P:5/8 style readout: 5 psummon uses left of 8 this reset. Parsed
 # from ANY output line it appears in (hpbar, score, etc.).
@@ -179,6 +180,85 @@ def _try_evoke_age(client):
     client.send_line("evoke age")   # deadman-respecting: NOT manual
 
 
+def _fight_stopped(client):
+    """True when in_combat is stale - the fight ended and nothing said so.
+
+    The mud does not always send a fight-over packet, so `client.rounds` and
+    `in_combat` can keep a finished fight's values indefinitely: no `K~~`, no
+    `N~0`, nothing to clear them. Rule 1 ("round 5+, enemy still at 100%")
+    then reads a fight that has STOPPED exactly like one that is going badly,
+    and fires - the user sprinted ~400 rooms out of the anthole and psummoned
+    standing in town, still carrying an earlier fight's round 12 (2026-09-11).
+    Note the count does NOT come from the aggro mob passed on the way out:
+    that one never engaged, which is why nothing cleared the old values.
+
+    GAME FACT (user, 2026-09-11): combat rounds tick only while blows are
+    actually exchanged. Sprint past an aggro mob - it never swings, you never
+    swing - and no rounds accrue at all. (If an abandoned fight kept ticking,
+    a 3k bladesinger could farm combat age, which its high-end damage output
+    is based on exclusively, by running from an aggro mob and idling for a
+    year.) That is what makes the counter's MOVEMENT worth reading: frozen for
+    ROUNDS_STALE_SECS means no blows are landing, wherever you are standing,
+    and someone who fights while retreating is never suppressed because their
+    counter is still moving.
+
+    Its VALUE, though, is never trustworthy - client.py:9285 assigns it from
+    FFF's N field wholesale, and the same field is documented to carry the
+    ATTACKER's fight duration on the GMCP side (an orc reported 1253). So
+    this gate also counts the movements it has WATCHED, in `_ticks`, and the
+    rules in on_vitals read that instead of the raw number. Without it this
+    gate merely DELAYED the misfire to the destination room: arriving changes
+    the counter, and a change was all the staleness test needed to call it
+    fresh (user, 2026-09-12 - "it just delayed the psummon until I hit the
+    destination room at the end of the sprint").
+
+    An earlier version of this note argued the opposite - that N keeps
+    ticking while you move - citing `logs/dru-*.log`, a different character
+    on a different week. Those were fights still being FOUGHT while moving,
+    which the GAME FACT above already covers.
+    """
+    enemy = str(client.vitals.get("enemy", "") or "")
+    seen_before = client.vars.get("_rounds_seen")
+    # A COUNTER THAT DROPPED is a new fight even when the name did not
+    # change. client.rounds is zeroed by the kill-text branch
+    # (client.py:12369), so a drop can only mean the last fight ended.
+    #
+    # Live 2026-09-20: the Angarboda training grounds hold nothing but
+    # "A giant elite recruit in training", so the name NEVER changed
+    # between mobs and _ticks accumulated across every one the bot
+    # killed - "114 rounds fought" against a Char.Combat that said round
+    # 2. Rule 1 ("round 5+, enemy still fresh") therefore fired on round
+    # ~1 of every fight, spending a limited psummon_left each time.
+    #
+    # NOT fixed by reading Char.Combat.rounds instead: that is the
+    # ATTACKER's fight duration (an orc reported 1253), which is the
+    # original sin _ticks exists to avoid. See the docstring above.
+    restarted = (seen_before is not None and client.rounds < seen_before)
+    if enemy != client.vars.get("_ticks_enemy") or restarted:
+        # A different enemy is a different fight: nothing has been watched
+        # for it yet, and THIS packet's counter value is a first sight, not
+        # a movement, so it must not be counted as one.
+        client.vars["_ticks_enemy"] = enemy
+        client.vars["_ticks"] = 0
+        client.vars["_rounds_seen"] = client.rounds
+        client.vars["_rounds_t"] = 0.0
+    seen = client.vars.get("_rounds_seen")
+    if client.rounds != seen:
+        client.vars["_rounds_seen"] = client.rounds
+        # Freshness has to come from an OBSERVED tick, never from first
+        # sight: both reported misfires landed on the first vitals packet
+        # after a sprint, where treating an unseen counter as fresh is
+        # exactly the wrong call. Until it is seen to MOVE, assume no fight.
+        # Costs at most one round of delay in a real one.
+        client.vars["_rounds_t"] = time.time() if seen is not None else 0.0
+        client.vars["_ticks"] = client.vars.get("_ticks", 0) + 1
+    if time.time() - client.vars["_rounds_t"] > ROUNDS_STALE_SECS:
+        _psdebug(client, f"blocked: round counter frozen at {client.rounds} "
+                         "- the fight is over")
+        return True
+    return False
+
+
 def on_vitals(client, v):
     _try_evoke_age(client)
 
@@ -186,21 +266,33 @@ def on_vitals(client, v):
         return                            # not a 3s bladesinger: no portals
     if not client.in_combat:
         return
+    if _fight_stopped(client):
+        return
     active = _portal_active(client)
     cond = v.get("enemycond", 100)    # 100 = not reported yet this fight
-    _psdebug(client, f"rounds={client.rounds} cond={cond}% "
+    # How many rounds we have WATCHED pass against this enemy. Both rules
+    # read this instead of client.rounds, which is not a count the client
+    # keeps: client.py:9285 ASSIGNS it from FFF's N wholesale, so the mud
+    # can hand us any number at any time and no client-side reset survives
+    # the next packet. That is why efdd1b0, e556a16 and 8a918b3 each failed
+    # to stop the same misfire, and why the staleness gate only DELAYED it
+    # to the destination room - arriving changes the counter, and a change
+    # was all that gate needed to call it fresh (user, 2026-09-12).
+    ticks = client.vars.get("_ticks", 0)
+    _psdebug(client, f"ticks={ticks} rounds={client.rounds} cond={cond}% "
                      f"portal={'open' if active else 'closed'} "
                      f"copies={client.vars.get('portal_count', 0)} "
                      f"uses={client.vars.get('psummon_left', '?')}")
     # Rule 1: round 5+, enemy barely hurt, no portal open -> summon.
-    if (client.rounds >= 5 and not active
+    if (ticks >= 5 and not active
             and cond > PSUMMON_FRESH_PCT):
-        _try_psummon(client, f"round {client.rounds}, fresh enemy "
+        _try_psummon(client, f"{ticks} rounds fought, fresh enemy "
                              f"({cond}%)")
     # Rule 2: long fight, enemy still healthy, portal expired -> again.
-    elif (client.rounds > 20 and not active
+    elif (ticks > 20 and not active
             and cond > PSUMMON_LONG_PCT):
-        _try_psummon(client, f"long fight, enemy at {cond}%")
+        _try_psummon(client, f"long fight ({ticks} rounds), "
+                             f"enemy at {cond}%")
 
 
 # ---------------------------------------------------------- botting
@@ -431,20 +523,48 @@ def on_line(client, text):
 # has beaten, so the area's mid-run reset bug needs no detection: the names
 # simply reappear as [ ] and get fought again. That also means a fight that
 # somehow does not register just gets repeated rather than skipped.
-SF2_PROGRESS_WINDOW = 2.0     # seconds to collect the `progress` reply
-SF2_FIGHT_TIMEOUT = 180.0     # give up on one opponent after this long
-SF2_STEP_DELAY = 2.0          # one 3s combat round between sends
+SF2_PROGRESS_WINDOW = 1.0     # seconds to collect the `progress` reply
+# 0 = NO deadline, the convention _arm_post_kill_resume already uses. It was
+# 180s, which is 90 rounds at the 3s 2s round - squarely INSIDE the normal
+# range for these fights (30-150 rounds on Din depending on weapon mastery:
+# a mastered wc100 sword mows through, an undedicated guild sword takes 150;
+# a tankier character takes longer still). So it fired on healthy runs more
+# often than on broken ones, and when it fired it killed a working gauntlet
+# mid-fight and left you in the opponent's room with the bot switched off.
+# The thing it guarded is cheap by comparison: the `fight` state SENDS
+# NOTHING, so a missed teleport just sits there checking a room number until
+# `sf2 off`. Same call the user made for post_kill_resume_timeout - an
+# indefinite wait beats a finite number that is wrong (user, 2026-09-12).
+SF2_FIGHT_TIMEOUT = 0         # >0 = give up on one opponent after this long
+SF2_STEP_DELAY = 1.0          # gap between sends (user's pace, 2026-09-12)
 
 # `progress` lists an opponent as "  [X] CHUN-LI" (beaten) or "  [ ] KEN".
 SF2_ENTRY_RE = re.compile(r"^\s*\[([ Xx])\]\s*(\S.*?)\s*$")
 SF2_HEADER = "=== TOURNAMENT PROGRESS ==="
 
-# Only M. Bison's name is inconsistent: `progress` prints him as M_BISON in
-# one section and "M. BISON - CHAMPION!" in the other, while the commands
-# want `enter m-bison` and `challenge m bison`. Rather than try to match
-# every spelling, just look for "bison" anywhere in the listed name.
-# Everyone else works exactly as listed, lowercased (chun-li, e-honda, ...).
-SF2_ALIASES = (("bison", ("m-bison", "m bison")),)
+# Only M. Bison's name is inconsistent, and it is inconsistent THREE WAYS -
+# each command wants a different spelling (GAME FACT, user 2026-09-12):
+#
+#     enter m.bison        a dot, no space
+#     challenge m bison    a space, no dot
+#     kill bison           the bare name
+#
+# On top of that `progress` prints him as M_BISON in one section and
+# "M. BISON - CHAMPION!" in the other, so the LISTED name is a fourth
+# spelling again. Rather than enumerate them, match "bison" anywhere in the
+# listed name and map to the fixed triple.
+# Everyone else works exactly as listed, lowercased, for all three commands
+# (chun-li, e-honda, ...).
+#
+# SCOPE: this triple is confirmed on the HARD difficulty only - which is the
+# MEDIUM tier, not the top one, despite the name. The user asked a wiz to fix
+# the inconsistency and was told it was done, but apparently only on the top
+# difficulty, which he cannot reach yet to check. So if the top difficulty is
+# ever run and the gauntlet dies at the arena door, THIS TABLE IS THE FIRST
+# SUSPECT: the names may be normalised there. `_sf2["difficulty"]` is already
+# tracked, so keying the table by difficulty is the fix - deliberately NOT
+# done now, with one confirmed difficulty and no capture of the other.
+SF2_ALIASES = (("bison", ("m.bison", "m bison", "bison")),)
 
 _sf2 = {"on": False, "state": "idle", "difficulty": "", "fighter": "",
         "target": "", "until": 0.0, "lines": [], "last_target": "",
@@ -452,12 +572,12 @@ _sf2 = {"on": False, "state": "idle", "difficulty": "", "fighter": "",
 
 
 def _sf2_names(listed):
-    """progress name -> (enter name, challenge name)."""
+    """progress name -> (enter name, challenge name, kill name)."""
     low = listed.strip().lower()
     for needle, cmds in SF2_ALIASES:
         if needle in low:
             return cmds
-    return low, low
+    return low, low, low
 
 
 def _sf2_stop(client, why, colour="#aa88cc"):
@@ -554,7 +674,7 @@ def _sf2_tick(client):
         client.send_line("enter cabinet")
         client.send_line("select " + _sf2["difficulty"])
         client.send_line("choose " + _sf2["fighter"])
-        _sf2.update(state="ask", until=now + SF2_STEP_DELAY * 3)
+        _sf2.update(state="ask", until=now + SF2_STEP_DELAY)
         return
 
     if st == "ask":
@@ -594,26 +714,29 @@ def _sf2_tick(client):
         return
 
     if st == "enter":
-        ent, _chal = _sf2_names(_sf2["target"])
+        ent, _chal, _kill = _sf2_names(_sf2["target"])
         client.write_local("[sf2] next: %s" % _sf2["target"], "#aa88cc")
         client.send_line("enter " + ent)
         _sf2.update(state="challenge", until=now + SF2_STEP_DELAY)
         return
 
     if st == "challenge":
-        _ent, chal = _sf2_names(_sf2["target"])
+        _ent, chal, _kill = _sf2_names(_sf2["target"])
         client.send_line("challenge " + chal)
         _sf2.update(state="kill", until=now + SF2_STEP_DELAY)
         return
 
     if st == "kill":
-        _ent, chal = _sf2_names(_sf2["target"])
-        client.send_line("kill " + chal)
+        # the KILL spelling, not the challenge one - they differ for Bison
+        _ent, _chal, kill = _sf2_names(_sf2["target"])
+        client.send_line("kill " + kill)
         # `until` paces the poll; `deadline` bounds the whole fight. Setting
         # until to the timeout would have parked the script for the full
         # SF2_FIGHT_TIMEOUT before it ever looked at whether the fight ended.
+        # A deadline of 0 means none at all - see SF2_FIGHT_TIMEOUT.
         _sf2.update(state="fight", until=now + SF2_STEP_DELAY,
-                    deadline=now + SF2_FIGHT_TIMEOUT)
+                    deadline=(now + SF2_FIGHT_TIMEOUT
+                              if SF2_FIGHT_TIMEOUT > 0 else 0))
         return
 
     if st == "fight":
@@ -622,7 +745,7 @@ def _sf2_tick(client):
         # authoritative signal: `in_combat` going false would also fire if we
         # fled or the kill never registered, leaving us stranded in the
         # opponent's room sending `progress` at nothing.
-        if now >= _sf2["deadline"]:
+        if _sf2["deadline"] and now >= _sf2["deadline"]:
             _sf2_stop(client, "%s took longer than %ds - stopping"
                       % (_sf2["target"], int(SF2_FIGHT_TIMEOUT)), "#ff5555")
             return

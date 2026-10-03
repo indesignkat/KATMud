@@ -20,6 +20,8 @@ map-extra.json's "patches" list):
    "area": "Cliffs of Vrek", "coder": "thoreau", "house": false}
   {"op": "add_edge", "room": 900001, "exit": "n", "to": 48112}
   {"op": "redirect", "room": 48112, "exit": "west", "to": 19204}
+  {"op": "del_edge", "room": 20, "exit": "home"}
+  {"op": "set_note", "room": 54571, "note": "'fall' ports out"}
 
 Patch room ids live at PATCH_RID_BASE and up so they can never
 collide with tt++ session ids.
@@ -260,6 +262,18 @@ class TinMap:
                     dirbits = room.emeta[cmd][0] or dirbits
                 room.exits[cmd] = tgt
                 room.emeta[cmd] = (dirbits, 0)
+            elif op == "set_note":
+                # Attach a note to a room that already exists. NOT add_room:
+                # that builds a fresh Room and would drop the exits the
+                # shared map already has for it. _tin_detail_lines renders
+                # this under "notes:" once the locator has placed us.
+                rid = int(patch["room"])
+                room = self.rooms.get(rid)
+                if room is None:
+                    self.patch_errors.append(
+                        f"[{scope}] set_note: room {rid} not on map")
+                    return
+                room.note = str(patch.get("note", "")).strip()
             elif op == "del_edge":
                 rid = int(patch["room"])
                 cmd = str(patch["exit"]).strip()

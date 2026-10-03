@@ -536,8 +536,24 @@ THRALL_BUILDINGS = ("Thrall Pen", "Longhouse", "Warehouse", "Farm",
 
 
 def parse_thralls(value):
-    """THRALLS 'n|n|...' -> [(building, count), ...] in
-    THRALL_BUILDINGS order."""
+    """THRALLS -> [(building, count), ...], thralls assigned per building.
+
+    Two wire forms. GMCP's Guild.Roster.thralls NAMES each building
+    ('mine:5;farm:5;...'), which is the only form that can carry it: it
+    lists 20 buildings against THRALL_BUILDINGS' 16 positional slots, and
+    a different set (GAME FACT, user 2026-09-15: all 20 are valid).
+    MIP's older positional 'n|n|...' is still read for a state dict left
+    over from a BBE session."""
+    if ":" in value:
+        out = []
+        for entry in value.split(";"):
+            name, _sep, count = entry.partition(":")
+            try:
+                out.append((name.strip().replace("_", " ").title(),
+                            int(count)))
+            except ValueError:
+                continue
+        return out
     out = []
     for name, tok in zip(THRALL_BUILDINGS, value.split("|")):
         try:
@@ -1977,13 +1993,268 @@ def pathfind(cols, rows, mee, mes, start, goal):
     return moves
 
 
+# The glyph each POI type draws with on the VMR grid. Pinned 2026-09-15
+# by matching every named POI in the surviving VMAPL captures against the
+# live grid: 21 world POIs, all landing on their type's glyph, and zero
+# M/L cells left unnamed. Player villages take 'P' - 49 of them, which is
+# the whole remaining feature count.
+POI_GLYPH = {"capital": "M", "lineage": "L", "player": "P",
+             "mentor_ber": "*", "mentor_see": "*", "mentor_jarl": "*",
+             "seer": "S", "blot": "T", "farm": "F", "ruins": "R"}
+
+# The reverse of POI_GLYPH, for naming a feature the table does not
+# cover. Mentors share '*', so that one maps back to the type they have
+# in common rather than to a particular mentor.
+GLYPH_POI = {"M": "capital", "L": "lineage", "P": "player",
+             "*": "mentor_jarl", "S": "seer", "T": "blot", "F": "farm",
+             "R": "ruins"}
+
+
+# The POIs. Seeded from MIP's VMAPL before that feed went away, then
+# CORRECTED against the mud's own `settlements` readout (2026-09-15),
+# which is authoritative and lists name + coordinate outright.
+#
+# The two agreed on every coordinate they share - 62 of them, zero
+# disagreements - which is what licensed the VMAPL reconstruction in the
+# first place. The readout added Kattegat (39,14), founded since the last
+# VMAPL capture, and settled the spelling of the names a chunk boundary
+# had clipped. It does NOT list the mentors, the seer, the blot grove,
+# the farm or the ruins - those are not settlements - so those seven keep
+# their VMAPL-derived entries.
+#
+# GAME FACT (user, 2026-09-15): coordinates do not change and a player
+# CANNOT move their settlement. The one apparent exception, "Callheim"
+# (3,21), never existed: Jarl Call's settlement is Kattegat, and Callheim
+# was a transient from a spell when Skuggis was debugging the biome and
+# it had to be re-made. Its cell reads plain ground now, which is why the
+# glyph check in map_landmarks dropped it before anyone asked.
+#
+# `Vsettlements` re-reads the mud and rewrites this at runtime, so a new
+# settlement needs one command rather than an edit here.
+WORLD_POIS = {
+    "Blot Grove":              ( 3, 28, "blot"),
+    "Midgard":                 (35, 17, "capital"),
+    "Longholt Farm":           ( 5, 15, "farm"),
+    "Birka":                   (15, 23, "lineage"),
+    "Borgarfjord":             (19, 25, "lineage"),
+    "Eiriksby":                (55,  7, "lineage"),
+    "Ericsgard":               (49,  9, "lineage"),
+    "Hafrfjord":               (37,  7, "lineage"),
+    "Holmgard":                (57, 17, "lineage"),
+    "Imaird":                  (13, 17, "lineage"),
+    "Lejre":                   (55, 21, "lineage"),
+    "Lodbrok's Hold":          (17,  9, "lineage"),
+    "Nidaros":                 (25,  9, "lineage"),
+    "Sverkersby":              (23, 21, "lineage"),
+    "Uppsala":                 (33, 27, "lineage"),
+    "Vestergotland":           (53, 25, "lineage"),
+    "Sigrun":                  (51, 16, "mentor_ber"),
+    "Egill":                   (50, 27, "mentor_jarl"),
+    "Heidrun":                 (15, 16, "mentor_see"),
+    "Allentown":               (18, 22, "player"),
+    "Anglesey":                (43, 27, "player"),
+    "Arinn Bjarnar":           ( 3,  9, "player"),
+    "Austrsundr":              ( 6, 25, "player"),
+    "Avosheim":                ( 2, 26, "player"),
+    "Baldrsholm":              (23, 14, "player"),
+    "Borvegas":                (46, 15, "player"),
+    "Brightfjord":             (31,  7, "player"),
+    "Castra Hiberna":          (57,  7, "player"),
+    "Dandandan":               (59, 27, "player"),
+    "Darkcity":                ( 4, 16, "player"),
+    "Ein":                     (30,  6, "player"),
+    "Ermstead":                ( 9, 25, "player"),
+    "Freyrdin":                (22, 31, "player"),
+    "Goldenshield":            ( 3, 24, "player"),
+    "Griddhalla":              (38,  7, "player"),
+    "Gudvangen":               (53, 23, "player"),
+    "Hellsgard":               (61, 28, "player"),
+    "Hjaltland":               ( 8, 15, "player"),
+    "Horath":                  (62, 12, "player"),
+    "Hortlax":                 (20,  6, "player"),
+    "Ikseize":                 (46, 24, "player"),
+    "Jarn-hesturheim":         (42, 19, "player"),
+    "Jinksgaard":              (54, 15, "player"),
+    "Jonsson's Hold":          (59, 17, "player"),
+    "Jorvik":                  (30, 27, "player"),
+    "Kattegat":                (39, 14, "player"),
+    "Kyoutopia":               (17, 21, "player"),
+    "Meepz":                   (46, 26, "player"),
+    "Myrskyvaara":             (60, 17, "player"),
+    "Nethells":                (11, 18, "player"),
+    "Pitea":                   (26, 23, "player"),
+    "Posm":                    (20,  9, "player"),
+    "Rayketh":                 (66,  2, "player"),
+    "Riya":                    (62, 21, "player"),
+    "Ruskheim":                (30, 14, "player"),
+    "Sillby":                  (34, 23, "player"),
+    "Skjaldmaerbyr":           (62, 16, "player"),
+    "Sol's Pine":              (27,  7, "player"),
+    "Stenborg":                (11,  7, "player"),
+    "Stormgard":               (40, 11, "player"),
+    "Stormhofn":               (29, 12, "player"),
+    "Test":                    (48, 13, "player"),
+    "Testcity":                (60, 18, "player"),
+    "Thrymheim":               (32, 15, "player"),
+    "Timmyville":              ( 8, 17, "player"),
+    "Tungborg":                ( 4,  2, "player"),
+    "Tystnad":                 (47,  5, "player"),
+    "Ulfstadir":               (31,  5, "player"),
+    "Gjolnarborg Ruins":       (56, 20, "ruins"),
+    "Seer Hut":                (17,  8, "seer"),
+}
+
+
+SETTLEMENT_RE = re.compile(r"^(.*?)\s*\((\d+),\s*(\d+)\)$")
+
+
+def parse_settlements(lines):
+    """A captured `settlements` readout -> {name: (x, y, type)}.
+
+    The readout frames every line in -~* ... *~- and groups them under
+    "Lineage Settlements" / "Player Settlements" headers, with the capital
+    on its own line as "MIDGARD (Capital)". Founder and flavour lines
+    carry no coordinate and are skipped, so it is safe to feed the raw
+    capture. Returns {} rather than a partial map if nothing parses."""
+    out = {}
+    section = None
+    for raw in lines:
+        core = re.sub(r"^[\s\-~*]+", "", raw)
+        core = re.sub(r"[\s\-~*]+$", "", core).strip()
+        if not core:
+            continue
+        if core == "Player Settlements":
+            section = "player"
+            continue
+        if core == "Lineage Settlements":
+            section = "lineage"
+            continue
+        m = SETTLEMENT_RE.match(core)
+        if not m:
+            continue
+        name, x, y = m.group(1).strip(), int(m.group(2)), int(m.group(3))
+        kind = section
+        if re.search(r"\(Capital\)$", name, flags=re.I):
+            # "MIDGARD (Capital)" - shouted, so title-case it back.
+            name = re.sub(r"\s*\(Capital\)$", "", name,
+                          flags=re.I).title()
+            kind = "capital"
+        if kind:
+            out[name] = (x, y, kind)
+    return out
+
+
+VPOUCH_RE = re.compile(r"^(.+?)\s*\[T(\d+)\]\s*x(\d+)$")
+
+
+def parse_vpouch(lines):
+    """A captured `vpouch` readout -> [(name, tier, count)] in list order.
+
+    Every row is framed -~* ... *~-, and a long row wraps mid-token
+    ("...Blackhorn [T2]   x" / "1 *~-"), so raw lines are joined until
+    the closing *~- before the row is read. Header, footer and help rows
+    carry no [T#] xN and are skipped."""
+    out = []
+    buf = ""
+    for raw in lines:
+        buf += raw
+        if not buf.rstrip().endswith("*~-"):
+            continue
+        core = re.sub(r"^[\s\-~*]+", "", buf)
+        core = re.sub(r"[\s\-~*]+$", "", core).strip()
+        buf = ""
+        m = VPOUCH_RE.match(core)
+        if m:
+            out.append((m.group(1).strip(), int(m.group(2)),
+                        int(m.group(3))))
+    return out
+
+
+def merge_settlements(read):
+    """A parsed `settlements` readout merged over WORLD_POIS.
+
+    The readout is authoritative for the three SETTLEMENT types, so those
+    are replaced wholesale - that is what retires a razed one. The POIs it
+    does not cover (mentors, seer, blot, farm, ruins) are kept."""
+    if not read:
+        return False
+    kinds = {"player", "lineage", "capital"}
+    keep = {n: v for n, v in WORLD_POIS.items() if v[2] not in kinds}
+    WORLD_POIS.clear()
+    WORLD_POIS.update(keep)
+    WORLD_POIS.update(read)
+    return True
+
+
 def map_landmarks(state):
-    """name(lowercased) -> (x, y, label), the POIs from the live VMAPL
-    feed. Settlements move, so this is always read fresh off the wire
-    rather than cached or overridden by saved marks."""
+    """name(lowercased) -> (x, y, label), the POIs to walk to.
+
+    Live VMAPL first. Since 2026-09-15 no GMCP package carries VMAPL, so
+    that returns nothing and WORLD_POIS stands in - but only for entries
+    whose cell STILL CARRIES THE RIGHT GLYPH in the live VMR grid.
+
+    That check is the whole safety of the fallback. The map was re-
+    anchored once already (2026-06-14 -> 2026-07-17, everything +3,+1),
+    and a frozen table across a re-anchor walks you confidently to the
+    wrong cell. Verifying against the live grid means the next re-anchor
+    silently empties the table instead, and `Go` says it has no names
+    rather than lying. With no grid loaded yet, nothing is offered."""
     out = {}
     for t, name, x, y in parse_vmapl(state.get("VMAPL", "")):
         out[name.lower()] = (x, y, POI_LABEL.get(t, t))
+    if out:
+        return out
+    cols, rows, _px, _py = parse_vmaph(state.get("VMAPH", ""))
+    if not (cols and rows):
+        return out
+    for name, (x, y, t) in WORLD_POIS.items():
+        if not (0 <= x < cols and 0 <= y < rows):
+            continue
+        row = state.get("VMR%02d" % y) or ""
+        if x < len(row) and row[x] == POI_GLYPH.get(t):
+            out[name.lower()] = (x, y, POI_LABEL.get(t, t))
+    return out
+
+
+# The glyphs the VMR terrain rows use for ground. Everything else in a
+# row is a feature standing on it - a settlement, a landmark - which is
+# how the map can still offer targets with no VMAPL to name them.
+# Confirmed 2026-09-15 by diffing a full VMR grid against the mud's own
+# `vmap`: the two agree cell for cell, differing only in which glyph each
+# renders (VMR 'A' is vmap '^', '+' is '.', '.' is 'c', 'W' is '~').
+MAP_TERRAIN_GLYPHS = set(".+tfphAWr=~")
+
+
+def map_glyph_pois(state):
+    """(x, y, glyph) for every non-terrain cell in the VMR grid.
+
+    A fallback for naming, NOT a replacement: the grid says where the
+    features are and what glyph each draws with, never what any of them
+    is called. VMAPL is the only feed that ever carried names and no
+    GMCP package sends it, so `Go` can reach these by coordinate only.
+
+    What the glyphs mean is NOT pinned. The one datum: the lone 'M' at
+    (35,17) is the Midgard ENTRANCE - the player walked there 2026-09-15
+    and the room carried an `enter` exit to 50957 that its three
+    neighbours did not.
+
+    GAME FACT (user, 2026-09-15): "Midgard" names the biome AND the
+    guildhall, and the WHOLE biome reports `Room.Info.area` "Midgard" -
+    so the area field identifies nothing inside it and is useless for
+    naming POIs. The `enter` exit is the evidence; the area name is a red
+    herring. Leaving the biome means walking to that entrance cell, which
+    is why a coordinate walk to it is worth having.
+
+    'L' occurs 13 times against the 13 non-capital villages in
+    Guild.Trade.routes, which is suggestive and nothing more. Everything
+    here is therefore labelled by its glyph, never by a guessed name."""
+    cols, rows, _px, _py = parse_vmaph(state.get("VMAPH", ""))
+    out = []
+    for y in range(rows):
+        row = state.get("VMR%02d" % y) or ""
+        for x, ch in enumerate(row[:cols]):
+            if ch not in MAP_TERRAIN_GLYPHS:
+                out.append((x, y, ch))
     return out
 
 
@@ -2237,35 +2508,63 @@ def parse_longship(value):
 # existing parse_* run is a drop-in: no renderer changes, no second code
 # path, and the MIP feed stays byte-comparable next to it.
 #
-# THE RULE: a key is synthesized only when EVERY field its parser reads
-# is present in the GMCP object. A record with one guessed field is worse
-# than no record, because the MIP feed that would have supplied it gets
-# retired. Keys held back for that reason, with the fields GMCP lacks:
+# THE RULE, as it stood while MIP still ran: a key was synthesized only
+# when EVERY field its parser reads was present, because the BBE feed
+# that would have supplied the rest got retired on first data.
 #
-#   LONGSHIP  crew_traits, ship_traits      VOYAGE   crew_traits,
-#   CARTS     legs (multi-stop route plan)           ship_traits, and
-#   FARM      shroom_id (GMCP sends a name),         weather is a key
-#             and the 'meta|weather_mod' header      not a string
-#   BQUEUE    the 'used/cap' header
-#   THRALLS   GMCP's 20 buildings are a NAMED dict and a different set
-#             from THRALL_BUILDINGS' 16 positional slots (no Thrall Pen
-#             or Brewery; new apiary/armoury/goldsmith/skald_hall/
-#             weaponry) - richer, but not a positional swap
-#   BLOT      rendered as a raw string, GMCP sends an object
+# 2026-09-15: MIP IS GONE FOR GOOD - the mud disabled it (zero BBE
+# packets in logs/mip_20260915_132858.log against 25125 in the 09-03
+# capture of the same feeds) and confirmed it is not coming back. There
+# is no longer a feed to protect, so holding a key back no longer
+# preserves anything - it just leaves the tab blank. The rule is
+# therefore relaxed to: synthesize what GMCP actually sends, and leave a
+# field empty when it does not.
 #
-# Those need a side-by-side MIP capture to resolve, not a guess.
+# Per-KEY supersession itself STAYS. It costs nothing with no BBE
+# arriving and it is the only cheap way back if the feed ever returns.
+#
+# Every mapping below is pinned to logs/gmcp_20260915_135025.log - the
+# login capture, whose "full" burst carries the whole surface. A
+# mid-session capture does NOT (Guild.City: 0 of 40 packets carry `full`
+# mid-session, 8 of 8 at login), which is why the two earlier captures
+# looked like most of the feed was missing.
+
 
 def _rec(obj, fields, sep="|"):
-    """Positional record from a GMCP object, or None if ANY field is
-    absent. None means "leave this key on MIP" - see THE RULE above.
-    Most BBE records are pipe-joined; TGOODS uses ':'."""
+    """Positional record from a GMCP object. A field the object does not
+    carry becomes empty rather than aborting the record - see THE RULE
+    above. Most BBE records are pipe-joined; TGOODS uses ':'."""
     out = []
     for f in fields:
-        if f not in obj:
-            return None
-        v = obj[f]
+        v = obj.get(f)
         out.append("" if v is None else str(v))
     return sep.join(out)
+
+
+def _req(obj, fields, sep="|"):
+    """_rec, but None if ANY field is absent. For records where a missing
+    field would silently shift every later one out of position."""
+    if any(f not in obj for f in fields):
+        return None
+    return _rec(obj, fields, sep)
+
+
+def _pairs(obj, sep=";", kv=":"):
+    """{name: value} -> 'name:value;...', in the order GMCP sent it."""
+    return sep.join("%s%s%s" % (k, kv, v) for k, v in obj.items())
+
+
+def _traits_for(rows, ship_id):
+    """Guild.Voyage's trait lists are flat '[{id, trait}, ...]' across the
+    whole fleet. Pull one ship's traits, or every row when ship_id is
+    None, and comma-join them the way the record's trait field does."""
+    out = []
+    for t in rows or []:
+        if not isinstance(t, dict):
+            continue
+        if ship_id is None or t.get("id") == ship_id:
+            out.append(str(t.get("trait", "")))
+    return ",".join(out)
 
 
 # BBE record layouts, each verified against the parse_* that reads it.
@@ -2283,65 +2582,270 @@ GMCP_FOLLOWER_FIELDS = ("level", "name", "xp", "xp_cap", "carry_used",
 # the same session (logs/*_20260903_1351*.log): one full three-hold value
 # assembled from GMCP matched MIP exactly.
 GMCP_TGOODS_FIELDS = ("good", "score", "sup", "dem", "buy", "sell")
-# LONGSHIP indices 0-10, then crew_traits and ship_traits (11, 12) which
-# GMCP does NOT send, then the saga pair (13, 14). Field order confirmed
-# against the MIP record of the same session: ship 1 reads
-# '1|Skidbladnir|5|raiding|Waterford|317|60|0|1|whisper-prowed|devout|||
-# the Legendary|169', and GMCP's voyage_identity is 'whisper-prowed' with
-# captain_style 'devout' - an exact match on the two style fields that
-# were the only real doubt.
+# LONGSHIP indices 0-10, then crew_traits and ship_traits (11, 12), then
+# the saga pair (13, 14). Field order confirmed against the MIP record of
+# the same session: ship 1 read '1|Skidbladnir|5|raiding|Waterford|317|
+# 60|0|1|whisper-prowed|devout|||the Legendary|169'. The two trait fields
+# were empty on MIP because MIP never sent them; GMCP does.
 GMCP_LONGSHIP_HEAD = ("id", "name", "tier", "state", "target", "secs",
                       "crew", "hired_crew", "safe", "voyage_identity",
                       "captain_style")
 GMCP_LONGSHIP_TAIL = ("saga_title", "saga_raids")
-# WSTOCK is deliberately NOT synthesized from Guild.Warehouse, though
-# every field parse_wstock reads is there. MIP prefixes the value with
-# the warehouse's true capacity and GMCP has no capacity field at all,
-# so moving the key would strand the Trade tab on WAREHOUSE_CAPS - a
-# base-tier table that ignores skill bonuses and reads 5250 where the
-# real capacity is 8085. See warehouse_cap().
+# CARTS, per parse_carts' documented order. `legs` is appended by the
+# caller because its per-leg fields reuse '|'.
+GMCP_CART_FIELDS = ("mode", "good", "village", "secs", "amount",
+                    "half_in", "quality_pct", "cart_id", "tier",
+                    "durability", "cap", "escort")
+GMCP_CART_LEG_FIELDS = ("mode", "good", "amount", "village")
+GMCP_CIDLE_FIELDS = ("slot", "tier", "durability", "cap", "refit",
+                     "horses")
+GMCP_CUPG_FIELDS = ("cart", "tier", "secs", "mats", "done", "detail",
+                    "job_type", "refit")
+GMCP_VOYAGE_FIELDS = ("state", "ship_id", "ship_name", "contract_name",
+                      "contract_type", "danger", "x", "y", "width",
+                      "height", "hull", "morale", "supplies",
+                      "hull_stress", "crew_alive", "crew_max",
+                      "steps_sailed", "next_move_in", "threat_name",
+                      "threat_level", "threat_pressure", "paused_type",
+                      "weather_key", "captain_style", "ship_identity")
+GMCP_HIRD_FIELDS = ("id", "name", "level", "age", "status", "mode",
+                    "loyalty", "atk", "def", "arm", "wpn", "champ",
+                    "hired")
+GMCP_BOND_FIELDS = ("a", "b", "ticks", "tier")
+GMCP_RAIDLOG_FIELDS = ("ship", "target", "daler", "thralls", "lost")
+GMCP_FARM_FIELDS = ("coord", "name", "time_left", "fertilized",
+                    "wilt_left")
+GMCP_REFINERY_FIELDS = ("bldg", "tier", "stock", "cap")
+# bldg:head:quality:gen:sterile:H:F:Y:V:C:breed:hv:trait - 13 fields,
+# where HERD_STATS ("H","F","Y","V","C") are hard/fert/yield/vigor/con.
+GMCP_HERD_FIELDS = ("bldg", "head", "quality", "gen", "sterile",
+                    "hard", "fert", "yield", "vigor", "con",
+                    "breed", "hv", "trait")
+GMCP_SETTLERS_FIELDS = ("settlers", "mood", "tax_rate", "water", "fert")
+# SETTLERX's 24 values in MIP's positional order, under the names GMCP
+# sends them. The order is not guessed: it is the SETTLERX_* index
+# constants above, which were pinned in 2026-09-03 by value-matching one
+# GMCP packet against the MIP SETTLERX of the same session (21 of 24
+# matched exactly; the three that drifted are the three countdowns).
+GMCP_SETTLERX_FIELDS = (
+    "edict", "edict_left", "edict_cd", "housing_cap", "housing_plots",
+    "housing_avg_tier_x100", "housing_quality", "housing_upkeep",
+    "jobs", "employed", "staffed_market_jobs", "mult_pct", "security",
+    "dignity", "flourishing", "net", "tax_income", "comm_upkeep",
+    "sustenance", "employment_score", "sentiment", "supply_next_secs",
+    "pop_next_secs", "max_housing_plots")
+GMCP_SPY_FIELDS = ("tier", "mode", "village", "secs", "cdsecs",
+                   "sabpct", "sabsecs", "sablin")
 
 
 def gmcp_bbe_values(pkg, data):
     """GMCP package -> {BBE key: whole value}. Feeds that arrive complete
-    in one object, so they replace their key outright."""
+    in one packet, so they replace their key outright. Anything that
+    spans pages within a sweep belongs in gmcp_bbe_rows instead, or each
+    page would overwrite the last."""
     out = {}
     if pkg == "Guild.City":
         patrol = data.get("patrol")
         if isinstance(patrol, dict):
-            rec = _rec(patrol, ("count", "remaining"))
+            rec = _req(patrol, ("count", "remaining"))
             if rec:
                 out["PATROL"] = rec
         wx = data.get("weather")
         if isinstance(wx, dict):
             # WEATHER's third field was undecoded ("no readout names it")
             # - GMCP calls it `strength`.
-            rec = _rec(wx, ("season", "weather", "strength"))
+            rec = _req(wx, ("season", "weather", "strength"))
             if rec:
                 out["WEATHER"] = rec
         prod = data.get("production")
-        if isinstance(prod, list):
-            pairs = ["%s:%s" % (e["good"], e["amount"]) for e in prod
-                     if isinstance(e, dict) and "good" in e
-                     and "amount" in e]
-            if len(pairs) == len(prod):
-                out["PRODUCTION"] = ",".join(pairs)
+        if isinstance(prod, list) and prod:
+            out["PRODUCTION"] = ",".join(
+                "%s:%s" % (e.get("good"), e.get("amount")) for e in prod
+                if isinstance(e, dict))
+        blot = data.get("blot")
+        if isinstance(blot, dict):
+            rec = _req(blot, ("filled", "total", "state", "reset_in"))
+            if rec:
+                out["BLOT"] = rec
+        cyc = data.get("dcycle")
+        if isinstance(cyc, dict):
+            rec = _req(cyc, ("name", "secs"))
+            if rec:
+                out["DCYCLE"] = rec
+        raid = data.get("raid")
+        if isinstance(raid, dict):
+            rec = _req(raid, ("secs", "faction", "strength"))
+            if rec:
+                out["RAID"] = rec
+        up = data.get("upkeep")
+        if isinstance(up, dict) and "total" in up and "community" in up:
+            # parse_upkeep reads f0 as the non-settler share, f1 as the
+            # settler share and f5 as the total, pinned 2026-08-23 on
+            # '4686|516|0|0|0|5202' where f0 + f1 == f5. GMCP breaks the
+            # same total down further (roster/throne/roads/forts), so f0
+            # is rebuilt as total - community to preserve that identity
+            # rather than guess which of the four the old f0 meant.
+            out["UPKEEP"] = "|".join(str(v) for v in (
+                up["total"] - up["community"], up["community"],
+                up.get("roads", 0), up.get("forts", 0),
+                up.get("throne", 0), up["total"]))
+        heat = data.get("heat")
+        if isinstance(heat, list) and heat:
+            out["HEAT"] = ";".join(str(h) for h in heat)
+        mons = data.get("monuments_list")
+        if isinstance(mons, list):
+            # The renderer reads MONUMENTS as a COUNT, not as names.
+            out["MONUMENTS"] = str(len(mons))
+        if isinstance(data.get("nexttick"), int):
+            out["NEXTTICK"] = str(data["nexttick"])
+        plan = data.get("cityplan")
+        if isinstance(plan, dict) and isinstance(plan.get("dim"), int):
+            # colony_grid reads CPEND as the side of the WHOLE grid - it
+            # indexes CPT00..CPT<size-1> - while GMCP's `dim` is the
+            # interior alone. The terrain rows are 20 wide against dim 12
+            # and margin 4, and COLONY_INTERIOR_OFFSET is that same 4, so
+            # the full side is dim + 2*margin.
+            out["CPEND"] = str(plan["dim"]
+                               + 2 * plan.get("margin", COLONY_INTERIOR_OFFSET))
+        if isinstance(data.get("cityplan_perks"), str):
+            out["CPP"] = data["cityplan_perks"]
+        for key, gk in (("BDMG", "bdmg"), ("BUILDS", "builds"),
+                        ("RBUILD", "rbuild")):
+            v = data.get(gk)
+            if isinstance(v, str) and v.strip():
+                out[key] = v
     elif pkg == "Guild.Settlement":
         sact = data.get("sactions")
         if isinstance(sact, dict):
-            rec = _rec(sact, SACTIONS_NAMES)
+            rec = _req(sact, SACTIONS_NAMES)
             if rec:
                 out["SACTIONS"] = rec
+        setx = data.get("settlerx")
+        if isinstance(setx, dict):
+            out["SETTLERX"] = _rec(setx, GMCP_SETTLERX_FIELDS)
+        st = data.get("settlers")
+        if isinstance(st, dict):
+            rec = _req(st, GMCP_SETTLERS_FIELDS)
+            if rec:
+                out["SETTLERS"] = rec
+        civ = data.get("scivics")
+        if isinstance(civ, list) and civ:
+            out["SCIVICS"] = ";".join(
+                "%s:%s" % (e.get("id"), e.get("count")) for e in civ
+                if isinstance(e, dict))
+        con = data.get("sconsume")
+        if isinstance(con, dict) and con:
+            out["SCONSUME"] = _pairs(con)
+        hp = data.get("shplots")
+        if isinstance(hp, dict):
+            # SHPLOTS is T1..T4 counts, positional.
+            out["SHPLOTS"] = "|".join(
+                str(hp.get("h%d" % i, 0)) for i in range(1, 5))
+        if isinstance(data.get("sproj"), str) and data["sproj"].strip():
+            out["SPROJ"] = data["sproj"]
     elif pkg == "Guild.Roster":
         who = data.get("thrall_follower")
         if isinstance(who, dict):
-            rec = _rec(who, GMCP_FOLLOWER_FIELDS)
+            rec = _req(who, GMCP_FOLLOWER_FIELDS)
             if rec:
                 out["THRALL_FOLLOWER"] = rec
+        th = data.get("thralls")
+        if isinstance(th, dict) and th:
+            # GAME FACT (user, 2026-09-15): these are the thralls assigned
+            # to each building, and all 20 buildings GMCP names are valid.
+            # THRALL_BUILDINGS had 16 POSITIONAL slots and a different set
+            # (no apiary/armoury/goldsmith/skald_hall/weaponry; a Thrall
+            # Pen and Brewery that no longer exist), so the positional
+            # form cannot carry this - parse_thralls reads the named form.
+            out["THRALLS"] = _pairs(
+                {k: v for k, v in th.items() if k != "total"})
+        spy = data.get("spy")
+        if isinstance(spy, dict) and "tier" in spy:
+            out["SPY"] = _rec(spy, GMCP_SPY_FIELDS)
+        varang = []
+        for gk in ("varang_out", "varang_in"):
+            for v in data.get(gk) or []:
+                if isinstance(v, dict):
+                    varang.append(_rec(v, ("name", "village", "secs")))
+        if varang:
+            out["VARANG"] = ";".join(varang)
     elif pkg == "Guild.State":
         fx = data.get("fx")
         if isinstance(fx, dict) and isinstance(fx.get("stfx"), str):
             out["STFX"] = fx["stfx"]
+        if isinstance(data.get("daler"), int):
+            out["DALER"] = str(data["daler"])
+        # The hpbar resources. BBE carried SEID/VIG/RAD (and their M-
+        # maxes); GMCP sends them under the subguild pool names in
+        # `points`, which rides the DELTA packets too - pinned to
+        # logs/gmcp_20260915_135025.log, where points.vitka/viga/drotta
+        # and gline1's S[..] V[..] R[..] are the same three numbers in
+        # the same packet. `buandi` has no BBE key and no bar, and
+        # `fury` is not taken from here - see the FURY meter below.
+        pts = data.get("points")
+        if isinstance(pts, dict):
+            for key, gk in (("SEID", "vitka"), ("VIG", "viga"),
+                            ("RAD", "drotta")):
+                for bbe, src in ((key, gk), ("M" + key, "m" + gk)):
+                    if isinstance(pts.get(src), int):
+                        out[bbe] = str(pts[src])
+        hp = data.get("hp")
+        if isinstance(hp, dict):
+            for bbe, gk in (("HP", "cur"), ("MHP", "max"),
+                            ("THREK", "threk"), ("MTHREK", "mthrek")):
+                if isinstance(hp.get(gk), int):
+                    out[bbe] = str(hp[gk])
+        # The Stats tab reads FURY through parse_meter, which wants the
+        # bracket meter MIP sent ('[----------]grey:'), not an int. GMCP
+        # does carry the count as bars.gp1/gp1_max - Guild.Info names it
+        # `gp1_name: "Fury"` - but gline1 already holds the meter the mud
+        # itself rendered, so take that rather than re-deriving it.
+        gl = data.get("gline1")
+        if isinstance(gl, str):
+            m = re.search(r"F\[([^\]]*)\]", gl)
+            if m:
+                out["FURY"] = "[%s]" % m.group(1)
+    elif pkg == "Guild.Info":
+        if isinstance(data.get("glvl"), int):
+            out["GLVL"] = str(data["glvl"])
+    elif pkg == "Guild.Voyage":
+        v = data.get("voyage")
+        if isinstance(v, dict) and v:
+            crew = _traits_for(data.get("voyage_crew_traits"), None)
+            ship = _traits_for(data.get("voyage_ship_traits"), None)
+            out["VOYAGE"] = "|".join(
+                (_rec(v, GMCP_VOYAGE_FIELDS), crew, ship))
+        for key, gk in (("VOYAGE_WAIT", "voyage_wait"),
+                        ("VRESOLVE", "vresolve"),
+                        ("VSPOILS", "vspoils")):
+            if gk in data and not isinstance(data[gk], (list, dict)):
+                out[key] = str(data[gk])
+        path = data.get("vqpath")
+        if isinstance(path, list) and path:
+            # parse_vqpath accepts the flat 'c,r,c,r' form, which is what
+            # the GMCP list of "c,r" cells joins to.
+            out["VQPATH"] = ",".join(str(p) for p in path)
+        for key, gk in (("VSAGA", "vsaga"), ("VMEM", "vmem")):
+            rows = data.get(gk)
+            if isinstance(rows, list) and rows:
+                out[key] = ";".join(str(r) for r in rows)
+        cur = data.get("vcurios")
+        if isinstance(cur, list) and cur:
+            # parse_counts reads 'name|count;...'; the curio list carries
+            # names only, one of each.
+            out["VCURIOS"] = ";".join("%s|1" % c for c in cur)
+        for key, gk in (("VGOODS", "vgoods"), ("VAIDS", "vaids"),
+                        ("VRUNES", "vrunes"), ("VRELICS", "vrelics"),
+                        ("VBOONS", "vboons")):
+            obj = data.get(gk)
+            if isinstance(obj, dict) and obj:
+                out[key] = ";".join("%s|%s" % (k, v)
+                                    for k, v in obj.items())
+        ch = data.get("voyage_chart")
+        if isinstance(ch, dict):
+            rec = _req(ch, ("width", "height", "chart_mode"))
+            if rec:
+                out["VCHH"] = rec
     return out
 
 
@@ -2353,56 +2857,126 @@ def gmcp_bbe_rows(pkg, data):
     by identity so a re-sweep replaces rather than appends. `group`
     scopes the replacement: "" means the sweep carries the whole key,
     while LMARKET arrives one lineage at a time and must only replace the
-    lineages this sweep actually carried."""
+    lineages this sweep actually carried.
+
+    Rows whose ORDER is the information (the warehouse batches, the herd
+    list) are keyed by page-and-index so join_rows can restore arrival
+    order; rows with a real identity are keyed by it so a re-sweep
+    replaces the right one."""
     out = {}
+    page = data.get("page") if isinstance(data.get("page"), int) else 0
     if pkg == "Guild.Fleet":
         for sh in data.get("ships") or []:
-            rec = isinstance(sh, dict) and _rec(sh, GMCP_SHIP_FIELDS)
+            rec = isinstance(sh, dict) and _req(sh, GMCP_SHIP_FIELDS)
             if rec:
                 out.setdefault("SHIPS", []).append(
                     ("", str(sh["id"]), rec))
+        # RAIDLOG's goods column arrives as its own flat list keyed by the
+        # raid's idx, so the two are stitched here rather than in the
+        # renderer. 'good:qty,good:qty' is the BUILDINGS form, which is
+        # what parse_raidlog hands to parse_buildings.
+        for i, g in enumerate(data.get("raidlog_goods") or []):
+            if isinstance(g, dict):
+                out.setdefault("RAIDLOG", []).append(
+                    (CHILD, "%03d#%03d%03d" % (g.get("idx") or 0,
+                                                   page, i),
+                     "%s:%s" % (g.get("good"), g.get("amount"))))
+        for r in data.get("raidlog") or []:
+            rec = isinstance(r, dict) and _req(r, GMCP_RAIDLOG_FIELDS)
+            if rec:
+                out.setdefault("RAIDLOG", []).append(
+                    (PARENT, "%03d" % (r.get("idx") or 0), rec))
+        for gk, idx in (("rtargets_lineage", 0),
+                        ("rtargets_historical", 1)):
+            rows = data.get(gk)
+            if isinstance(rows, list) and rows:
+                # RTARGETS is 'lineage|historical', each half a comma list
+                # of 'name:good:good'. The two halves arrive separately,
+                # so they are buffered as two groups and joined in order.
+                out.setdefault("RTARGETS", []).append(
+                    (str(idx), "%03d" % page, ";".join(str(r)
+                                                       for r in rows)))
+        if isinstance(data.get("supg"), str) and data["supg"].strip():
+            out["SUPG"] = [("", "0", data["supg"])]
     elif pkg == "Guild.Trade":
         for rt in data.get("routes") or []:
-            rec = isinstance(rt, dict) and _rec(rt, GMCP_ROUTE_FIELDS)
+            rec = isinstance(rt, dict) and _req(rt, GMCP_ROUTE_FIELDS)
             if rec:
                 out.setdefault("ROUTES", []).append(
                     ("", str(rt["village"]), rec))
+        for i, lg in enumerate(data.get("cart_legs") or []):
+            if isinstance(lg, dict):
+                out.setdefault("CARTS", []).append(
+                    (CHILD, "%03d#%03d%03d" % (lg.get("cart_id") or 0,
+                                                   page, i),
+                     _rec(lg, GMCP_CART_LEG_FIELDS)))
+        for c in data.get("carts") or []:
+            rec = isinstance(c, dict) and _req(c, GMCP_CART_FIELDS)
+            if rec:
+                out.setdefault("CARTS", []).append(
+                    (PARENT, "%03d" % (c.get("cart_id") or 0), rec))
+        # Trade is a delta feed: cidle comes only when it changes, so an
+        # empty list is news (the last idle cart left) and must publish.
+        if isinstance(data.get("cidle"), list):
+            out.setdefault("CIDLE", [])
+        for c in data.get("cidle") or []:
+            rec = isinstance(c, dict) and _req(c, GMCP_CIDLE_FIELDS)
+            if rec:
+                out.setdefault("CIDLE", []).append(
+                    ("", str(c["slot"]), rec))
+        for c in data.get("cupg") or []:
+            rec = isinstance(c, dict) and _req(c, GMCP_CUPG_FIELDS)
+            if rec:
+                out.setdefault("CUPG", []).append(
+                    ("", str(c.get("cart")), rec))
+        # REFINERY packs each building's curing grades into the tail of
+        # its own record, low grade first.
+        for i, g in enumerate(data.get("refinery_grades") or []):
+            if isinstance(g, dict):
+                out.setdefault("REFINERY", []).append(
+                    (CHILD, "%s#%03d%03d" % (g.get("bldg"), page, i),
+                     "%s,%s,%s" % (g.get("grade"), g.get("qty"),
+                                   g.get("pct"))))
+        for r in data.get("refinery") or []:
+            rec = isinstance(r, dict) and _req(r, GMCP_REFINERY_FIELDS,
+                                               ":")
+            if rec:
+                out.setdefault("REFINERY", []).append(
+                    (PARENT, str(r["bldg"]), rec))
     elif pkg == "Guild.Voyage":
-        # DELIBERATE RULE EXCEPTION, approved by the user 2026-09-03:
-        # GMCP omits crew_traits and ship_traits, so this synthesis is
-        # lossy - the only lossy one in the port. It is still the right
-        # trade, twice over. The Fleet renderer does not read either
-        # field (its own comment says the traits are shown in the Voyage
-        # block above, which VOYAGE feeds, and VOYAGE stays on MIP). And
-        # what it replaces is not a working feed: MIP chunks LONGSHIP
-        # across concurrent pushes that reassemble_chunks cannot match to
-        # each other, so 320 of 364 pushes in logs/mip_20260903_143404
-        # carried a MALFORMED record ('Deep Soad-hulled', 'Waterford|
-        # rford'). GMCP paginates - no seams, nothing to mis-join.
         for sh in data.get("longship") or []:
             if not isinstance(sh, dict):
                 continue
             # A ship with no style sends the INTEGER 0 for these two,
-            # where MIP sends an empty field for the same ships (6, 7,
-            # 8, 10, 11 in the capture). Confirmed by cross-reference,
-            # not assumed - str(0) would otherwise put a literal "0"
-            # where a style name belongs.
+            # where MIP sent an empty field for the same ships. Confirmed
+            # by cross-reference - str(0) would otherwise put a literal
+            # "0" where a style name belongs.
             sh = dict(sh)
             for f in ("voyage_identity", "captain_style"):
                 if sh.get(f) == 0:
                     sh[f] = ""
-            head = _rec(sh, GMCP_LONGSHIP_HEAD)
-            tail = _rec(sh, GMCP_LONGSHIP_TAIL)
+            head = _req(sh, GMCP_LONGSHIP_HEAD)
+            tail = _req(sh, GMCP_LONGSHIP_TAIL)
             if head and tail:
+                crew = _traits_for(data.get("longship_crew_traits"),
+                                   sh["id"])
+                ship = _traits_for(data.get("longship_ship_traits"),
+                                   sh["id"])
                 out.setdefault("LONGSHIP", []).append(
-                    ("", str(sh["id"]), head + "|||" + tail))
+                    ("", str(sh["id"]),
+                     "|".join((head, crew, ship, tail))))
+        rows = data.get("voyage_chart_rows")
+        if isinstance(rows, list) and rows:
+            for i, r in enumerate(rows):
+                out.setdefault("VCR", []).append(
+                    ("", "%03d%03d" % (page, i), str(r)))
     elif pkg == "Guild.TradeGoods":
         # One SWEEP is one trade hold: five pages of goods, then a sixth
         # page carrying only `lin` as a terminator. Grouping by lin keeps
         # the per-hold scoping - a sweep must replace its own hold and
         # leave the other two alone.
         for g in data.get("goods") or []:
-            rec = isinstance(g, dict) and _rec(g, GMCP_TGOODS_FIELDS, ":")
+            rec = isinstance(g, dict) and _req(g, GMCP_TGOODS_FIELDS, ":")
             if rec:
                 out.setdefault("TGOODS", []).append(
                     (str(g["lin"]), str(g["good"]), rec))
@@ -2411,12 +2985,158 @@ def gmcp_bbe_rows(pkg, data):
             if not key.startswith("lmarket_") or not isinstance(rows, list):
                 continue
             for head in rows:
-                rec = isinstance(head, dict) and _rec(
+                rec = isinstance(head, dict) and _req(
                     head, GMCP_LMARKET_FIELDS)
                 if rec:
                     out.setdefault("LMARKET", []).append(
                         (str(head["lin"]), str(head["idx"]), rec))
+        for i, h in enumerate(data.get("herds") or []):
+            rec = isinstance(h, dict) and _req(h, GMCP_HERD_FIELDS, ":")
+            if rec:
+                out.setdefault("HERDS", []).append(
+                    ("", "%03d%03d" % (page, i), rec))
+        for n in data.get("lneeds") or []:
+            rec = isinstance(n, dict) and _req(
+                n, ("species", "current", "cap"))
+            if rec:
+                out.setdefault("LNEEDS", []).append(
+                    ("", str(n["species"]), rec))
+        feed = data.get("lfeed")
+        if isinstance(feed, dict):
+            rec = _req(feed, ("grain", "water", "head"))
+            if rec:
+                out["LFEED"] = [("", "0", rec)]
+        if "bqueue" in data and "bqueue_used" in data:
+            # The 'used/cap|' header the wire puts in front of the slots.
+            rows = [("0", "0", "%s/%s" % (data["bqueue_used"],
+                                          data.get("bqueue_max", 0)))]
+            for i, b in enumerate(data.get("bqueue") or []):
+                rec = isinstance(b, dict) and _req(
+                    b, ("slot", "species", "meat", "qty", "secs",
+                        "grade"), ":")
+                if rec:
+                    rows.append(("1", str(i), rec))
+            out["BQUEUE"] = rows
+    elif pkg == "Guild.Warehouse":
+        if isinstance(data.get("wstock_cap"), int):
+            # The bare-number header MIP prefixed WSTOCK with: the real
+            # warehouse capacity, skill bonuses included (8085 where the
+            # tier table says 5250). wstock_capacity() tells it from an
+            # entry by its lack of a '|'. It arrives on the LAST page,
+            # after the batches, hence the sorted group.
+            out.setdefault("WSTOCK", []).append(
+                ("0", "0", str(data["wstock_cap"])))
+        for i, w in enumerate(data.get("wstock") or []):
+            if not isinstance(w, dict):
+                continue
+            rec = _req(w, ("good", "amount", "pct"))
+            if rec:
+                out.setdefault("WSTOCK", []).append(
+                    ("1", "%03d%03d" % (page, i),
+                     rec + "|" + str(w.get("grade", ""))))
+    elif pkg == "Guild.Roster":
+        for gk in ("hird_0", "hird_1"):
+            for h in data.get(gk) or []:
+                rec = isinstance(h, dict) and _req(h, GMCP_HIRD_FIELDS)
+                if rec:
+                    out.setdefault("HIRD", []).append(
+                        ("", str(h["id"]), rec))
+        for b in data.get("bonds") or []:
+            rec = isinstance(b, dict) and _req(b, GMCP_BOND_FIELDS)
+            if rec:
+                out.setdefault("BONDS", []).append(
+                    ("", "%s-%s" % (b.get("a"), b.get("b")), rec))
+    elif pkg == "Guild.City":
+        for i, b in enumerate(data.get("buildings") or []):
+            rec = isinstance(b, dict) and _req(b, ("id", "tier"), ":")
+            if rec:
+                out.setdefault("BUILDINGS", []).append(
+                    ("", "%03d%03d" % (page, i), rec))
+        # FARM is a header record followed by the plots, and the header
+        # arrives on a LATER page than the plots - so the groups are
+        # sorted at join time rather than left in arrival order.
+        meta = data.get("farm_meta")
+        if isinstance(meta, dict) and "wmod" in meta:
+            out.setdefault("FARM", []).append(
+                ("0", "0", "meta|%s" % meta["wmod"]))
+        for p in data.get("farm_plots") or []:
+            rec = isinstance(p, dict) and _req(p, GMCP_FARM_FIELDS)
+            if rec:
+                out.setdefault("FARM", []).append(
+                    ("1", str(p["coord"]), rec))
+        for c in data.get("cityplan_placeable") or []:
+            rec = isinstance(c, dict) and _req(
+                c, ("id", "pal", "glyph", "name"))
+            if rec:
+                out.setdefault("CPU", []).append(
+                    ("", str(c["id"]), rec))
+        rows = data.get("cityplan_terrain")
+        if isinstance(rows, list) and rows:
+            for i, r in enumerate(rows):
+                out.setdefault("CPT", []).append(
+                    ("", "%03d%03d" % (page, i), str(r)))
+    elif pkg == "Guild.Map":
+        # Three separate sweeps under one package, each carrying only its
+        # own field. Keyed by page-and-index so join time can restore
+        # arrival order - the page a sweep starts on differs per field.
+        for gk, key in (("terrain", "VMR"), ("east", "MEE"),
+                        ("south", "MES")):
+            rows = data.get(gk)
+            if isinstance(rows, list) and rows:
+                for i, r in enumerate(rows):
+                    out.setdefault(key, []).append(
+                        ("", "%03d%03d" % (page, i), str(r)))
+    elif pkg == "Guild.CityBuildings":
+        for c in data.get("cityplan_buildings") or []:
+            if not isinstance(c, dict):
+                continue
+            # parse_colony_buildings reads name|x|y|w|h|category|glyph|
+            # Label. Single-tile buildings omit w/h.
+            c = dict(c)
+            c.setdefault("w", 1)
+            c.setdefault("h", 1)
+            c["label"] = str(c.get("id", "")).replace("_", " ").title()
+            rec = _req(c, ("id", "x", "y", "w", "h", "pal", "glyph",
+                           "label"))
+            if rec:
+                out.setdefault("CPB", []).append(
+                    ("", "%s-%s-%s" % (c.get("id"), c.get("x"),
+                                       c.get("y")), rec))
     return out
+
+
+# A few feeds arrive as a PARENT list plus a flat CHILD list keyed back
+# to it - a raid and its plundered goods, a cart and its multi-stop legs,
+# a refinery and its curing grades. The two halves land on DIFFERENT
+# pages of the same sweep (refinery runs 2 pages, its grades 4), so they
+# cannot be stitched inside one packet: they are buffered as two groups
+# and joined once the sweep is whole. A child's identity is
+# '<parent id>#<page><index>', which sorts into arrival order under
+# its parent and lets the parent be recovered by splitting on the '#'.
+PARENT, CHILD = "0", "1"
+
+
+def _stitch(store, sep, join):
+    """Join each PARENT record to its CHILD records. `sep` goes between a
+    parent and its children, `join` between the children."""
+    kids = {}
+    for ident, rec in sorted(store.get(CHILD, {}).items()):
+        # rsplit: exactly one '#<page><index>' suffix was appended, so
+        # this recovers the parent id even if the id itself holds a '#'.
+        kids.setdefault(ident.rsplit("#", 1)[0], []).append(rec)
+    out = []
+    for ident, rec in sorted(store.get(PARENT, {}).items()):
+        got = kids.get(ident)
+        out.append(rec + sep + join.join(got) if got else rec + sep)
+    return out
+
+
+# Keys whose rows are indexed one-per-state-key rather than joined into a
+# single value: the Colony terrain (CPT00..), the voyage chart (VCR00..)
+# and the Guild.Map wall/biome grids. join_rows never sees these - the
+# caller expands them instead.
+INDEXED_ROW_KEYS = {"CPT": "CPT%02d", "VCR": "VCR%02d",
+                    "VMR": "VMR%02d", "MEE": "MEE%02d", "MES": "MES%02d"}
 
 
 def join_rows(key, store):
@@ -2425,7 +3145,11 @@ def join_rows(key, store):
     Nearly every key is a flat ';'-joined record list. TGOODS is the
     exception: it is grouped by trade hold as '<lin>=<goods>' joined
     with '|', and parse_tgoods reads the holds left to right, so they
-    are emitted in lin order rather than arrival order."""
+    are emitted in lin order rather than arrival order. FARM, BQUEUE and
+    RTARGETS are group-sorted for the same reason - their header or
+    second half arrives on a different page from the rows it belongs to.
+    HERDS is comma-joined, being the one feed whose entry separator is
+    not ';'."""
     if key == "TGOODS":
         def lin_order(g):
             try:
@@ -2434,6 +3158,38 @@ def join_rows(key, store):
                 return (1, 0)
         return "|".join("%s=%s" % (g, ";".join(store[g].values()))
                         for g in sorted(store, key=lin_order))
+    if key == "RTARGETS":
+        # 'lineage|historical', each half a ';' list of name:good:good.
+        return "|".join(";".join(store[g].values())
+                        for g in sorted(store))
+    if key == "RAIDLOG":
+        return ";".join(_stitch(store, "|", ","))
+    if key == "CARTS":
+        # A cart with no route plan keeps the 12 fixed fields and no
+        # trailing '|', which is what parse_carts expects.
+        return ";".join(r.rstrip("|") if r.endswith("|") else r
+                        for r in _stitch(store, "|", "!"))
+    if key == "REFINERY":
+        # Entries are '|'-separated; a building's grades are ';'-joined
+        # inside its own entry, low grade first.
+        return "|".join(_stitch(store, ":", ";"))
+    if key == "BQUEUE":
+        # 'used/cap|slot:...,slot:...' - header, then a COMMA list.
+        head = [r for g in sorted(store) if g == "0"
+                for r in store[g].values()]
+        body = [r for g in sorted(store) if g != "0"
+                for r in store[g].values()]
+        return "|".join(head + [",".join(body)]) if head else ""
+    if key == "FARM":
+        return ";".join(r for grp in sorted(store)
+                        for r in store[grp].values())
+    if key in ("HERDS", "BUILDINGS"):
+        # The two feeds whose ENTRY separator is ',' rather than ';'.
+        return ",".join(r for _i, r in sorted(
+            (i, r) for grp in store.values() for i, r in grp.items()))
+    if key == "WSTOCK":
+        return ";".join(r for grp in sorted(store)
+                        for _i, r in sorted(store[grp].items()))
     return ";".join(r for grp in store.values() for r in grp.values())
 
 
@@ -2814,8 +3570,8 @@ class VikingStatus(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._closed)
         widgets.add_window_menu(self, topmost)
         f = fonts or {}
-        self.mono = f.get("mono", ("Consolas", 11))
-        self.mono_bold = f.get("mono_bold", ("Consolas", 11, "bold"))
+        self.mono = f.get("mono", (widgets.MONO, 11))
+        self.mono_bold = f.get("mono_bold", (widgets.MONO, 11, "bold"))
         self.state_data = {}
         self.tabs = {}
         self.tab_btns = {}

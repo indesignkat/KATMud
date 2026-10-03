@@ -4,7 +4,14 @@ map pane. Ported from v6; the map pane gains the v7 area header
 and visible collision markers (6.4: punt visibly, not confusingly).
 """
 
+import sys
 import tkinter as tk
+
+# The monospace family every pane and panel uses. macOS has no Consolas and
+# Tk there does not know the Linux "Monospace" alias, so either would fall
+# back to a proportional font and break the column alignment.
+MONO = {"win32": "Consolas", "darwin": "Menlo"}.get(sys.platform,
+                                                    "Monospace")
 
 
 class VitalsBar(tk.Canvas):
@@ -19,7 +26,7 @@ class VitalsBar(tk.Canvas):
         self.w = width
         self.h = 22
         self.warn = warn or []
-        self.font = font or ("Consolas", 9, "bold")
+        self.font = font or (MONO, 9, "bold")
         self.set(0, 0)
 
     def set(self, cur, top):
@@ -81,8 +88,25 @@ class MapPane(tk.Canvas):
     def f(self, which, fallback):
         return self.fonts.get(which, fallback)
 
+    @staticmethod
+    def _same_room(a, b):
+        """Do two room lines name the same room?
+
+        Compared on the name plus the SET of exits, because the two
+        sources spell them differently: the MUD sends 'The Trunk (e,ne)'
+        while the map stores 'The Trunk (ne,e)'. A raw string compare
+        made both append, so the trail filled with each room twice in two
+        spellings and stopped resembling the rooms actually walked."""
+        def key(s):
+            s = (s or "").strip()
+            name, _, rest = s.partition("(")
+            exits = frozenset(e.strip().lower()
+                              for e in rest.rstrip(")").split(",") if e.strip())
+            return name.strip().lower(), exits
+        return key(a) == key(b)
+
     def update_room(self, room=None, exits=None):
-        if room is not None and room != self.room:
+        if room is not None and not self._same_room(room, self.room):
             self.trail.append(room)
             self.trail = self.trail[-6:]
             self.room = room
@@ -97,10 +121,10 @@ class MapPane(tk.Canvas):
             sub = self.area + (f" [{self.coder}]" if self.coder else "")
         if sub:
             self.create_text(w // 2, 10, text=sub, fill="#9999cc",
-                             font=self.f("trail", ("Consolas", 8)))
+                             font=self.f("trail", (MONO, 8)))
             self.create_text(w // 2, 24, text=hdr, fill="#ccccff",
                              font=self.f("room",
-                                         ("Consolas", 10, "bold")))
+                                         (MONO, 10, "bold")))
         else:
             # No area (the viking biome clears the graph, so nothing
             # names the area): the room is the only header line, and it
@@ -109,11 +133,11 @@ class MapPane(tk.Canvas):
             # the shadowed title reported on 2026-09-04.
             self.create_text(w // 2, 12, text=hdr, fill="#ccccff",
                              font=self.f("room",
-                                         ("Consolas", 10, "bold")))
+                                         (MONO, 10, "bold")))
         if self.mapping:
             self.create_text(w - 6, 10, anchor="e", text="MAPPING",
                              fill="#ffaa44",
-                             font=self.f("trail", ("Consolas", 8)))
+                             font=self.f("trail", (MONO, 8)))
 
     def draw_graph(self, w, h):
         cell = max(22, min(40, (min(w, h) - 40) // 7))
@@ -171,7 +195,7 @@ class MapPane(tk.Canvas):
                 self.create_text(px, py, text=label, fill="#ffffff"
                                  if here else "#88ccaa",
                                  font=self.f("exit",
-                                             ("Consolas", 9, "bold")),
+                                             (MONO, 9, "bold")),
                                  tags=(tag,))
             if not here:
                 if max(abs(x), abs(y)) == 1:
@@ -189,7 +213,7 @@ class MapPane(tk.Canvas):
         if self.gstatus:
             self.create_text(6, h - 10, anchor="w", text=self.gstatus,
                              fill="#555577",
-                             font=self.f("trail", ("Consolas", 8)))
+                             font=self.f("trail", (MONO, 8)))
 
     def redraw(self):
         self.delete("all")
@@ -220,7 +244,7 @@ class MapPane(tk.Canvas):
                                  tags=(f"exit_{dl}",))
                 self.create_text(ex, ey, text=dl, fill="#aaffaa",
                                  font=self.f("exit",
-                                             ("Consolas", 8, "bold")),
+                                             (MONO, 8, "bold")),
                                  tags=(f"exit_{dl}",))
                 self.tag_bind(f"exit_{dl}", "<Button-1>",
                               lambda _e, dd=dl: self.send_cb(dd))
@@ -239,7 +263,7 @@ class MapPane(tk.Canvas):
                 t = self.create_text(x, y, anchor="w", text=f"[{d}]",
                                      fill="#aaffaa",
                                      font=self.f("exit",
-                                                 ("Consolas", 9,
+                                                 (MONO, 9,
                                                   "bold")),
                                      tags=(f"odd_{d}",))
                 bbox = self.bbox(t)
@@ -252,7 +276,7 @@ class MapPane(tk.Canvas):
         for i, name in enumerate(reversed(self.trail[:-1])):
             self.create_text(8, h - 12 - i * 14, anchor="w",
                              text=name, fill="#555577",
-                             font=self.f("trail", ("Consolas", 8)))
+                             font=self.f("trail", (MONO, 8)))
 
 
 def add_window_menu(win, topmost=False):

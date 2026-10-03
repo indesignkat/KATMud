@@ -87,7 +87,7 @@ flood breaker.
 | `Hunt` / `Hunt mapless` | Like `Bot` but **actively attacks** any mob it finds. Uses the guild setting `autoattack_command` if set (a `{t}` token is replaced with the mob keyword from the italic marker line), else `kill <keyword>`. Skips non-party players (party = `pwho` roster + setting `bot_party_whitelist`). Biases movement toward the 3s minimap's mob cells when charted. `Toggle flat` makes it skip up/down exits. When mapless, `wander_clear_limit` (default 30, `0` = off) replaces `hunt_clear_limit`'s no-combat stop. |
 | `Hunt <target>` | Same roam, but only kills `<target>`: sends `kill <target>` in any room with a mob and moves on when the MUD answers "There is no `<target>` here." Overrides a self-targeting `autoattack_command`; a `{t}` one gets the target substituted. Note `hunt_clear_limit` still counts target-less rooms as "no combat" — raise it or set it to `0` for a long targeted sweep. |
 | `Hunt <target> <watch>` | As above, but the hunt **stops in place and alerts** when a mob line matching `<watch>` appears (bar in the main pane + tell sound + an ntfy push if `ntfy_topic` is set). Checked on room entry and after every kill (the post-kill glance) — before the attack and before the player-skip, so it never kills past the watch mob or misses one in a ceded room. Matched only against the italic `look_monster` lines, so chat can't false-alarm it. A watch mob that arrives *and leaves* mid-fight is missed. Both keywords are single words. |
-| `Hunt <dir> [...]` | Fence the hunt: step `<dir>` first and treat the room you left as the boundary. Combines with the target/watch forms (`Hunt north einherjer eihwaz`). |
+| `Fence <dir> [target] [watch]` | **The direction is the way you will *not* go.** Hunts in any direction from this room **except** `<dir>`, and **does** fight in the room you are standing in. `<dir>` must be a real exit of that room and may be a **named** one (`Fence leave`, `Fence enter`), not just a compass point. A Fence run is locked to one level — only the eight compass directions, no `u`, `d`, `enter` or `leave`, whatever `Toggle flat` says (the toggle itself is left untouched) — because another level usually means another difficulty band and a different setup. Typical use: speedrun in, step past the entrance room, then fence the way back, so the roam can neither wander out of the area nor return to a non-combat NPC at the door. Combines with the target/watch forms (`Fence se einherjer eihwaz`). Replaces `Hunt <dir>`, which meant the **opposite** (the direction to *start* in); that form is now refused with a pointer here. |
 | `Hunt mapless <target> [<watch>]` | The mapless roam with the same target/watch parsing. |
 | `Hunt debug` / `Bot debug` | Toggle per-room reporting: ready time, trigger, mob/player flags, decision. |
 | `Hunt off` / `Bot off` | Stop. |
@@ -202,9 +202,10 @@ character.
 | `Reagents [n]` | Necromancers: send `gs`, then buy each reagent up to `n` (default 999) using the fresh counts, skipping bloodmoss. |
 | `Reminder <time> <text>` | Set a reminder, e.g. `Reminder 5m buff wore off`, `Reminder 1h30m reboot soon`. Shared across muds and characters. |
 | `Reminder every <time> <text>` | Repeating reminder. |
-| `Reminder` / `Reminders` / `Reminder list` | List pending reminders. |
+| `Reminder` / `Reminders` / `Reminder list` | List pending reminders. A fired one stays listed as `expired <age> ago` for an hour before it goes, so a banner that scrolled past is still recoverable. |
 | `Reminder clear <id>` | Cancel one (`del`/`delete`/`cancel`/`rm` also accepted). |
-| `Reminder clear` / `Reminder clear all` | Cancel all. |
+| `Reminder clear` / `Reminder clear all` | Cancel all, expired ones included. |
+| `Reminder clear expired` | Drop the already-fired ones, leaving pending reminders alone. |
 
 **Note on `Corpse`:** separate multiple commands with `/`, **not** the
 `;` separator — `;` would split the line before this command ever sees

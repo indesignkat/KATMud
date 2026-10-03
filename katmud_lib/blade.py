@@ -218,6 +218,19 @@ def available_gxp(g2n, g2n_pct):
     return max(0, next_cost - g2n)
 
 
+def glvl_from_gmcp(gxp, gtnl):
+    """Current glvl from GMCP Guild.State `gxp` (spendable) + `gtnl` (G2N,
+    NEGATIVE once banked past the next level). Their sum is the next
+    level's cost EXACTLY (log din-20260925: 140,848,568 + -1,898,568 =
+    138,950,000 = glvl 77), so this is a lookup, not a snap. None if the
+    sum matches no table cost."""
+    nxt = gxp + gtnl
+    for lv, cost in GLVL_COST.items():
+        if cost == nxt:
+            return lv - 1
+    return None
+
+
 def fmt_gxp(n):
     """123550000 -> '123.55M', 30000000 -> '30M', None -> '?'."""
     if n is None:
@@ -313,7 +326,7 @@ class BladeStatus(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._closed)
         widgets.add_window_menu(self, topmost)
         f = fonts or {}
-        self.mono = f.get("mono", ("Consolas", 11))
+        self.mono = f.get("mono", (widgets.MONO, 11))
         sb = tk.Scrollbar(self)
         sb.pack(side="right", fill="y")
         self.txt = tk.Text(self, bg=BLADE_BG, fg="#cccccc", font=self.mono,
@@ -328,7 +341,7 @@ class BladeStatus(tk.Toplevel):
             self.txt.tag_configure(tag, foreground=colour)
         self.txt.tag_configure("sec", foreground="#d79030",
                                font=f.get("mono_bold",
-                                          ("Consolas", 11, "bold")))
+                                          (widgets.MONO, 11, "bold")))
 
     def _closed(self):
         if self.on_close:
