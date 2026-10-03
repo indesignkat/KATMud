@@ -31,7 +31,7 @@ from collections import deque, namedtuple
 from tkinter import font as tkfont
 from tkinter import simpledialog
 
-from . import (bard, blade, changeling, config, credentials, dialogs,
+from . import (angel, bard, blade, changeling, config, credentials, dialogs,
                elemental, mapdata, mapparse, mapsql, mobdb, necro, paths,
                picker, profiles, viking)
 from .protocol import (MudConnection, parse_composite,
@@ -415,6 +415,8 @@ class MudClient:
         self.elem_info = {}             # merged GMCP Guild.Info
         self.elem_score = {}            # scraped `guild score` / `skills`
         self.elem_win = None            # detached Elemental Status panel
+        self.angel_transfigs = None     # shown transfigs (GMCP), None=unseen
+        self.angel_gxp = None           # % to next station, 2dp (GMCP)
         self.blade_win = None           # detached Bladesinger Status panel
         self.blade_flags = {}           # prompt [CoCsBlMsRvFl] -> active effects
         self.blade_skills = []          # ordered `skills` rows, for the panel
@@ -1070,6 +1072,10 @@ class MudClient:
         self.tracked = dict(self.setting(self._tracked_key(), {}) or {})
         self.necro_guard = bool(self.setting("necro_guard", True))
         self.evoke_age_auto = bool(self.setting("evoke_age_auto", True))
+        # Angel side + glvl: no GMCP source, learned from text and saved to
+        # the role layer (see angel_scan_line / gmcp_guild_state).
+        self.angel_side = self.setting("angel_side")
+        self.angel_glvl = self.setting("angel_glvl")
         # Default ON since 2026-09-15: MIP is gone for good, so GMCP is
         # the only transport left. Opt-in made sense while both ran; now
         # it just means a player who never found the toggle gets nothing.
@@ -1271,6 +1277,8 @@ class MudClient:
         # block sits in the pane permanently, so it must not shout.
         self.info.tag_configure("power_rdy", foreground="#7fc47f")
         self.info.tag_configure("power_cd", foreground="#c98686")
+        self.info.tag_configure("angel_on", foreground="#46c246")
+        self.info.tag_configure("angel_off", foreground="#666666")
         right.add(self.chat, minsize=80)
         right.add(self.map, minsize=100, height=240)
         right.add(self.info, minsize=60)
@@ -8428,6 +8436,8 @@ class MudClient:
                             self.changeling_scan_line(clean)
                         elif self.guild.lower() == "elementals":
                             self.elemental_scan_line(clean)
+                        elif self.guild.lower() == "angels":
+                            self.angel_scan_line(clean)
                         elif self.guild.lower() == "vikings":
                             self.viking_scan_line(clean)
                             self._vtradeprices_scan_line(clean)
@@ -9123,6 +9133,25 @@ class MudClient:
         # instead of only when the player happens to see a prompt.
         if self.guild.lower() == "necromancers":
             self._necro_gmcp_state(data)
+        # Angel `spec` is Consecration, the prompt's C: (equal at every
+        # change in logs/killtimer-20261002.log). A reservoir, not a timer:
+        # fills to 100 unused, drains while consecrating, refills on cease.
+        spec = data.get("spec")
+        if self.guild.lower() == "angels" and isinstance(spec, (int, float)):
+            self.vitals_max["consecration"] = 100
+            if self.vitals.get("consecration") != spec:
+                self.vitals["consecration"] = spec
+                self.update_vitals()
+        # Angel `transfigurations` is the whole shown list on every change.
+        tf = data.get("transfigurations")
+        if self.guild.lower() == "angels" and isinstance(tf, str):
+            self.angel_transfigs = angel.parse_transfigs(tf)
+            side = angel.side_of(self.angel_transfigs)
+            if side and side != self.angel_side:
+                self.angel_side = side
+                self.set_setting("angel_side", side,
+                                 scope=self._routine_scope())
+            self.update_info()
         # Guild.State is also the Viking STFX carrier (fx.stfx), so it goes
         # through the viking path too - which no-ops for every other guild.
         self._viking_gmcp("Guild.State", data)
@@ -9219,6 +9248,15 @@ class MudClient:
         {guild, age}, hence the guild gate."""
         if isinstance(data, dict) and self.guild.lower() == "vikings":
             self._viking_gmcp("Guild.Info", data)
+            return
+        # Angel `gxp` = % to the next station (gs's GXP:, unrounded). It
+        # moves every packet, so redraw only when the shown 2dp changes.
+        if isinstance(data, dict) and self.guild.lower() == "angels":
+            gxp = data.get("gxp")
+            if isinstance(gxp, (int, float)) and \
+                    round(gxp, 2) != self.angel_gxp:
+                self.angel_gxp = round(gxp, 2)
+                self.update_info()
             return
         if not isinstance(data, dict) or self.guild.lower() != "elementals":
             return
@@ -11102,6 +11140,35 @@ class MudClient:
             if f in upd and upd[f] > self.vitals_max.get(f, 0):
                 self.vitals_max[f] = upd[f]
                 self._maxes_dirty = True
+
+    def angel_scan_line(self, clean):
+        """Essence and Possession Health off the prompt - their only source.
+
+        Both maxima are ASSIGNED, never high-watered: possession max is the
+        current body's health, so it moves with every new body and drops to
+        0 when corporeal."""
+        glvl = angel.parse_score_glvl(clean)
+        if glvl is not None:
+            if glvl != self.angel_glvl:
+                self.angel_glvl = glvl
+                self.set_setting("angel_glvl", glvl,
+                                 scope=self._routine_scope())
+                self.update_info()
+            return
+        upd = angel.parse_prompt(clean)
+        if upd is None:
+            return
+        dirty = False
+        for f in ("gp1", "gp2"):
+            if self.vitals.get(f) != upd[f]:
+                self.vitals[f] = upd[f]
+                dirty = True
+            if self.vitals_max.get(f) != upd[f + "max"]:
+                self.vitals_max[f] = upd[f + "max"]
+                self._maxes_dirty = True
+                dirty = True
+        if dirty:
+            self.update_vitals()
 
     def elemental_scan_line(self, clean):
         """Watch the prompt's NEG: line for lapsed elemental negation.
@@ -13640,6 +13707,7 @@ class MudClient:
         self._render_blade_bars()
         self._render_necro_status()
         self._render_bard_status()
+        self._render_angel_status()
         self._render_tracked()
         if self.guild.lower() == "vikings":
             if self.info.index("end-1c") != "1.0":
@@ -13728,6 +13796,29 @@ class MudClient:
         for token in missing:
             self.info.insert("end", f"  {bard.label(token)}: DOWN\n",
                              "track_low")
+
+    def _render_angel_status(self):
+        """Angel block in the info pane: GXP to the next station, then one
+        line per transfiguration the angel's side has at its glvl - shown in
+        green, hidden in grey. Nothing until the side is known (it comes
+        from the first one-side-only name GMCP reports shown)."""
+        if self.guild.lower() != "angels":
+            return
+        if self.angel_gxp is None and not self.angel_side:
+            return
+        if self.info.index("end-1c") != "1.0":
+            self.info.insert("end", "\n")
+        self.info.insert("end", "Angel\n", "track_hdr")
+        if self.angel_gxp is not None:
+            nxt = (f" to station {self.angel_glvl + 1}"
+                   if self.angel_glvl else "")
+            self.info.insert("end", f"  GXP: {self.angel_gxp:.2f}%{nxt}\n")
+        if not self.angel_side:
+            return
+        shown = self.angel_transfigs or set()
+        for name in angel.available(self.angel_side, self.angel_glvl):
+            self.info.insert("end", f"  {name}\n",
+                             "angel_on" if name in shown else "angel_off")
 
     def _render_necro_status(self):
         """Necro Status block in the info pane: worth / protection / veil /

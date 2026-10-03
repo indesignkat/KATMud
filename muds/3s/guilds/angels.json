@@ -1,7 +1,8 @@
 {
   "_comment": [
-    "Angels guild layer for 3s. Like Necromancers, this guild has NO private MIP tag - vitals ride the mud-wide FFF composite feed (A=hp C=sp E=gp1 G=gp2). Maxes self-calibrate from peak observed value. Cascade rule REPLACE (character file wins).",
+    "Angels guild layer for 3s. Essence (gp1) and Possession Health (gp2) come off the DEFAULT hpbar prompt 'H: hp/max[d]|php/phpmax[d] E: ess/max[d]...' via katmud_lib/angel.py - GMCP sends neither and MIP/FFF is gone mud-side (2026-09-15). Both maxima are stated by the prompt, not self-calibrated; possession is 0/0 when corporeal. A custom hpbar gets no bars. Cascade rule REPLACE (character file wins).",
     "Pool labels CONFIRMED by matching score's Gp1/Gp2 to the named gscore readout on 2026-06-15.",
+    "Consecration = GMCP Guild.State 'spec' (equals the prompt's C:), max 100. A RESERVOIR, not a timer: fills to 100 while unused, drains while consecrating, refills after 'cease'. Do not add a reset learner.",
     "Attack: 'kill first' - self-targets ONE mob (the first), so Hunt fights one at a time. Alt 'kill all' attacks every mob in the room at once (they all aggro you - riskier for solo hunting). Angels can self-target, unlike most 3s guilds which need an explicit target."
   ],
   "login_commands": [],
@@ -47,6 +48,13 @@
       "cur": "gp2",
       "max": "gp2max",
       "color": "#cc8833",
+      "width": 200
+    },
+    {
+      "label": "Consecration",
+      "cur": "consecration",
+      "max": "consecrationmax",
+      "color": "#ddcc55",
       "width": 200
     },
     {

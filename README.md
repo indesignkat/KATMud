@@ -1,8 +1,15 @@
 # KatMUD v7
 
-MIP-integrated MUD client for 3Scapes/3Kingdoms. Formerly pymud.
-Tkinter, built on Windows (macOS support is new - see below), one
-process per character.
+GMCP-enabled MUD client for 3Scapes. Tkinter, built on Windows (macOS
+support is new - see below), one process per character.
+
+Guild support is being built out guild by guild. Updated so far:
+Bladesingers, Vikings, Angels, Necromancers and Elementals. The rest
+of the guilds are coming soon.
+
+3Scapes sends real room vnums, so KatMUD builds its own map from
+scratch as you play (muds/3s/3s.db). The map is still growing - see
+"Mapping — sqlite backend" in docs/COMMANDS.md for charting new rooms.
 
 ## Install
 
@@ -49,40 +56,26 @@ standard Tk buttons, so some coloured buttons may show grey. If you
 run it on a Mac, reports of what looks or works wrong are very
 welcome - screenshots plus the contents of logs/crash.log help most.
 
-## Configuration cascade
+## Configuration
 
-Load order, later wins, collisions REPLACE:
+Settings live in JSON layers, loaded in this order. A later layer
+wins, and an entry with the same name REPLACES the earlier one (it
+does not merge):
 
-    global.json
-    muds/<mud>/mud.json
-    muds/<mud>/guilds/<guild>.json    (skipped when guild = none)
-    characters/<character>.json
+    global.json                                everyone
+    muds/3s/mud.json                           the whole mud
+    muds/3s/guilds/<guild>.json                one guild
+    characters/<character>.json                one character name
+    characters/<character>-3s-<guild>.json     one character in one
+                                               guild
 
-Discipline rule: guild-specific config lives in guild files, never in
-character files, or guild-switching breaks its promise. The builder
-(Tools > Aliases & Triggers) and Keybindings dialog write into any
-layer; hand-editing the json files is equally valid - unknown keys
-and ordering are preserved.
+Put each thing in the narrowest layer that fits. Guild-specific
+settings (e.g. a corpse routine) belong in the last one, so they
+don't follow the character into a different guild.
 
-`#help` in the client lists commands; **docs/COMMANDS.md** is the full
-reference for every command the client recognizes. `#map on/off/here/rate` and
-`#record [scope]` drive the mapping system; mapping mode auto-engages
-when you walk off the known map (disable: settings.auto_mapping
-false in any layer).
+Tools > Aliases & Triggers and Tools > Keybindings can write to any
+layer, and hand-editing the files is fine too - unknown keys and
+their order are preserved.
 
-## Verified against live output
-
-Rating capture (AREA NAME / AREA RATING -> / Monster class range,
-including the name-less overland response and [House] detection) is
-confirmed against live 3s captures, 2026-06-12.
-
-## Needs live verification
-
-1. **Auth-failure detection** matches /wrong|incorrect password/i.
-   If 3s words rejection differently, the re-prompt won't trigger -
-   capture the real line and adjust AUTH_FAIL_RE in
-   katmud_lib/client.py.
-2. **3k speedruns** file is intentionally header-only: the shared
-   file's room ids were authored against the 3s map and are wrong on
-   3k's id space. Rebuild it when the new 3k map exists
-   (tools/split_speedruns.py --trust-ids to override).
+`#help` lists commands in the client; **docs/COMMANDS.md** is the full
+reference for every command KatMUD recognizes.
