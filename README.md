@@ -14,19 +14,6 @@ strongly recommended dependency:
 Without it, passwords cannot be stored and the client prompts on
 every connect.
 
-## Migrate from pymud v6
-
-    python tools\migrate_v6.py <path-to-old-pymud-folder>
-
-This builds profiles.json, writes characters/<name>.json personal
-layers (aliases, triggers, gags, numpad->keys, seen_max), copies
-per-port landmark files to per-mud ones, and stores each profile's
-password in Windows Credential Manager under katmud/<mud>/<character>.
-**Delete the old pymud_profiles.json afterwards - it still contains
-plaintext passwords.** Guild files do NOT migrate (v6's per-port
-format is incompatible); re-author them under muds/<mud>/guilds/
-using muds/3s/guilds/vikings.json as the section reference.
-
 ## Run
 
     katmud.pyw                 -> character picker
@@ -53,7 +40,9 @@ without a Mac to test on.
         cd /path/to/KATMud
         python3 katmud.pyw
 
-   Passwords go in the macOS Keychain.
+   Passwords go in the macOS Keychain. The first time the client
+   saves or reads one, macOS may ask whether Python can use the
+   Keychain - "Always Allow" stops it asking again.
 
 Expect cosmetic rough edges: macOS ignores background colours on
 standard Tk buttons, so some coloured buttons may show grey. If you
