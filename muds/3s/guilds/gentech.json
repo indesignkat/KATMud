@@ -1,10 +1,11 @@
 {
   "_comment": [
-    "3s Gentech. FFF-driven (the guild has no MIP guild tag); the",
-    "hpbar1/hpbar2 text fields carry its status into the info pane.",
-    "The bars below are the UNIVERSAL three only - Gentech's guild pools",
-    "have never been captured, and inventing gp1/gp2 labels would be a",
-    "guess. Add them when a live capture says what they are."
+    "3s Gentech. PU (gp1) and SPU (gp2) come off the hpbar text via",
+    "katmud_lib/gentech.py - no GMCP package carries either, and MIP/FFF is",
+    "gone mud-side (2026-09-15). The hpbar prints every combat round (and on",
+    "`hp` / `reclaim hp`), so the bars hold still out of combat. PU max is on",
+    "the hpbar; SPU max is half of it (game fact). CPC/reset/Edna/Efield/",
+    "Tactical/Stabilize/Rested come from GMCP into the info-pane status line."
   ],
   "login_commands": [
     "cs on"
@@ -16,10 +17,6 @@
       "command": "tactical",
       "cooldown": 10,
       "_pattern_note": "Patterns are REGEX (re.compile, no auto-escape), so the brackets MUST be escaped. Unescaped, '[[ WARNING ...]]' parses as a character class + a literal ']' and matches ANY line with a common letter or space before a ']' - '[Notice]', '[chat]', '[Newbie]' all fired 'tactical'."
-    },
-    {
-      "pattern": "Random dealt the killing blow to",
-      "command": "reclaim"
     }
   ],
   "gags": [],
@@ -48,6 +45,20 @@
       "cur": "sp",
       "max": "spmax",
       "color": "#3366cc",
+      "width": 200
+    },
+    {
+      "label": "PU",
+      "cur": "gp1",
+      "max": "gp1max",
+      "color": "#cc9933",
+      "width": 200
+    },
+    {
+      "label": "SPU",
+      "cur": "gp2",
+      "max": "gp2max",
+      "color": "#887722",
       "width": 200
     },
     {

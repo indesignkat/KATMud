@@ -18,7 +18,7 @@ class VitalsBar(tk.Canvas):
     """One labelled gradient bar: name, current/max, colored fill."""
 
     def __init__(self, parent, label, color, width=190, font=None,
-                 warn=None, **kw):
+                 warn=None, warn_below=None, hide_max=False, **kw):
         super().__init__(parent, width=width, height=22, bg="#15151c",
                          highlightthickness=0, **kw)
         self.label = label
@@ -26,6 +26,10 @@ class VitalsBar(tk.Canvas):
         self.w = width
         self.h = 22
         self.warn = warn or []
+        # Absolute thresholds [[value, color], ...] - for a pool with no
+        # known maximum (3s monk Peace), where a fraction means nothing.
+        self.warn_below = warn_below or []
+        self.hide_max = hide_max
         self.font = font or (MONO, 9, "bold")
         self.set(0, 0)
 
@@ -41,11 +45,16 @@ class VitalsBar(tk.Canvas):
                 if frac < threshold:
                     fill = color
                     break
+        for threshold, color in sorted(self.warn_below):
+            if cur < threshold:
+                fill = color
+                break
         self.create_rectangle(0, 0, int(self.w * frac), h,
                               fill=fill, width=0)
         self.create_text(6, h // 2, anchor="w", fill="#ffffff",
                          font=self.font,
-                         text=f"{self.label} {cur}/{top}")
+                         text=f"{self.label} {cur}" if self.hide_max
+                         else f"{self.label} {cur}/{top}")
 
 
 class MapPane(tk.Canvas):

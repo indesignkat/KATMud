@@ -1,7 +1,7 @@
 {
   "_comment": [
-    "Monks guild layer for 3s. Like Necromancers, this guild has NO private MIP tag - vitals ride the mud-wide FFF composite feed (A=hp C=sp E=gp1 G=gp2). Maxes self-calibrate from peak observed value. Cascade rule REPLACE (character file wins).",
-    "Pool labels: HP/SP verified from score; GP2 still GUESSED (value didn't echo to a named gscore line) - rename live. "
+    "Monks guild layer for 3s. Chi (gp1) and Peace (gp2) come from GMCP Guild.State chi_points/peace via katmud_lib/monk.py - MIP/FFF is gone mud-side (2026-09-15). Chi's max is the prompt's 'Chi: cur/max'. Cascade rule REPLACE (character file wins).",
+    "Peace has NO known maximum (GAME FACT, user 2026-10-04 - it can get very high), so the bar shows the number alone (hide_max), scales against the highest value seen, and warns below an absolute 100 (warn_below)."
   ],
   "login_commands": [],
   "aliases": {},
@@ -42,11 +42,18 @@
       "width": 200
     },
     {
-      "label": "GP2",
+      "label": "Peace",
       "cur": "gp2",
       "max": "gp2max",
       "color": "#cc8833",
-      "width": 200
+      "width": 200,
+      "hide_max": true,
+      "warn_below": [
+        [
+          100,
+          "#cc3333"
+        ]
+      ]
     },
     {
       "label": "Enemy",

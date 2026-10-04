@@ -32,7 +32,8 @@ from tkinter import font as tkfont
 from tkinter import simpledialog
 
 from . import (angel, bard, blade, changeling, config, credentials, dialogs,
-               elemental, mapdata, mapparse, mapsql, mobdb, necro, paths,
+               elemental, gentech, mapdata, mapparse, mapsql, mobdb, monk,
+               necro, paths,
                picker, profiles, viking)
 from .protocol import (MudConnection, parse_composite,
                        strip_mip_colors, tag_to_style)
@@ -181,7 +182,12 @@ RUN_COUNT_TAG_RE = re.compile(r"\s*\{\d+\}\s*$")
 # the matcher compares the whole line. Whether that tag is always the
 # same, or on the same mob, is unknown and does not matter: it goes
 # either way.
-RUN_STATUS_TAG_RE = re.compile(r"\s*(?:\[[^\]]*\]|\([^)]*\))\s*$")
+# Braces too: 3k's "2.0" areas are their 1.0 twins with bigger mobs and
+# better loot, and some tag mob names - Angels 2.0 adds "{glowing}", others
+# a different tag or none (GAME FACT, user 2026-10-03) - so the 1.0 bot plus
+# strip_tags runs either version.
+RUN_STATUS_TAG_RE = re.compile(
+    r"\s*(?:\[[^\]]*\]|\([^)]*\)|\{[^}]*\})\s*$")
 # Leading stack count on an inventory line: '3  An intricate digital key.'
 RUN_INV_COUNT_RE = re.compile(r"^\s*(\d+)\s+")
 # 'The skinless, slightly moldy corpse of Abomination.' - a corpse on the
@@ -417,6 +423,10 @@ class MudClient:
         self.elem_win = None            # detached Elemental Status panel
         self.angel_transfigs = None     # shown transfigs (GMCP), None=unseen
         self.angel_gxp = None           # % to next station, 2dp (GMCP)
+        self.gentech = {}               # merged GMCP + hpbar status fields
+        self._gentech_line = ""         # last rendered status line
+        self.monk = {}                  # merged GMCP + prompt/gs monk fields
+        self._monk_line = ""            # last rendered status line
         self.blade_win = None           # detached Bladesinger Status panel
         self.blade_flags = {}           # prompt [CoCsBlMsRvFl] -> active effects
         self.blade_skills = []          # ordered `skills` rows, for the panel
@@ -1425,6 +1435,8 @@ class MudClient:
                             spec.get("color", "#888888"),
                             width=spec.get("width", 190),
                             warn=spec.get("warn"),
+                            warn_below=spec.get("warn_below"),
+                            hide_max=bool(spec.get("hide_max")),
                             font=self.small_bold)
             bar.pack(side="left", padx=4, pady=3)
             self.bars.append((spec, bar))
@@ -1713,6 +1725,8 @@ class MudClient:
             text = self.blade_status
         elif self.guild.lower() == "necromancers" and self.necro_status:
             text = self.necro_status
+        elif self.guild.lower() == "monks" and self._monk_line:
+            text = self._monk_line
         elif self.stat1 or self.stat2:
             text = f"{self.stat1}    {self.stat2}"
         elif self.viking_spells:
@@ -1841,6 +1855,10 @@ class MudClient:
         self.password_sent = False
         self._logged_in = False
         self.guild_login_sent = False
+        # Per LOGIN: GenEff/TechEff take whichever source arrives first
+        # (GMCP or hpbar), then GMCP only - an empty dict restarts that.
+        self.gentech = {}
+        self._gentech_line = ""
         # Supersession is per-CONNECTION. It is established by a package's
         # first packet, so it must not survive into a connection that may
         # never negotiate GMCP at all - a reconnect where the mud does not
@@ -8438,6 +8456,10 @@ class MudClient:
                             self.elemental_scan_line(clean)
                         elif self.guild.lower() == "angels":
                             self.angel_scan_line(clean)
+                        elif self.guild.lower() == "gentech":
+                            self.gentech_scan_line(clean)
+                        elif self.guild.lower() == "monks":
+                            self.monk_scan_line(clean)
                         elif self.guild.lower() == "vikings":
                             self.viking_scan_line(clean)
                             self._vtradeprices_scan_line(clean)
@@ -9152,6 +9174,10 @@ class MudClient:
                 self.set_setting("angel_side", side,
                                  scope=self._routine_scope())
             self.update_info()
+        if self.guild.lower() == "gentech":
+            self._gentech_gmcp(data)
+        if self.guild.lower() == "monks":
+            self._monk_gmcp(data)
         # Guild.State is also the Viking STFX carrier (fx.stfx), so it goes
         # through the viking path too - which no-ops for every other guild.
         self._viking_gmcp("Guild.State", data)
@@ -9192,6 +9218,107 @@ class MudClient:
                 self._refresh_blade_win()
                 if self.tracked:
                     self.update_info()
+
+    def gmcp_guild_systems(self, data):
+        """Gentech tactical_secs (the GXP boost) and stabilize_secs (time
+        until GenEff/TechEff stop being locked at 100%)."""
+        if self.guild.lower() == "gentech":
+            self._gentech_gmcp(data)
+
+    def gmcp_guild_progress(self, data):
+        """Gentech rested_secs - the rested-GXP bonus time left."""
+        if self.guild.lower() == "gentech":
+            self._gentech_gmcp(data)
+
+    def _gentech_gmcp(self, data):
+        """Merge a Gentech GMCP delta into self.gentech. GMCP is the
+        authority for every field it carries, GenEff/TechEff included."""
+        if not isinstance(data, dict):
+            return
+        for f in gentech.GMCP_FIELDS:
+            v = data.get(f)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                self.gentech[f] = v
+        for src, dst in gentech.GMCP_EFF_FIELDS.items():
+            v = data.get(src)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                self.gentech[dst] = v
+        self._gentech_refresh()
+
+    def _gentech_refresh(self):
+        """Redraw only when the visible line changes - these packets come
+        every 2s (the Viking lag lesson, 2026-08-04)."""
+        line = gentech.status_line(self.gentech)
+        if line != self._gentech_line:
+            self._gentech_line = line
+            self.update_info()
+
+    def _monk_gmcp(self, data):
+        """Monk Guild.State / Guild.Info. Chi and Peace currents are GMCP's
+        (Chi ticks out of combat, where no prompt prints); Chi's max is
+        the prompt's alone, and Peace has no known max at all."""
+        if not isinstance(data, dict):
+            return
+        pools = {}
+        for src, dst in (("chi_points", "gp1"), ("peace", "gp2")):
+            v = data.get(src)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                pools[dst] = v
+        self._monk_pools(pools)
+        upd = {}
+        for src, dst in (("combat_method", "method"), ("chi_focus", "focus"),
+                         ("peace_level", "peace_level")):
+            if isinstance(data.get(src), str):
+                upd[dst] = data[src]
+        for src, dst in (("ancient_energy_reset", "ae_pct"),
+                         ("gxp_to_spend", "gxp_spend")):
+            v = data.get(src)
+            if isinstance(v, int) and not isinstance(v, bool):
+                upd[dst] = v
+        self._monk_update(upd)
+
+    def _monk_pools(self, upd):
+        """gp1/gp2 currents (+ a stated gp1max). Peace's scale is the
+        high-water mark - _raise_seen_max - since no max is known."""
+        dirty = False
+        for f in ("gp1", "gp2"):
+            if f in upd and self.vitals.get(f) != upd[f]:
+                self.vitals[f] = upd[f]
+                dirty = True
+        if "gp1max" in upd and self.vitals_max.get("gp1") != upd["gp1max"]:
+            self.vitals_max["gp1"] = upd["gp1max"]
+            self._maxes_dirty = dirty = True
+        if "gp2" in upd:
+            before = self.vitals_max.get("gp2")
+            self._raise_seen_max({"gp2": upd["gp2"]})
+            dirty = dirty or self.vitals_max.get("gp2") != before
+        if dirty:
+            self.update_vitals()
+
+    def _monk_update(self, upd):
+        """Merge status fields. The status line goes on the bar under the
+        hpbars (user's layout); only the peace text stays in the info pane.
+        Each redraws only when its visible text changes."""
+        old_peace = self.monk.get("peace_level")
+        self.monk.update(upd)
+        line = monk.status_line(self.monk)
+        if line != self._monk_line:
+            self._monk_line = line
+            self.show_status()
+        if self.monk.get("peace_level") != old_peace:
+            self.update_info()
+
+    def monk_scan_line(self, clean):
+        """The prompt (Chi max, AE count) and the `gs` readout (method and
+        focus before Guild.Info first sends them)."""
+        upd = monk.parse_prompt(clean)
+        if upd is None:
+            upd = monk.parse_gs(clean)
+        if not upd:
+            return
+        self._monk_pools({k: upd.pop(k) for k in ("gp1", "gp1max", "gp2")
+                          if k in upd})
+        self._monk_update(upd)
 
     # --- Viking guild feed over GMCP -----------------------------------
     # Undeclared and undocumented: none of these packages appears in
@@ -9257,6 +9384,9 @@ class MudClient:
                     round(gxp, 2) != self.angel_gxp:
                 self.angel_gxp = round(gxp, 2)
                 self.update_info()
+            return
+        if isinstance(data, dict) and self.guild.lower() == "monks":
+            self._monk_gmcp(data)
             return
         if not isinstance(data, dict) or self.guild.lower() != "elementals":
             return
@@ -11170,6 +11300,37 @@ class MudClient:
         if dirty:
             self.update_vitals()
 
+    def gentech_scan_line(self, clean):
+        """PU/SPU off the hpbar (their only source - GMCP sends neither),
+        plus the seed values GMCP has not sent yet this login. Both maxima
+        are stated (SPU max = PU max / 2, a game fact), never high-watered."""
+        hp = gentech.parse_hpbar(clean)
+        if hp is None:
+            self._gentech_seed(gentech.parse_hpbar_eff(clean))
+            return
+        dirty = False
+        for f in ("gp1", "gp2"):
+            if self.vitals.get(f) != hp[f]:
+                self.vitals[f] = hp[f]
+                dirty = True
+            if self.vitals_max.get(f) != hp[f + "max"]:
+                self.vitals_max[f] = hp[f + "max"]
+                self._maxes_dirty = dirty = True
+        if dirty:
+            self.update_vitals()
+        self._gentech_seed(hp)
+
+    def _gentech_seed(self, upd):
+        """Text values fill only what GMCP has not supplied this login;
+        once a field is held, GMCP alone moves it."""
+        changed = False
+        for k in ("cpc", "geneff", "techeff"):
+            if k in upd and k not in self.gentech:
+                self.gentech[k] = upd[k]
+                changed = True
+        if changed:
+            self._gentech_refresh()
+
     def elemental_scan_line(self, clean):
         """Watch the prompt's NEG: line for lapsed elemental negation.
 
@@ -12209,6 +12370,8 @@ class MudClient:
         ("_vpouch_capture", lambda: False), ("_vpouch_lines", list),
         ("_last_tick_error", lambda: None),
         ("_cart_cd_until", lambda: None),
+        ("gentech", dict), ("_gentech_line", str),
+        ("monk", dict), ("_monk_line", str),
     )
 
     def _hotswap_fixups(self):
@@ -13686,11 +13849,10 @@ class MudClient:
         if self.guild.lower() == "vikings":
             # Below the hp/delta line, above recent kills (user's layout).
             lines.append(viking.voyage_line(self.viking_state))
-        if self.guild.lower() == "gentech":
-            for f in ("hpbar1", "hpbar2"):
-                txt = strip_mip_colors(str(self.vitals.get(f, ""))).strip()
-                if txt:
-                    lines.append(txt)
+        if self.guild.lower() == "gentech" and self._gentech_line:
+            lines.append(self._gentech_line)
+        if self.guild.lower() == "monks" and self.monk.get("peace_level"):
+            lines.append(self.monk["peace_level"])
         lines.extend(self._merc_lines())
         if self.kills:
             lines.append("recent kills (rounds):")
