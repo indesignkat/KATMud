@@ -467,7 +467,7 @@ class MapDB:
     # ----------------------------------------------------- mobs (v3)
     def upsert_mob(self, mob, area_id, area_name, scanned_by, now):
         """Insert a vscan'd mob, or refresh an existing one. Identity is
-        (name, area_name) - the user's rule: area names are unique, so area
+        (name, area_name) - area names are unique, so area
         implies coder, and class/stats vary so they aren't part of identity.
         `mob` is a dict of MOB_DATA_COLUMNS (missing keys -> NULL). Returns
         True if a new row was inserted, False if an existing one updated."""

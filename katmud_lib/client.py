@@ -4317,7 +4317,7 @@ class MudClient:
             return
         self._agent_on = True
         self._agent_mode = mode
-        # Phased plan (user decision): chart the whole area first, then sweep.
+        # Phased plan: chart the whole area first, then sweep.
         # An explore-only run never reaches sweep; a hunt-only run skips chart.
         self._agent_phase = "sweep" if mode == "hunt" else "chart"
         self._agent_area_id = area_id
@@ -5753,7 +5753,7 @@ class MudClient:
     @staticmethod
     def _chaossea_mob_keyword(idx):
         """Every mob in Sea of Chaos IDs to the single keyword "mutant"
-        regardless of its random short description (per the user) - so
+        regardless of its random short description - so
         targeting never needs per-mob name parsing, only an ordinal suffix
         to disambiguate more than one in a room. PROVISIONAL: the exact
         ordinal syntax this MUD expects ("mutant 2" vs "2.mutant" etc.) is
@@ -8970,7 +8970,7 @@ class MudClient:
         # BOTH halves, since 2026-09-20. This used to synthesize only BAD,
         # because the live MIP DDD still arrived and doing both would run
         # the follow/chart path twice per move. MIP is gone (port.md
-        # 2026-09-15, user-confirmed, wire-proven), so that DDD never comes
+        # 2026-09-15, wire-proven), so that DDD never comes
         # again - and sql_on_ddd is reachable ONLY from mip_exits, while
         # sql_follow_ddd is the ONLY setter of _sql_cur_vnum. Synthesizing
         # just BAD therefore left the mapper with no location authority at
@@ -9297,7 +9297,7 @@ class MudClient:
 
     def _monk_update(self, upd):
         """Merge status fields. The status line goes on the bar under the
-        hpbars (user's layout); only the peace text stays in the info pane.
+        hpbars; only the peace text stays in the info pane.
         Each redraws only when its visible text changes."""
         old_peace = self.monk.get("peace_level")
         self.monk.update(upd)
@@ -9838,7 +9838,7 @@ class MudClient:
             # handler guarded exactly this; the guard has to live on
             # whichever transport supplies `enemy`.
             self.rounds = self._rounds_at_end = 0
-        # The round count of last resort (user, 2026-09-25). Without FFF
+        # The round count of last resort. Without FFF
         # (3s) and without the paid `numbers` perk's damage line, nothing
         # else counts rounds, and every kill read 0. This is the
         # ATTACKER's fight duration, not yours - accepted because there is
@@ -10446,7 +10446,7 @@ class MudClient:
             self.merc_state["abilities"] = str(data["abils"]).strip()
 
     def gmcp_merc_info(self, data):
-        # `cost` IS BBC's cost_per_round - user-confirmed 2026-09-23 (9/rd
+        # `cost` IS BBC's cost_per_round (9/rd
         # in game, 9 on the wire). GAME FACT: it rises with PL (persistent
         # level, survives reboots) and IL (instance level, 0 each reboot,
         # caps at 30), so it is a live value, not a constant.
@@ -10891,7 +10891,7 @@ class MudClient:
             # `Go` right after leaving vanished with no message at all
             # (2026-09-17).
             #
-            # GAME FACT (user, 2026-09-17): the biome is only ever walked
+            # GAME FACT: the biome is only ever walked
             # settlement to settlement - leave the guildhall, Go, enter, do
             # the missions, leave, Go again. So the cell the last `Go` was
             # aimed at IS where you are standing when the next one is typed,
@@ -12265,8 +12265,8 @@ class MudClient:
         fired = []
         # Whether a reminder LAPSED while every client was shut has to be
         # decided in here, not after: a missed one is dropped outright
-        # (it gets the login list instead of a pane entry - user's call,
-        # 2026-09-12), while a normal fire is retained as expired.
+        # (it gets the login list instead of a pane entry,
+        # by design), while a normal fire is retained as expired.
         seen_at_start = self._last_seen_at_start
         can_miss = first and isinstance(seen_at_start, (int, float))
 
@@ -13847,7 +13847,7 @@ class MudClient:
             lines.extend(elemental.defs_lines(self.elem_defs))
             lines.extend(elemental.info_lines(self.elem_info))
         if self.guild.lower() == "vikings":
-            # Below the hp/delta line, above recent kills (user's layout).
+            # Below the hp/delta line, above recent kills.
             lines.append(viking.voyage_line(self.viking_state))
         if self.guild.lower() == "gentech" and self._gentech_line:
             lines.append(self._gentech_line)
@@ -13883,7 +13883,7 @@ class MudClient:
 
     def _bard_maintain(self):
         """Top up any bard buff that has fallen below threshold or lapsed
-        entirely. All eight must stay up at all times (user rule), so this
+        entirely. All eight must stay up at all times, so this
         fires unattended off each I packet.
 
         Deadman is respected for free: these go out via send_line WITHOUT

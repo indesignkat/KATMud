@@ -146,7 +146,7 @@ def parse_total_gxp(line):
 #   [Focused] [CoCsBlMsRv] C:3/15 E: 90%
 # ONE bracketed token holding the two-letter code of every ACTIVE effect,
 # concatenated. A code that is absent is NOT active - that is the whole
-# signal. GAME FACT (user, 2026-09-03): the ORDER VARIES, and there are
+# signal. GAME FACT: the ORDER VARIES, and there are
 # exactly SIX codes - Co/Cs/Ms, plus Bl while a blur is running, Rv for
 # revalrie out of combat, and Fl for Faerielight.
 #

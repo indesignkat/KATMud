@@ -132,7 +132,7 @@ def evoke_age_rearm(client, _v=None):
     A client hook, called from the GMCP Char.Combat empty snapshot - the
     one explicit end-of-fight marker MIP never had.
 
-    GAME FACT (user, 2026-09-03): `evoke age` costs 1,000 LINK ENERGY -
+    GAME FACT: `evoke age` costs 1,000 LINK ENERGY -
     against a balance of 162 MILLION, so a second cast in one fight is
     effectively spam rather than waste. That inverts the usual caution: the
     failure worth avoiding is MISSING a fight, not repeating one. Hence the
@@ -155,7 +155,7 @@ def _try_evoke_age(client):
     did not start and one you are not tanking - in_combat is set from the
     FFF enemy field either way.
 
-    ONE attempt, success or not (user's choice, 2026-09-03): a failed cast
+    ONE attempt, success or not (by design): a failed cast
     is lost for that fight rather than retried. That needs no success signal
     to stop it and so cannot spam, which a retry loop could if the mob
     simply cannot be aged.
@@ -187,12 +187,12 @@ def _fight_stopped(client):
     `in_combat` can keep a finished fight's values indefinitely: no `K~~`, no
     `N~0`, nothing to clear them. Rule 1 ("round 5+, enemy still at 100%")
     then reads a fight that has STOPPED exactly like one that is going badly,
-    and fires - the user sprinted ~400 rooms out of the anthole and psummoned
-    standing in town, still carrying an earlier fight's round 12 (2026-09-11).
+    and fires - e.g. sprinting ~400 rooms out of the anthole psummoned
+    standing in town, still carrying an earlier fight's round 12.
     Note the count does NOT come from the aggro mob passed on the way out:
     that one never engaged, which is why nothing cleared the old values.
 
-    GAME FACT (user, 2026-09-11): combat rounds tick only while blows are
+    GAME FACT: combat rounds tick only while blows are
     actually exchanged. Sprint past an aggro mob - it never swings, you never
     swing - and no rounds accrue at all. (If an abandoned fight kept ticking,
     a 3k bladesinger could farm combat age, which its high-end damage output
@@ -209,8 +209,7 @@ def _fight_stopped(client):
     rules in on_vitals read that instead of the raw number. Without it this
     gate merely DELAYED the misfire to the destination room: arriving changes
     the counter, and a change was all the staleness test needed to call it
-    fresh (user, 2026-09-12 - "it just delayed the psummon until I hit the
-    destination room at the end of the sprint").
+    fresh, so the psummon just fired at the end of the sprint instead.
 
     An earlier version of this note argued the opposite - that N keeps
     ticking while you move - citing `logs/dru-*.log`, a different character
@@ -277,7 +276,7 @@ def on_vitals(client, v):
     # the next packet. That is why efdd1b0, e556a16 and 8a918b3 each failed
     # to stop the same misfire, and why the staleness gate only DELAYED it
     # to the destination room - arriving changes the counter, and a change
-    # was all that gate needed to call it fresh (user, 2026-09-12).
+    # was all that gate needed to call it fresh.
     ticks = client.vars.get("_ticks", 0)
     _psdebug(client, f"ticks={ticks} rounds={client.rounds} cond={cond}% "
                      f"portal={'open' if active else 'closed'} "
@@ -533,10 +532,10 @@ SF2_PROGRESS_WINDOW = 1.0     # seconds to collect the `progress` reply
 # mid-fight and left you in the opponent's room with the bot switched off.
 # The thing it guarded is cheap by comparison: the `fight` state SENDS
 # NOTHING, so a missed teleport just sits there checking a room number until
-# `sf2 off`. Same call the user made for post_kill_resume_timeout - an
-# indefinite wait beats a finite number that is wrong (user, 2026-09-12).
+# `sf2 off`. Same call as post_kill_resume_timeout - an
+# indefinite wait beats a finite number that is wrong.
 SF2_FIGHT_TIMEOUT = 0         # >0 = give up on one opponent after this long
-SF2_STEP_DELAY = 1.0          # gap between sends (user's pace, 2026-09-12)
+SF2_STEP_DELAY = 1.0          # gap between sends
 
 # `progress` lists an opponent as "  [X] CHUN-LI" (beaten) or "  [ ] KEN".
 SF2_ENTRY_RE = re.compile(r"^\s*\[([ Xx])\]\s*(\S.*?)\s*$")
@@ -557,9 +556,9 @@ SF2_HEADER = "=== TOURNAMENT PROGRESS ==="
 # (chun-li, e-honda, ...).
 #
 # SCOPE: this triple is confirmed on the HARD difficulty only - which is the
-# MEDIUM tier, not the top one, despite the name. The user asked a wiz to fix
+# MEDIUM tier, not the top one, despite the name. A wiz was asked to fix
 # the inconsistency and was told it was done, but apparently only on the top
-# difficulty, which he cannot reach yet to check. So if the top difficulty is
+# difficulty, which has not been checked yet. So if the top difficulty is
 # ever run and the gauntlet dies at the arena door, THIS TABLE IS THE FIRST
 # SUSPECT: the names may be normalised there. `_sf2["difficulty"]` is already
 # tracked, so keying the table by difficulty is the fix - deliberately NOT

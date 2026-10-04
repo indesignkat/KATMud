@@ -123,7 +123,7 @@ BUILD_MATERIALS = ("timber", "iron", "sunstone", "tools", "mead",
 # `trade_hold_goods` setting. Iron is mid-chain (ore -> iron -> tools ->
 # weapons/armour) and timber goes into nearly every upgrade.
 DEFAULT_HOLD_GOODS = ("iron", "timber")
-# Hold id -> CITY name (user preference 2026-07-11: city names, not
+# Hold id -> CITY name (city names, not
 # lineage 'X Hold' names - e.g. lineage Eiriksson's city is Eiriksby).
 HOLD_NAMES = {
     0: "Midgard", 1: "Lodbrok", 2: "Eiriksby",
@@ -219,8 +219,8 @@ def merge_vmapl(old, new):
     follows - and the reset then dropped every seer, blot and mentor
     mark on every single round.
 
-    Nothing resets now, and nothing needs to. GAME FACT (user,
-    2026-08-31): villages are not razed. A mishap has shuffled them
+    Nothing resets now, and nothing needs to. GAME FACT:
+    villages are not razed. A mishap has shuffled them
     around once or twice, and a move is merged in place because the
     entry is keyed by (type, name) - so the vanishing POI the reset was
     written for does not occur, while the marks it cost were gone every
@@ -256,7 +256,7 @@ def merge_longship(state, new):
     as four separate two-ship pushes that ROTATE - 6,7 then 8,9 then 1,2
     then 10,11 - so the ascending test fired mid-fleet and the Sea tab
     cycled 2 ships, 4 ships, 2 ships forever, never the whole fleet
-    (logs/mip_20260903_143404.log, and the user watching it flicker every
+    (visibly flickering every
     round).
 
     So merge by SHIP ID instead of by arrival: each push refreshes its
@@ -297,7 +297,7 @@ def accumulate_colony(state, upd):
     COLONY_KEYS - the Colony tab therefore redrew on all 499 fragment
     packets of a session, each showing one MORE line of a
     half-accumulated plan. That is the "redrawing line by line each
-    round" the user reported. The pieces are now buffered privately
+    round" symptom. The pieces are now buffered privately
     (state['_CPB'], state['_CPU']) and only reach `upd` on the next
     CPLAN, which is what proves the burst finished: 23 whole-plan
     redraws instead of 499 partial ones.
@@ -477,8 +477,8 @@ def parse_construction(value):
 
 
 
-# Warehouse capacity per BUILDING TIER (GAME FACT from the user,
-# 2026-07-11). This is the BASE capacity only: skill bonuses raise the
+# Warehouse capacity per BUILDING TIER (GAME FACT).
+# This is the BASE capacity only: skill bonuses raise the
 # real cap above it, so the table is the fallback, never the first
 # choice - see warehouse_cap.
 WAREHOUSE_CAPS = {1: 400, 2: 1000, 3: 1750, 4: 3000, 5: 5250}
@@ -487,7 +487,7 @@ WAREHOUSE_CAPS = {1: 400, 2: 1000, 3: 1750, 4: 3000, 5: 5250}
 def wstock_capacity(value):
     """The capacity WSTOCK carries in front of its entries, or None.
 
-    GAME FACT (user, 2026-09-03): this header is the warehouse's maximum
+    GAME FACT: this header is the warehouse's maximum
     capacity WITH the character's skill bonuses applied - 8085 where the
     tier table says 5250. It is a bare number where every entry that
     follows is pipe-separated, which is how it is told apart."""
@@ -526,7 +526,7 @@ def stock_totals(state):
     return totals
 
 
-# THRALLS field order (GAME FACT from the user, 2026-07-11): counts of
+# THRALLS field order (GAME FACT): counts of
 # thralls assigned per building, zipped positionally.
 THRALL_BUILDINGS = ("Thrall Pen", "Longhouse", "Warehouse", "Farm",
                     "Brewery", "Tannery", "Fishery", "Lumber Yard",
@@ -565,8 +565,7 @@ def parse_thralls(value):
 
 def parse_thrall_follower(value):
     """THRALL_FOLLOWER 'lvl|name|xp|next_lvl_xp|carried|capacity|status'
-    -> dict, or None when empty (GAME FACT from the user, 2026-07-11:
-    e.g. '16|Zed|10170|107216|0|6|following' = the personal thrall Zed,
+    -> dict, or None when empty (GAME FACT: e.g. '16|Zed|10170|107216|0|6|following' = the personal thrall Zed,
     level 16, 10,170/107,216 xp, carrying 0 of 6 items, following)."""
     f = value.split("|")
     if len(f) < 2 or not f[1]:
@@ -984,7 +983,7 @@ TRADE_KEYS = ("CARTS", "CIDLE", "WSTOCK", "NEXTTICK", "BUILDINGS",
 # Production tab: what the settlement makes, what it is building, and the
 # refineries that convert one into the other.
 # REFINERY sits on Trade (warehouse stock and what feeds the refineries
-# read together), not Production - user, 2026-08-23.
+# read together), not Production.
 PRODUCTION_KEYS = ("PRODUCTION", "BUILDS", "BUILDINGS",
                    "MONUMENTS", "SPROJ", "RBUILD")
 
@@ -1035,7 +1034,7 @@ def parse_herds(value):
 
 
 # LMARKET/LNEEDS species keys -> the headings `vlivestock herds` uses,
-# in the order the user reads them (2026-08-23).
+# in reading order.
 MARKET_SPECIES = (("sheep", "Sheep"), ("cow", "Cattle"),
                   ("horse", "Horses"), ("pig", "Pigs"),
                   ("chicken", "Hens"))
@@ -1235,8 +1234,7 @@ def lineage_names(state):
     Deliberately NOT run through HOLD_NAMES: the market is buyable from
     anywhere and `vlivestock market|buy` take the lineage name, so the
     lineage is the word the user needs here - unlike hird, where you
-    travel to the city and the city name is what matters (user,
-    2026-08-23)."""
+    travel to the city and the city name is what matters."""
     return {i + 1: name for i, (_hid, name, _v, _l, _f)
             in enumerate(parse_standings(state.get("STANDINGS", "")))}
 
@@ -1562,7 +1560,7 @@ SETTLERX_SENTIMENT = 20
 #   * 21 and 22, "still unidentified" since 2026-08-03, are
 #     supply_next_secs and pop_next_secs. Both count down.
 #
-# GAME FACT (user, 2026-09-03): market_staffed counts SETTLERS, who are
+# GAME FACT: market_staffed counts SETTLERS, who are
 # unnamed. It is NOT the hirdmadr staffing the trading post - that is a
 # named follower (Halfdan Roarsson here) and rides the separate STAFF
 # key, where only one hirdmadr can staff each building or pilot each
@@ -1622,8 +1620,8 @@ def parse_sactions(value):
     return out
 
 
-# --- People-tab settler/personnel packets, field meanings supplied by
-# the user 2026-07-11 (GAME FACTs, not from the guild help doc) ---------
+# --- People-tab settler/personnel packets, field meanings from
+# play (GAME FACTs, not from the guild help doc) -------------------------
 def parse_patrol(value):
     """PATROL 'count|secs' -> (hirdmadr on patrol, seconds until their
     patrol shift ends), or None if unparseable."""
@@ -1661,11 +1659,11 @@ def parse_shplots(value):
     return out
 
 
-# STAFF stat order per the user: combat, trade, craft, sea, wild, land,
+# STAFF stat order: combat, trade, craft, sea, wild, land,
 # charm.
 STAFF_STATS = ("combat", "trade", "craft", "sea", "wild", "land", "charm")
 
-# STAFF loyalty scale, 1-5 (GAME FACT from the user, 2026-07-11).
+# STAFF loyalty scale, 1-5 (GAME FACT).
 STAFF_LOYALTY = {5: "Devoted", 4: "Loyal", 3: "Steady", 2: "Uneasy",
                  1: "Shaken"}
 
@@ -2022,7 +2020,7 @@ GLYPH_POI = {"M": "capital", "L": "lineage", "P": "player",
 # the farm or the ruins - those are not settlements - so those seven keep
 # their VMAPL-derived entries.
 #
-# GAME FACT (user, 2026-09-15): coordinates do not change and a player
+# GAME FACT: coordinates do not change and a player
 # CANNOT move their settlement. The one apparent exception, "Callheim"
 # (3,21), never existed: Jarl Call's settlement is Kattegat, and Callheim
 # was a transient from a spell when Skuggis was debugging the biome and
@@ -2238,7 +2236,7 @@ def map_glyph_pois(state):
     and the room carried an `enter` exit to 50957 that its three
     neighbours did not.
 
-    GAME FACT (user, 2026-09-15): "Midgard" names the biome AND the
+    GAME FACT: "Midgard" names the biome AND the
     guildhall, and the WHOLE biome reports `Room.Info.area` "Midgard" -
     so the area field identifies nothing inside it and is useless for
     naming POIs. The `enter` exit is the evidence; the area name is a red
@@ -2269,7 +2267,7 @@ def map_glyph_pois(state):
 # with the per-skill costs from `vskills`.
 # SP is omitted on purpose: the Viking guild does not use spell points
 # and gains nothing from intelligence, so MSP (49) is not a real max
-# and the bar rendered as 345/49 (user, 2026-08-23).
+# and the bar rendered as 345/49.
 STATS_RESOURCES = ["HP", "VIG", "RAD", "SEID", "THREK"]
 # The City tab was folded into the tail of Stats (2026-08-23): its four
 # surviving sections (Daler, Thralls, Mead Cellar, Blot) are 13 lines.
@@ -2441,7 +2439,7 @@ def parse_voyage(value):
     2026-08-03: the tail lost the doc's ship_renown field, shifting the
     four style/trait fields down one - the live record ends
     'stormbelt|cunning|storm-cutter|hard-handed boarders|storm sail',
-    and the user confirms storm-cutter is the ship and cunning the
+    and storm-cutter is the ship and cunning the
     captain (LONGSHIP carries the same four)."""
     f = value.split("|")
     g = lambda i: f[i].strip() if 0 <= i < len(f) else ""
@@ -2751,7 +2749,7 @@ def gmcp_bbe_values(pkg, data):
                 out["THRALL_FOLLOWER"] = rec
         th = data.get("thralls")
         if isinstance(th, dict) and th:
-            # GAME FACT (user, 2026-09-15): these are the thralls assigned
+            # GAME FACT: these are the thralls assigned
             # to each building, and all 20 buildings GMCP names are valid.
             # THRALL_BUILDINGS had 16 POSITIONAL slots and a different set
             # (no apiary/armoury/goldsmith/skald_hall/weaponry; a Thrall
@@ -3442,7 +3440,7 @@ def parse_vrep(value):
     return out
 
 
-# Bond level -> tier name (GAME FACT from the user, 2026-07-11).
+# Bond level -> tier name (GAME FACT).
 BOND_LEVELS = {1: "Comrades", 2: "Shield-Brothers", 3: "Blood-Sworn",
                4: "Oathbound"}
 
@@ -3452,7 +3450,7 @@ def parse_bonds(value):
     A bond pairs two hirdmadr of the personal guard by their HIRD ids;
     points is a hidden progress value, level the resulting bond level
     (e.g. '3|4|194235|1' = hird #3 and #4 at 194,235 points = a level 1
-    bond - GAME FACT from the user, 2026-07-11)."""
+    bond - GAME FACT)."""
     out = []
     for f in split_entries(value):
         if len(f) < 4:
@@ -4211,8 +4209,8 @@ class VikingStatus(tk.Toplevel):
             self._redraw_end(txt, pos)
             return
         if dcycle:
-            # DCYCLE, despite the key name, is the WEATHER cycle (user,
-            # 2026-09-04) - 'Harvest Moon' with about three days left.
+            # DCYCLE, despite the key name, is the WEATHER cycle
+            # - 'Harvest Moon' with about three days left.
             parts = dcycle.split("|")
             txt.insert("end", "Weather cycle: ", "dim")
             txt.insert("end", parts[0], "cycle")
@@ -4844,8 +4842,8 @@ class VikingStatus(tk.Toplevel):
                     txt.insert("end", cost + "\n", "cost")
 
     def _glvl_precise(self):
-        """Guild level = sum of all skill levels / 4 (GAME FACT from the
-        user, 2026-07-11), computed from the last `vskills` read. The
+        """Guild level = sum of all skill levels / 4 (GAME FACT),
+        computed from the last `vskills` read. The
         fraction matters: 80.75 means one skill raise short of glvl 81.
         Returns a display string, or None if vskills isn't loaded."""
         if not self.vskills:
@@ -5041,7 +5039,7 @@ class VikingStatus(tk.Toplevel):
             txt.insert("end", f"  Shadow-House T{spy[0].strip()}"
                               "   (vspy scout/sabotage)\n", "dim")
         txt.insert("end", "Reputation\n", "sec")
-        # VREP semantics confirmed by the user 2026-07-11: rep (f2) is
+        # VREP semantics (confirmed in play): rep (f2) is
         # the LIFETIME rep with that hold, f4/f5 the CUMULATIVE
         # thresholds of the current/next rank (525 got rank 2, 2025
         # total gets rank 3) - so within-rank progress is rep-f4 out of
@@ -5197,7 +5195,7 @@ class VikingStatus(tk.Toplevel):
         self._redraw_end(txt, pos)
 
     # The market is ~130 head across 13 lineages and the tab budget is
-    # ~71 lines, so only TRAITED animals are listed (user, 2026-08-23):
+    # ~71 lines, so only TRAITED animals are listed:
     # trait is LMARKET field 11, and an untraited animal reads '0'. In
     # the 2026-08-23 capture that is 28 of 130 - the ones actually worth
     # a trip, and the comparison the game makes tedious by only ever

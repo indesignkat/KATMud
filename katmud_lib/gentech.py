@@ -21,7 +21,7 @@ The hpbar is `genset hpbar`-customizable, so fields are found by label:
 
 `PU:cur/max(store)` - store is SPU's current value.
 
-GAME FACTS (user, 2026-10-04): SPU max is half of PU max (9450 -> 4725,
+GAME FACTS: SPU max is half of PU max (9450 -> 4725,
 matching `gs`), and CPC max is 10000.
 """
 import re
@@ -29,7 +29,7 @@ import re
 from . import blade
 
 # `\s*` after each colon: a custom bar is free to write `PU: 9225/...`
-# (the user's own, 2026-10-04) where the default writes `PU:9450/...`.
+# where the default writes `PU:9450/...`.
 _PU_RE = re.compile(r"\bPU:\s*(\d+)/(\d+)\((\d+)\)")
 _CPC_RE = re.compile(r"\bCPC:\s*(\d+)/")
 _EFF_RE = re.compile(r"\b(GenEff|TechEff):\s*(\d+)")

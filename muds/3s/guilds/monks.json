@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Monks guild layer for 3s. Chi (gp1) and Peace (gp2) come from GMCP Guild.State chi_points/peace via katmud_lib/monk.py - MIP/FFF is gone mud-side (2026-09-15). Chi's max is the prompt's 'Chi: cur/max'. Cascade rule REPLACE (character file wins).",
-    "Peace has NO known maximum (GAME FACT, user 2026-10-04 - it can get very high), so the bar shows the number alone (hide_max), scales against the highest value seen, and warns below an absolute 100 (warn_below)."
+    "Peace has NO known maximum (GAME FACT - it can get very high), so the bar shows the number alone (hide_max), scales against the highest value seen, and warns below an absolute 100 (warn_below)."
   ],
   "login_commands": [],
   "aliases": {},

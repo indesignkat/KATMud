@@ -19,7 +19,7 @@ immediately before the token appears / jumps - not inferred from docs):
   So "token absent" means "not up", and callers must rebuild their whole
   picture from each I packet instead of updating fields in place.
 
-* Numbers are ROUNDS REMAINING (user-confirmed). Every counter drops by
+* Numbers are ROUNDS REMAINING (confirmed in play). Every counter drops by
   exactly 1 per I packet, in lockstep, so one I packet == one round.
 
 * The three SONGS count UP while being sung - performing banks duration at
@@ -34,7 +34,7 @@ immediately before the token appears / jumps - not inferred from docs):
 
 * Spells are recast one at a time.
 
-Three tokens carry no counter and NEVER wear off (user-confirmed), so they are
+Three tokens carry no counter and NEVER wear off (confirmed in play), so they are
 displayed but never maintained - there is nothing to threshold on:
 `ab` anticipate blows, `AB` avoid blows, `RF` righteous fury. `ab` and `AB` are
 mutually exclusive stances, and differ only by case - so a token must never be
@@ -93,7 +93,7 @@ def parse_effects(stripped):
 def parse_status(stripped):
     """J-field text -> {smiles, reset_pct, ngl, song, song_left}.
 
-    `S:4;40%` is Smile (user-confirmed): 4 smiles banked, 40% of the way to
+    `S:4;40%` is Smile (confirmed in play): 4 smiles banked, 40% of the way to
     the next one. A smile is a reserve of extra sp that tops your sp back up
     until it runs out - so `smiles` is a resource worth watching, not a level.
     The percent counts 0->99 and WRAPS, which is why it must not be read as

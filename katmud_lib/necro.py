@@ -133,7 +133,7 @@ def parse_hpbar(stripped):
 
 
 # --- text prompt -------------------------------------------------------
-# The in-game prompt prints in the main output (user-confirmed) and is the
+# The in-game prompt prints in the main output (confirmed in play) and is the
 # authoritative source for the guild Status fields - it carries everything
 # the FFF I-field does PLUS reset% and the corpse count:
 #   HP[1114(118)/1114] SP[652(118)/652] NP[3700/3700|0c] E[none]

@@ -21,7 +21,7 @@ from . import widgets
 # appeared on 2026-09-03 (logs/gmcp_20260903_154720.log), so the guild is
 # under active development and the doc drifts behind it.
 #
-# GAME FACTs (user, 2026-09-03):
+# GAME FACTs:
 #   natural_convergence  charges of a limited power that FULLY RESTORES
 #                        sp. Two of them; the refresh period is uncertain
 #                        (week/day/reset) - do NOT put a timer on it
@@ -40,7 +40,7 @@ from . import widgets
 # 94 of them against 94 real packets. Harmless, but it is not data.
 
 # The ten damage types elemental negation covers, in the order the mud
-# prints them. GAME FACT (user, 2026-09-03): negation is the endgame
+# prints them. GAME FACT: negation is the endgame
 # defensive ability and this line should ALWAYS list all ten - a shorter
 # list means negation has lapsed against the missing types.
 #
@@ -131,7 +131,7 @@ def extra_lines(extra):
     if made:
         out.append(" ".join(made))
 
-    # GAME FACT (user, 2026-09-03): natural convergence fully restores
+    # GAME FACT: natural convergence fully restores
     # sp and you get two of them, refresh period uncertain. Equipollent
     # is a toggle that spreads every attack across the whole room for
     # much less damage each - it changes what every swing does, so it is
@@ -154,7 +154,7 @@ def extra_lines(extra):
 def info_lines(info):
     """Guild.Info -> the one figure worth a pane line: link energy.
 
-    GAME FACT (user, 2026-09-03): link energy reaching ZERO KILLS you -
+    GAME FACT: link energy reaching ZERO KILLS you -
     a second death condition, entirely separate from consistency - and
     `dissipate` and `siphon` both drain it every round. It builds as you
     play and only a few powers spend it, so the headroom is usually
@@ -180,7 +180,7 @@ def info_lines(info):
 # non-empty; the value itself is a prompt abbreviation ("WV"), too
 # cryptic to show, so the state is named instead.
 #
-# GAME FACTs (user, 2026-09-03), which is the only reason these can be
+# GAME FACTs, which is the only reason these can be
 # labelled at all - nothing on the wire explains them:
 #
 #   dissipated  mist form, invisible, but DRAINS LINK ENERGY every round.
@@ -246,7 +246,7 @@ _SPEND_RE = re.compile(r"Energy (?:to Spend|available to spend)\s*:\s*(\d+)",
 # with every prompt and is already captured (client.stat2) for the status
 # bar under the hpbars - it was just never parsed.
 #
-# GAME FACT (user, 2026-09-04): for an ELEMENTAL this G2N is the SIZE track,
+# GAME FACT: for an ELEMENTAL this G2N is the SIZE track,
 # not the plateau one - 285,387 to the next size against 13,931,835 to the
 # next plateau. So it is the live source for `Next Time Size`, which the
 # `guild score` readout otherwise only reveals when the player types it.
@@ -310,7 +310,7 @@ def scrape_score(state, line):
         state["form"] = m.group(1); hit = True
     m = _SIZE_RE.search(line)
     if m:
-        # GAME FACT (user, 2026-09-03): size is the guild level (fast)
+        # GAME FACT: size is the guild level (fast)
         # and plateau the slow track beside it.
         state["size"], state["plateau"] = int(m.group(1)), int(m.group(2))
         hit = True
@@ -331,13 +331,13 @@ def scrape_score(state, line):
 def next_emit_plateau(plateau):
     """The next plateau that raises max emit, or None.
 
-    GAME FACT (user, 2026-09-03): max emit - the energy spent per attack
+    GAME FACT: max emit - the energy spent per attack
     and the damage it does - goes up at every plateau ENDING IN 6. Sizes
     come fast, plateaus are a long haul, so the next bump is worth
     naming.
 
     The gap is reported in PLATEAUS, never projected into guild levels.
-    The user's own two intervals were 56 glvls (17->18) and 60 (18->19),
+    Two observed intervals were 56 glvls (17->18) and 60 (18->19),
     i.e. rising - so extrapolating from two samples would understate the
     distance, and a confidently wrong estimate is worse than the honest
     count of plateaus remaining."""

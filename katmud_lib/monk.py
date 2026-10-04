@@ -15,7 +15,7 @@ logs/gmcp_20261004_030513.log):
     `Chi: cur/max` is the only place Chi's max appears; `M:` is Peace;
     `AE:count/pct%` - the remaining COUNT is text-only.
 
-GAME FACT (user, 2026-10-04): Peace has no known maximum - it can get very
+GAME FACT: Peace has no known maximum - it can get very
 high - so the bar shows the number alone and warns below an absolute 100
 (monks.json), scaled against the highest value seen.
 """
@@ -68,7 +68,7 @@ def parse_gs(line):
 
 def status_line(st):
     """The status-bar line; anything never received is left out. The
-    peace text is NOT here - it stays in the info pane (user's layout)."""
+    peace text is NOT here - it stays in the info pane."""
     parts = []
     mf = " / ".join(st[k] for k in ("method", "focus") if st.get(k))
     if mf:

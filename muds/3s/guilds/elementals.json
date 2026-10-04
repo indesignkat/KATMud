@@ -8,7 +8,7 @@
     "Consistency (gp2, a percentage, so gp2max is the constant 100).",
     "GMCP carries no Energy MAXIMUM, so gp1max is parsed off the prompt's",
     "own 'NRG:1399/1412' - see elemental.parse_energy_max.",
-    "GAME FACT (user, 2026-09-03): consistency reaching",
+    "GAME FACT: consistency reaching",
     "ZERO kills you, which is why it carries warn thresholds - the only",
     "guild pool in the repo that is lethal at the bottom.",
     "Note hp/sp maxima are NOT ceilings here: 'evoke corpse drain' takes",
@@ -83,7 +83,7 @@
           "#cc9933"
         ]
       ],
-      "_note": "GAME FACT (user, 2026-09-03): consistency does no harm until it reaches ZERO, which kills you - so these are set for AWARENESS, not for a damage threshold. Amber at 70% is deliberately early. Note diffuse CAPS consistency at 50%, so a permanently amber bar while diffused is expected, not a fault."
+      "_note": "GAME FACT: consistency does no harm until it reaches ZERO, which kills you - so these are set for AWARENESS, not for a damage threshold. Amber at 70% is deliberately early. Note diffuse CAPS consistency at 50%, so a permanently amber bar while diffused is expected, not a fault."
     },
     {
       "label": "Enemy",
