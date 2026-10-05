@@ -329,6 +329,7 @@ class MudClient:
         self._gmcp_room_monsters = {}   # lowername -> count, entry-only
         self._gmcp_room_mob_names = {}  # lowername -> original spelling
         self._gmcp_room_seen = False    # a Contents packet arrived here
+        self._gmcp_room_player = False  # Contents listed a non-party player
         self._last_kill_name = ""       # for _is_post_mortem
         self._last_kill_at = 0.0
         # Combat: baseline per-fight routine (start list/if list), see
@@ -661,7 +662,6 @@ class MudClient:
         self._bot_first_line_at = 0.0   # first room line after a move (wire RTT)
         self._bot_debug = False         # `Bot debug`: per-room timing report
         self._bot_room_mob = False      # an italic (mob) line seen this room
-        self._bot_room_player = False   # an underline (non-party player) seen
         self._bot_mob_lines = []        # the italic lines (for kill keyword)
         # --- Hunt-only: the 3s minimap cross ("-O-"/"-1-"/"-*-" cells one
         # and two rooms away in each direction, magenta=mob/green=player,
@@ -719,7 +719,6 @@ class MudClient:
         self._chaossea_waiting_room = False
         self._chaossea_room_ready = False
         self._chaossea_room_mob = False
-        self._chaossea_room_player = False
         self._chaossea_mob_lines = []
         self._chaossea_floor_wants = []
         self._chaossea_pre_move_room = None  # set (to self.room) just before
@@ -4682,7 +4681,7 @@ class MudClient:
         self._hunt_lines = []
         self._bot_waiting_room = False
         self._bot_room_ready = False
-        self._bot_room_mob = self._bot_room_player = False
+        self._bot_room_mob = False
         self._bot_mob_lines = []
         self.send_line("pwho")          # seed the party whitelist
         self._bot_pwho_at = time.time()
@@ -4856,7 +4855,7 @@ class MudClient:
         the display to land (the prompt sets _bot_room_ready). A normal move
         gets the markers for free from the entry auto-look; start / post-combat
         rechecks send an explicit look (refresh=True) to re-read the room."""
-        self._bot_room_mob = self._bot_room_player = False
+        self._bot_room_mob = False
         self._bot_mob_lines = []
         self._hunt_lines = []
         self._bot_minimap = {}
@@ -4917,7 +4916,8 @@ class MudClient:
         mm = f" minimap={self._bot_minimap}" if self._bot_mode == "hunt" else ""
         self.write_local(
             f"[bot] ready in {total:.2f}s {split} via {src}; "
-            f"mob={self._bot_room_mob} player={self._bot_room_player}{mm}",
+            f"mob={self._bot_room_mob} "
+            f"player={getattr(self, '_gmcp_room_player', False)}{mm}",
             "#6699cc")
 
     def _bot_assess(self):
@@ -4932,7 +4932,10 @@ class MudClient:
         if watch_line:
             self._hunt_watch_alert(watch_line)
             return "stop"
-        if self._bot_room_player:               # non-party player -> cede it
+        # Non-party player -> cede it. GMCP Room.Contents lists players on
+        # entry; one who walks in later is their bad form, not ours to plan
+        # around.
+        if getattr(self, "_gmcp_room_player", False):
             self.write_local("[bot] player in room - moving on.", "#cc9933")
             return "move"
         if self._bot_room_mob:
@@ -5101,17 +5104,15 @@ class MudClient:
 
     def _bot_scan_markers(self, spans, clean):
         """One room line, while waiting for the room display: italic -> a mob
-        is here (keep the line for a kill keyword); underline from a non-party
-        name -> a player is here. Read on the prompt by _bot_assess."""
+        is here (keep the line for a kill keyword). Read on the prompt by
+        _bot_assess; players come from GMCP Room.Contents."""
         if not self._bot_first_line_at and clean.strip():
             self._bot_first_line_at = time.time()    # wire RTT marker
-        ital, under = self._line_markers(spans)
+        ital, _under = self._line_markers(spans)
         if ital:
             self._bot_room_mob = True
             self._bot_mob_lines.append(clean)
             self._bot_mob_lines = self._bot_mob_lines[-10:]
-        elif under and not self._line_is_party(clean):
-            self._bot_room_player = True
         self._hunt_lines.append(clean)          # legacy keyword fallback
         self._hunt_lines = self._hunt_lines[-40:]
         if self._bot_mode == "hunt":
@@ -5660,7 +5661,6 @@ class MudClient:
         self._chaossea_waiting_room = True
         self._chaossea_room_ready = False
         self._chaossea_room_mob = False
-        self._chaossea_room_player = False
         self._chaossea_mob_lines = []
         self._chaossea_floor_wants = []
         self._chaossea_pre_move_room = None
@@ -5866,7 +5866,7 @@ class MudClient:
         self._chaossea_reschedule(self._hunt_settle_s())
 
     def _chaossea_enter_room(self):
-        self._chaossea_room_mob = self._chaossea_room_player = False
+        self._chaossea_room_mob = False
         self._chaossea_mob_lines = []
         self._chaossea_floor_wants = []
         self._chaossea_room_mobs = 0
@@ -5944,7 +5944,7 @@ class MudClient:
         # 'look' re-triggers the italic-marker mob/player scan for this
         # room; clear what the failed attempt already collected so a
         # successful retry doesn't double-count mob lines.
-        self._chaossea_room_mob = self._chaossea_room_player = False
+        self._chaossea_room_mob = False
         self._chaossea_mob_lines = []
         self._chaossea_floor_wants = []
         self.send_line("look")
@@ -5963,7 +5963,7 @@ class MudClient:
                                          self._chaossea_has_cube):
             self._chaossea_floor_wants.append(floor)
             return
-        ital, under = self._line_markers(spans)
+        ital, _under = self._line_markers(spans)
         if ital:
             if clean.lstrip().lower().startswith("a ritual scene depicting"):
                 # A Blood Eagle rite's leftover ("A ritual scene depicting
@@ -5974,8 +5974,6 @@ class MudClient:
                 return
             self._chaossea_room_mob = True
             self._chaossea_mob_lines.append(clean)
-        elif under and not self._line_is_party(clean):
-            self._chaossea_room_player = True
 
     def _chaossea_after_kill(self):
         """A fight just cleared. If Chaossea initiated it, pending_loot is
@@ -6180,7 +6178,7 @@ class MudClient:
                 # piled up (no DDD ever arrived to clear them), which would
                 # otherwise all count as live mutants standing here.
                 self._chaossea_skip_ddds = 0
-                self._chaossea_room_mob = self._chaossea_room_player = False
+                self._chaossea_room_mob = False
                 self._chaossea_mob_lines = []
                 self._chaossea_floor_wants = []
                 self.send_line(self.setting("bot_refresh_command", "glance"))
@@ -7237,7 +7235,7 @@ class MudClient:
     def _run_room_blocked(self):
         """Reason to skip this room (non-party player, or a skip_phrase like a
         guild disguise), or None to hunt it normally."""
-        if self._run_room_player:
+        if self._run_room_player or getattr(self, "_gmcp_room_player", False):
             return "player"
         for raw in self._run_lines:
             low = raw.lower()
@@ -7455,7 +7453,10 @@ class MudClient:
             # keyword/lag; autocombat finishes it once engaged. Only give up
             # once the grace fully expires (mob gone, or keyword never took).
             if time.time() - self._run_kill_start < self._run_engage_grace_s():
-                target, _name = self._run_scan_mob()
+                # A player seen since the first kill (their line landed
+                # late) means stop poking at a mob that may be theirs.
+                target, _name = (None, None) if self._run_room_blocked() \
+                    else self._run_scan_mob()
                 if target:
                     self.send_line(f"kill {target}")     # re-poke; cheap if dead
                 self._run_reschedule(self._run_settle_s()); return
@@ -8944,6 +8945,7 @@ class MudClient:
         self._gmcp_room_monsters = {}
         self._gmcp_room_mob_names = {}
         self._gmcp_room_seen = False
+        self._gmcp_room_player = False
         area = data.get("area")
         self.gmcp_room_area = None if area in (None, "Unknown") else str(area)
         self.gmcp_exit_dests = {d: v for d, v in exits.items()
@@ -9061,6 +9063,7 @@ class MudClient:
         self._gmcp_room_items = set()
         self._gmcp_room_monsters = {}
         self._gmcp_room_mob_names = {}
+        self._gmcp_room_player = False
         if not isinstance(data, dict):
             return
         # Separate from the dicts on purpose: once every mob in the room is
@@ -9087,6 +9090,14 @@ class MudClient:
                 self._gmcp_room_mob_names[name] = str(it.get("name")).strip()
             elif it.get("type") == "item":
                 self._gmcp_room_items.add(name)
+            # Another player, outright. This packet releases Run's room
+            # wait BEFORE the room text lands, and the underlined player
+            # line in that text was the only player signal - so a tick in
+            # the gap attacked mobs other players were fighting. Same party
+            # rule as the underline check.
+            elif it.get("type") == "player" and \
+                    not self._line_is_party(str(it.get("name"))):
+                self._gmcp_room_player = True
         # THE ROOM HAS LANDED. 3s sends no telnet GA, so `prompt` events
         # (protocol.py:412) never fire and _run_on_prompt never runs - which
         # silently turned run_move_ms from a ceiling into the PACE, 1.3s a
