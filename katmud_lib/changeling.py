@@ -4,21 +4,17 @@ GUILD DISCIPLINE (necro spec 2.4): everything changeling-specific lives here
 and is wired in only through muds/3s/guilds/changelings.json (the bar layout)
 plus the `guild == "changelings"` branches in client.py.
 
-Changelings have NO guild-specific MIP tag - their vitals ride the mud-wide
-FFF feed (A=hp, C=sp). BUT the two guild pools, Protoplasm (gp1) and Stamina
-(gp2), are NOT cleanly in FFF: the feed's `E` field actually carries Stamina,
-yet the global composite map (protocol.COMPOSITE_NUM) assigns E->gp1, so
-stamina would land in the Protoplasm bar and the real protoplasm value never
-arrives (it only changes when you reform/heal, which FFF doesn't delta here).
+MIP/FFF is gone mud-side (2026-09-15). The sources now
+(logs/gmcp_20261004_212515.log):
 
-The reliable source for BOTH pools is the custom prompt line, which always
-prints them explicitly:
-
-    HP[666/666] SP[191/192] ST[98.99%] PP[100.00%] CF[1/26%] FF[25.22%] E[] N PA
-
-So this is a LINE/PROMPT parser (like necro.parse_prompt). PP = Protoplasm ->
-gp1, ST = Stamina -> gp2, both percentages with max 100 (the bars read
-gp1max/gp2max straight from vitals). HP/SP are parsed too as a steady fallback.
+  * The prompt, every round and on `hp` - the only source of Protoplasm:
+        HP[666/666] SP[191/192] ST[98.99%] PP[100.00%] CF[1/26%] FF[25.22%] E[] N PA
+    PP = Protoplasm -> gp1, ST = Stamina -> gp2, both % with max 100.
+  * GMCP Guild.State, a delta feed: `stamina` (same value as ST, and it
+    keeps ticking through regen between fights), `bioplasts` (count
+    carried, on change), `kills`, `super` (meaning unknown).
+  * GMCP Guild.Info: `current_form` / `form_group` on a morph only.
+  * `gs`:  | Form        : Triceratops            Form Points : 69 |
 """
 
 import re
@@ -101,32 +97,75 @@ def target_attack_form(forms, cap=FORM_CAP):
     return best["name"] if best else None
 
 
-# --- the FFF I-field (status string) ---------------------------------------
-# Stripped form: "[N] [Chaos Flux: 1/53%]  [Density: 75.23%]  [FF(20): 29.07%]
-# [Bombardier Beetle]". Last bracket = current form; FF(NN) = its familiarity.
-_IFIELD_FORM = re.compile(r"\[([^\]]+)\]\s*$")
-_IFIELD_FF = re.compile(r"\[FF\((\d+)\):")
-_BIOPLASTS = re.compile(r"Bioplasts:\s*(\d+)")
+# --- the status line (prompt + GMCP, since MIP/FFF went 2026-09-15) --------
+# Prompt:  HP[666/666] SP[190/192] ST[89.78%] PP[100.00%] CF[1/86%] FF[MAX]
+#          E[] N PA
+# CF = Chaos Flux, FF = the current form's familiarity % (MAX when capped),
+# the letter after E[..] = the chaotic forces (gh confighp: D detrimental,
+# N neutral, B beneficial), then the active intrinsics (P = Perform,
+# A = Adrenalize). GMCP Guild.Info sends current_form only on a
+# morph; Guild.State sends bioplasts (the count carried) only on a change.
+_PROMPT_CF = re.compile(r"CF\[([^\]]*)\]")
+_PROMPT_FF = re.compile(r"FF\[([^\]]*)\]")
+_PROMPT_CHAOS = re.compile(r"E\[[^\]]*\]\s+([NDB])\b")
+_GS_FORM = re.compile(r"\|\s*Form\s+:\s+(.+?)\s{2,}Form Points")
+_PROMPT_INTRINSICS = re.compile(r"E\[[^\]]*\]\s+[NDB]\b *([A-Za-z]*)")
+CHAOS = {"N": "Neutral", "D": "Detrimental", "B": "Beneficial"}
+INTRINSICS = {"P": "Perform", "A": "Adrenalize"}
 
 
-def current_form(status):
-    """Current form name from the stripped I-field (its last [bracket]), or
-    None. 'Triceratops' would mean we're tanking, anything else = hunting."""
-    m = _IFIELD_FORM.search(status or "")
+def parse_prompt_status(line):
+    """Flux / FF / chaos letter off the prompt, or {} if not a prompt."""
+    if not is_prompt(line):
+        return {}
+    out = {}
+    for key, rx in (("flux", _PROMPT_CF), ("ff", _PROMPT_FF),
+                    ("chaos", _PROMPT_CHAOS)):
+        m = rx.search(line)
+        if m:
+            out[key] = m.group(1)
+    m = _PROMPT_INTRINSICS.search(line)
+    if m:
+        out["intrinsics"] = m.group(1)   # "" when none are active
+    return out
+
+
+def parse_gs_form(line):
+    """`gs` row '| Form : Triceratops   Form Points : 69 |' -> form name."""
+    m = _GS_FORM.search(line or "")
     return m.group(1).strip() if m else None
 
 
-def current_ff(status):
-    """Current form's familiarity LEVEL from `FF(NN)` in the I-field, or None."""
-    m = _IFIELD_FF.search(status or "")
-    return int(m.group(1)) if m else None
+def parse_gmcp(data):
+    """Guild.State / Guild.Info -> {stamina, bioplasts, form}, whichever
+    this packet carries (both are delta feeds)."""
+    out = {}
+    v = data.get("stamina")
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        out["stamina"] = float(v)
+    v = data.get("bioplasts")
+    if isinstance(v, int) and not isinstance(v, bool):
+        out["bioplasts"] = v
+    v = data.get("current_form")
+    if isinstance(v, str) and v:
+        out["form"] = v
+    return out
 
 
-def bioplasts(vitals):
-    """Bioplast count from the FFF J-field (stored as vitals['hpbar2'], e.g.
-    ' [Bioplasts: 2] [ADR] '). 0 if none/unknown."""
-    m = _BIOPLASTS.search(str((vitals or {}).get("hpbar2", "")))
-    return int(m.group(1)) if m else 0
+def status_line(st):
+    """The status-bar line; anything never received is left out."""
+    parts = []
+    if st.get("form"):
+        form = st["form"].title()
+        parts.append(f"{form}  FF {st['ff']}" if "ff" in st else form)
+    elif "ff" in st:
+        parts.append(f"FF {st['ff']}")
+    if "flux" in st:
+        parts.append(f"Flux {st['flux']}")
+    if "chaos" in st:
+        parts.append(CHAOS.get(st["chaos"], st["chaos"]))
+    parts.extend(INTRINSICS.get(c, c) for c in st.get("intrinsics", ""))
+    return "  ".join(parts)
 
 
 # --- safety gate: rating range vs best kill --------------------------------
@@ -186,11 +225,11 @@ def agent_low_hp(c, _losing):
     once combat ends. Otherwise the routine HP heal: a bioplast if we have one,
     else a bare 'morph'. (auto-reform tops HP each round anyway.)"""
     if _stamina_pct(c) < int(c.setting("agent_triceratops_pct", 60)):
-        cur = current_form(c.changeling_status)
+        cur = c.changeling.get("form")
         if cur and cur.lower() == "triceratops":
             return []                    # already tanking - don't re-morph
         return ["morph triceratops"]
-    if bioplasts(c.vitals) > 0:
+    if c.changeling.get("bioplasts", 0) > 0:
         return ["consume bioplast"]
     return ["morph"]
 
@@ -203,7 +242,7 @@ def agent_ensure_form(c):
     target = target_attack_form(c.changeling_forms)
     if not target:
         return None
-    cur = current_form(c.changeling_status)
+    cur = c.changeling.get("form")
     if cur and cur.lower() == target.lower():
         return None
     return f"morph {target}"

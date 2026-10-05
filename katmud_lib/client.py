@@ -34,7 +34,7 @@ from tkinter import simpledialog
 from . import (angel, bard, blade, changeling, config, credentials, dialogs,
                elemental, gentech, mapdata, mapparse, mapsql, mobdb, monk,
                necro, paths,
-               picker, profiles, viking)
+               picker, profiles, viking, warder)
 from .protocol import (MudConnection, parse_composite,
                        strip_mip_colors, tag_to_style)
 from .widgets import MONO, MapPane, VitalsBar
@@ -427,6 +427,8 @@ class MudClient:
         self._gentech_line = ""         # last rendered status line
         self.monk = {}                  # merged GMCP + prompt/gs monk fields
         self._monk_line = ""            # last rendered status line
+        self.warder = {}                # merged GMCP + prompt/gs warder fields
+        self._warder_line = ""          # last rendered status line
         self.blade_win = None           # detached Bladesinger Status panel
         self.blade_flags = {}           # prompt [CoCsBlMsRvFl] -> active effects
         self.blade_skills = []          # ordered `skills` rows, for the panel
@@ -497,8 +499,9 @@ class MudClient:
         self._vnlist_metric = "daler"   # VNlist's optimization target
         self._newbie_picks = []         # current VNlist recommendation
         self._viking_focus_bind = None  # root <FocusIn> -> raise status win
-        self.changeling_status = ""     # changeling FFF I-field shown in the
-                                        # status bar (Flux/Density/FF/form)
+        self.changeling = {}            # merged prompt + GMCP changeling
+                                        # fields (form, flux, ff, bioplasts)
+        self.changeling_status = ""     # changeling status-bar line
         self.blade_status = ""          # bladesinger Mode/Eff/Blur/G2N line
                                         # shown in the status bar
         self.necro_status = ""          # necro Status[w/p/v/r] Cr[..] line
@@ -1716,9 +1719,9 @@ class MudClient:
     def show_status(self):
         if self.frozen:
             return
-        # Changelings put their FFF I-field (Flux/Density/FF/form) on the
-        # status bar under the hpbars instead of the (redundant) connection
-        # text - the connection state lives in the title bar + topbar anyway.
+        # Changelings put form/FF/Flux/chaos on the status bar under the
+        # hpbars instead of the (redundant) connection text - the connection
+        # state lives in the title bar + topbar anyway.
         if self.guild.lower() == "changelings" and self.changeling_status:
             text = self.changeling_status
         elif self.guild.lower() == "bladesingers" and self.blade_status:
@@ -1727,6 +1730,8 @@ class MudClient:
             text = self.necro_status
         elif self.guild.lower() == "monks" and self._monk_line:
             text = self._monk_line
+        elif self.guild.lower() == "warders" and self._warder_line:
+            text = self._warder_line
         elif self.stat1 or self.stat2:
             text = f"{self.stat1}    {self.stat2}"
         elif self.viking_spells:
@@ -8460,6 +8465,8 @@ class MudClient:
                             self.gentech_scan_line(clean)
                         elif self.guild.lower() == "monks":
                             self.monk_scan_line(clean)
+                        elif self.guild.lower() == "warders":
+                            self.warder_scan_line(clean)
                         elif self.guild.lower() == "vikings":
                             self.viking_scan_line(clean)
                             self._vtradeprices_scan_line(clean)
@@ -9178,6 +9185,8 @@ class MudClient:
             self._gentech_gmcp(data)
         if self.guild.lower() == "monks":
             self._monk_gmcp(data)
+        if self.guild.lower() == "changelings":
+            self._changeling_update(changeling.parse_gmcp(data))
         # Guild.State is also the Viking STFX carrier (fx.stfx), so it goes
         # through the viking path too - which no-ops for every other guild.
         self._viking_gmcp("Guild.State", data)
@@ -9320,6 +9329,70 @@ class MudClient:
                           if k in upd})
         self._monk_update(upd)
 
+    def _warder_gmcp(self, data):
+        """Warder Guild.Info, a delta feed: next_reset (the STS % of the
+        prompt), pwards on change, gxp every round. `boils` is documented
+        in `gh gmcp` but never seen on the wire - taken if it arrives."""
+        upd = {}
+        v = data.get("next_reset")
+        if isinstance(v, int) and not isinstance(v, bool):
+            upd["reset_pct"] = v
+        if isinstance(data.get("pwards"), str):
+            upd["wards"] = data["pwards"]
+        gxp = data.get("gxp")
+        if isinstance(gxp, dict):
+            v = gxp.get("to_spend")
+            if isinstance(v, int) and not isinstance(v, bool):
+                upd["gxp_spend"] = v
+            v = gxp.get("total")
+            if isinstance(v, int) and not isinstance(v, bool):
+                prev = self.warder.get("gxp_total")
+                if prev is not None and v != prev:
+                    upd["gxp_last"] = v - prev
+                upd["gxp_total"] = v
+        boils = data.get("boils")
+        if isinstance(boils, dict):
+            for src, dst in (("current", "boils"), ("max", "boils_max")):
+                v = boils.get(src)
+                if isinstance(v, int) and not isinstance(v, bool):
+                    upd[dst] = v
+        self._warder_update(upd)
+
+    def warder_scan_line(self, clean):
+        """The prompt (STS count, Void/Block/wards) and `gs`/`score` (STS
+        max, Favor/Boil count)."""
+        upd = warder.parse_prompt(clean)
+        if upd is None:
+            upd = warder.parse_gs(clean)
+        if upd:
+            self._warder_update(upd)
+
+    def _warder_update(self, upd):
+        """STS -> the gp1 bar, Favor/Boil -> the gp2 bar (warders have no
+        GP1/GP2 of their own). A stated max wins; until one arrives the
+        scale is the high-water mark. The status line redraws only when
+        its text changes."""
+        dirty = False
+        for src, f in (("sts", "gp1"), ("boils", "gp2")):
+            if src in upd and self.vitals.get(f) != upd[src]:
+                self.vitals[f] = upd[src]
+                dirty = True
+            if src + "_max" in upd:
+                if self.vitals_max.get(f) != upd[src + "_max"]:
+                    self.vitals_max[f] = upd[src + "_max"]
+                    self._maxes_dirty = dirty = True
+            elif src in upd and src + "_max" not in self.warder:
+                before = self.vitals_max.get(f)
+                self._raise_seen_max({f: upd[src]})
+                dirty = dirty or self.vitals_max.get(f) != before
+        if dirty:
+            self.update_vitals()
+        self.warder.update(upd)
+        line = warder.status_line(self.warder)
+        if line != self._warder_line:
+            self._warder_line = line
+            self.show_status()
+
     # --- Viking guild feed over GMCP -----------------------------------
     # Undeclared and undocumented: none of these packages appears in
     # Core.Supported or gmcp.txt, but all of them stream (captured
@@ -9387,6 +9460,12 @@ class MudClient:
             return
         if isinstance(data, dict) and self.guild.lower() == "monks":
             self._monk_gmcp(data)
+            return
+        if isinstance(data, dict) and self.guild.lower() == "warders":
+            self._warder_gmcp(data)
+            return
+        if isinstance(data, dict) and self.guild.lower() == "changelings":
+            self._changeling_update(changeling.parse_gmcp(data))
             return
         if not isinstance(data, dict) or self.guild.lower() != "elementals":
             return
@@ -11387,6 +11466,11 @@ class MudClient:
             self.vitals.update(upd)
             self._raise_seen_max(upd)
             self.update_vitals()
+            self._changeling_update(changeling.parse_prompt_status(clean))
+            return
+        form = changeling.parse_gs_form(clean)
+        if form:
+            self._changeling_update({"form": form})
             return
         rows = changeling.parse_forms_line(clean)
         if rows:
@@ -11401,6 +11485,25 @@ class MudClient:
         bk = changeling.parse_best_kill(clean)
         if bk is not None:
             self.changeling_best_kill = bk
+
+    def _changeling_update(self, upd):
+        """GMCP stamina -> the gp2 bar (it keeps ticking through regen,
+        unlike the prompt); bioplasts -> the info pane; form/flux/ff/chaos
+        -> the status line, redrawn only when its text changes."""
+        if not upd:
+            return
+        st = upd.pop("stamina", None)
+        if st is not None and self.vitals.get("gp2") != st:
+            self.vitals["gp2"], self.vitals["gp2max"] = st, 100.0
+            self.update_vitals()
+        bp = upd.get("bioplasts")
+        self.changeling.update(upd)
+        if bp is not None:
+            self.update_info()
+        line = changeling.status_line(self.changeling)
+        if line != self.changeling_status:
+            self.changeling_status = line
+            self.show_status()
 
     def _necro_powers_apply(self, cap):
         """A COMPLETE memorized-powers readout -> necro_counts.
@@ -12372,6 +12475,8 @@ class MudClient:
         ("_cart_cd_until", lambda: None),
         ("gentech", dict), ("_gentech_line", str),
         ("monk", dict), ("_monk_line", str),
+        ("warder", dict), ("_warder_line", str),
+        ("changeling", dict),
     )
 
     def _hotswap_fixups(self):
@@ -13837,7 +13942,7 @@ class MudClient:
         pwr_at, pwr = len(lines), self._powers_lines()
         lines.extend(pwr)
         if self.guild.lower() == "changelings":
-            lines.append(f"bioplasts: {changeling.bioplasts(self.vitals)}")
+            lines.append(f"bioplasts: {self.changeling.get('bioplasts', '?')}")
         if self.last_deltas:
             lines.append(self.last_deltas)
         if self.blur_portal:

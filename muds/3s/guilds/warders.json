@@ -1,12 +1,17 @@
 {
   "_comment": [
-    "Warders guild layer for 3s. Like Necromancers, this guild has NO private MIP tag - vitals ride the mud-wide FFF composite feed (A=hp C=sp E=gp1 G=gp2). Maxes self-calibrate from peak observed value. Cascade rule REPLACE (character file wins).",
-    "Pool labels: HP/SP verified from score; GP2 still GUESSED (value didn't echo to a named gscore line) - rename live. ",
+    "Warders guild layer for 3s. Warders have no GP1/GP2 pools, so the gp1 bar is STS (their superpower, N uses per reset) and the gp2 bar is Favor/Boil (secondary powers sharing one usage count) - fed by katmud_lib/warder.py from the prompt, gs/score and GMCP Guild.Info. MIP/FFF is gone mud-side (2026-09-15). Cascade rule REPLACE (character file wins).",
+    "Favor/Boil is not on the prompt; it updates on gs/score (or GMCP boils, documented but not yet seen).",
     "Attack: BAREBONES attack. Properly: 'consider <mob>' FIRST (chance to reveal a Darkfriend), then 'engage <mob>' (or 'engage current' if already fighting). Hunt can't do the consider step yet - revisit."
   ],
   "login_commands": [],
   "aliases": {},
-  "triggers": [],
+  "triggers": [
+    {
+      "pattern": "-----Warder Evaluation-----",
+      "command": "engage"
+    }
+  ],
   "gags": [],
   "keys": {},
   "mip": {},
@@ -36,7 +41,14 @@
       "width": 200
     },
     {
-      "label": "GP2",
+      "label": "STS",
+      "cur": "gp1",
+      "max": "gp1max",
+      "color": "#9955cc",
+      "width": 200
+    },
+    {
+      "label": "Favor/Boil",
       "cur": "gp2",
       "max": "gp2max",
       "color": "#cc8833",
