@@ -461,6 +461,9 @@ class MudClient:
         self._viking_gmcp_keys = set()  # BBE keys GMCP has taken over
         self._viking_gmcp_rows = {}     # key -> {group: {identity: rec}}
         self._viking_gmcp_sweep = {}    # package -> rows buffered mid-sweep
+        self._viking_voyage = {}        # voyage + voyage_meta, merged
+        self._voyage_due = None         # next voyage arrival (time.time())
+        self._settler_line = None       # last info-pane edict/action line
         self._cart_cd_until = None      # cart cooldown end (time.time())
         # Guild.Map sends w, h and pos on three DIFFERENT packets, so the
         # pieces of VMAPH are held here until all four are known.
@@ -469,6 +472,7 @@ class MudClient:
         self._viking_map_saved = None   # last wall set written to disk
         self._viking_last_cell = None   # best-known map cell (see walk_to)
         self._load_viking_map()
+        self._load_viking_bands()
         self.vperf = False              # #vperf: time the BBE hot path
         self.vperf_stats = {}           # rolling window accumulator
         self.viking_win = None
@@ -489,6 +493,9 @@ class MudClient:
         self._vtradeprices_lines = []   # accumulated `vtrade prices` lines
         self._vtradeprices_next = None  # step to chain into after the capture
         self._vtrade_prices = {}        # last parsed `vtrade prices` map
+        self._bands_lines = None        # a price table mid-capture
+        self._vtrade_bands = {}         # good -> (min, max, read at)
+        self._overview_good = None      # a market overview mid-read
         self._missionlist_capture = False  # arming flag for `vmission list`
         self._missionlist_lines = []    # accumulated `vmission list` lines
         self._missionlist_saw_board = False  # True once 'Global Mission Board' seen
@@ -1393,6 +1400,7 @@ class MudClient:
             return
         self.guild = canonical
         self._load_viking_map()         # no-op unless swapping TO vikings
+        self._load_viking_bands()
         self.cascade.guild = canonical
         self.cascade.reload()
         self.load_layers()
@@ -1877,6 +1885,8 @@ class MudClient:
         self._viking_gmcp_keys = set()
         self._viking_gmcp_rows = {}
         self._viking_gmcp_sweep = {}
+        self._viking_voyage = {}
+        self._voyage_due = None
         self._viking_map_dims = {}
         # A stated maximum is only authoritative while GMCP is actually
         # running: a reconnect that never negotiates it must fall back to
@@ -8471,6 +8481,7 @@ class MudClient:
                         elif self.guild.lower() == "vikings":
                             self.viking_scan_line(clean)
                             self._vtradeprices_scan_line(clean)
+                            self._bands_scan_line(clean)
                             self._missionlist_scan_line(clean)
                             self._vnlist_scan_line(clean)
                         self._bab_resolve(clean)
@@ -9751,6 +9762,21 @@ class MudClient:
                 self.rounds = enc["rounds"]
             elif not enc.get("active"):
                 self._stash_rounds()
+        if pkg == "Guild.Voyage" and ("voyage" in data
+                                      or "voyage_meta" in data):
+            # Since 2026-10-09 the record is split: `voyage` carries the
+            # numbers, `voyage_meta` the names (ship, contract,
+            # paused_type) in a different packet. VOYAGE is one record,
+            # so it is rebuilt from the last of both.
+            for k in ("voyage", "voyage_meta"):
+                if isinstance(data.get(k), dict):
+                    self._viking_voyage.update(data[k])
+            data = dict(data, voyage=dict(self._viking_voyage))
+            # next_move_in now rides only a queue or a sweep, not every
+            # ~4s, so the arrival countdown runs off a deadline.
+            nxt = (data.get("voyage") or {}).get("next_move_in")
+            if isinstance(nxt, (int, float)):
+                self._voyage_due = time.time() + nxt if nxt > 0 else None
         upd = viking.gmcp_bbe_values(pkg, data)
         rows = viking.gmcp_bbe_rows(pkg, data)
         page, pages = data.get("page"), data.get("pages")
@@ -9813,6 +9839,7 @@ class MudClient:
             self.viking_spells = viking.active_spells(self.viking_state)
             self.show_status()
         self._refresh_voyage_line(upd)
+        self._refresh_settler_line(upd)
         if self.viking_win is not None and self.viking_win.winfo_exists():
             self.viking_win.update_state(self.viking_state, upd)
 
@@ -9824,12 +9851,27 @@ class MudClient:
         every ~4s and most of its fields don't reach this line."""
         if not any(k in upd for k in viking.VOYAGE_LINE_KEYS):
             return
-        line = viking.voyage_line(self.viking_state)
+        line = self._voyage_text(time.time())
         # getattr default, not self._voyage_line: a #hotswap into code
         # that adds an __init__ attribute must not raise here.
         if line != getattr(self, "_voyage_line", None):
             self._voyage_line = line
             self.update_info()
+
+    def _refresh_settler_line(self, upd):
+        """Redraw the info pane when the edict/settler-action line's text
+        changes - same gating as the voyage line."""
+        if not any(k in upd for k in viking.SETTLER_LINE_KEYS):
+            return
+        line = viking.settler_line(self.viking_state)
+        if line != getattr(self, "_settler_line", None):
+            self._settler_line = line
+            self.update_info()
+
+    def _voyage_text(self, now):
+        due = getattr(self, "_voyage_due", None)
+        left = max(0, int(due - now)) if due else None
+        return viking.voyage_line(self.viking_state, next_in=left)
 
     def _stash_rounds(self):
         """A fight is over: zero the counter, keeping the count for the pane.
@@ -10655,6 +10697,7 @@ class MudClient:
             self.viking_spells = viking.active_spells(self.viking_state)
             self.show_status()
         self._refresh_voyage_line(upd)
+        self._refresh_settler_line(upd)
         if not self.vperf:
             if self.viking_win is not None and \
                     self.viking_win.winfo_exists():
@@ -10827,7 +10870,13 @@ class MudClient:
             walk_cb=self.viking_walk_to,
             geometry=self._win_state("viking_geometry"),
             hold_goods=self.setting("trade_hold_goods"),
-            topmost=self._win_state("viking_topmost"))
+            topmost=self._win_state("viking_topmost"),
+            goods_rules={
+                "sell_pct": self.setting("trade_sell_pct"),
+                "band_pct": self.setting("trade_band_pct"),
+                "midgard_margin": self.setting("trade_midgard_margin")})
+        if getattr(self, "_vtrade_bands", None):
+            self.viking_win.set_bands(self._vtrade_bands)
         self.viking_win.update_state(self.viking_state)
         if self.viking_skills:          # restore the last-read skill costs
             self.viking_win.set_vskills(self.viking_skills)
@@ -11816,6 +11865,67 @@ class MudClient:
         if next_step:
             next_step()
 
+    def _bands_scan_line(self, clean):
+        """Price bands for the Goods tab's sell/wait rules, from any
+        `vtrade prices` table (typed or sent by Missionlist) and from any
+        good's market overview ('[band 50-124]'). Each read refreshes only
+        the goods it shows; the rest keep their last reading."""
+        good = viking.parse_overview_good(clean)
+        if good:
+            self._overview_good = good
+            return
+        if getattr(self, "_overview_good", None):
+            band = viking.parse_overview_band(clean)
+            if band:
+                self._store_bands({self._overview_good: band})
+                self._overview_good = None
+                return
+        if "Current Market Prices" in clean:
+            self._bands_lines = [clean]
+            return
+        lines = getattr(self, "_bands_lines", None)
+        if lines is None:
+            return
+        lines.append(clean)
+        if viking.VTRADE_BAND_RE.match(clean):
+            return
+        # the table has no footer: it ends on the first non-price line
+        # after a price line
+        if len(lines) <= 60 and not any(
+                viking.VTRADE_BAND_RE.match(ln) for ln in lines):
+            return
+        self._bands_lines = None
+        self._store_bands({g: b[1:] for g, b in
+                           viking.parse_vtrade_bands(lines).items()})
+
+    def _store_bands(self, new):
+        """{good: (min, max)} -> the saved per-good bands, stamped now."""
+        if not new:
+            return
+        now = time.time()
+        self._vtrade_bands.update(
+            {g: (lo, hi, now) for g, (lo, hi) in new.items()})
+        try:
+            paths.save_json(paths.viking_bands_file(self.mud),
+                            {g: list(b) for g, b in
+                             self._vtrade_bands.items()})
+        except OSError as e:
+            self.write_local(f"[goods] band save failed: {e}", "#cc6666")
+        if self.viking_win is not None and self.viking_win.winfo_exists():
+            self.viking_win.set_bands(self._vtrade_bands)
+
+    def _load_viking_bands(self):
+        """The saved bands, so the Goods tab has them from login on."""
+        self._vtrade_bands = {}
+        if self.guild.lower() != "vikings":
+            return
+        data, err = paths.load_json(paths.viking_bands_file(self.mud))
+        if err or not isinstance(data, dict):
+            return
+        for g, b in data.items():
+            if isinstance(b, list) and len(b) == 3 and                     all(isinstance(x, (int, float)) for x in b):
+                self._vtrade_bands[g] = tuple(b)
+
     def _missionlist_read_stock(self):
         """Step 2 of Missionlist: read the warehouse via `vtrade stock`."""
         self._vtradestock_capture = True
@@ -11861,6 +11971,8 @@ class MudClient:
         for m in missions:
             m["net"] = m["daler"] - viking.goods_value(
                 m["requirements"], self._vtrade_prices)
+        viking.apply_rep_weights(missions,
+                                 self.setting("mission_rep_weights"))
         stock = self._vtrade_stock
         chosen, net, rep = viking.best_mission_picks(
             missions, stock, remaining)
@@ -12484,6 +12596,10 @@ class MudClient:
         ("_vpouch_capture", lambda: False), ("_vpouch_lines", list),
         ("_last_tick_error", lambda: None),
         ("_cart_cd_until", lambda: None),
+        ("_viking_voyage", dict), ("_voyage_due", lambda: None),
+        ("_bands_lines", lambda: None), ("_vtrade_bands", dict),
+        ("_settler_line", lambda: None),
+        ("_overview_good", lambda: None),
         ("gentech", dict), ("_gentech_line", str),
         ("monk", dict), ("_monk_line", str),
         ("warder", dict), ("_warder_line", str),
@@ -12610,7 +12726,9 @@ class MudClient:
         self._poll_reminders(now)
         self._touch_last_seen(now)
         self._cart_tick(now)
-        if self._reminders_cache or self._cart_cd_until is not None:
+        due = getattr(self, "_voyage_due", None)
+        if self._reminders_cache or self._cart_cd_until is not None or \
+                (due and now < due + 2):
             # keep the info-pane countdowns live
             self.update_info()
         self._write_webstate(now)
@@ -13964,7 +14082,10 @@ class MudClient:
             lines.extend(elemental.info_lines(self.elem_info))
         if self.guild.lower() == "vikings":
             # Below the hp/delta line, above recent kills.
-            lines.append(viking.voyage_line(self.viking_state))
+            lines.append(self._voyage_text(time.time()))
+            settler = viking.settler_line(self.viking_state)
+            if settler:
+                lines.append(settler)
         if self.guild.lower() == "gentech" and self._gentech_line:
             lines.append(self._gentech_line)
         if self.guild.lower() == "monks" and self.monk.get("peace_level"):

@@ -96,6 +96,12 @@ def map_db_file(mud):
     return os.path.join(mud_dir(mud), f"{safe_name(mud)}.db")
 
 
+def viking_bands_file(mud):
+    """Last-read Viking price bands per good ({good: [min, max, epoch]}),
+    so the Goods tab's band rule works from login without a re-read."""
+    return os.path.join(mud_dir(mud), f"vikingbands-{safe_name(mud)}.json")
+
+
 def viking_map_file(mud):
     """Cached Viking guild-map wall grid (MEE/MES rows) for a mud. The
     overland grid is guild-wide and static, but the MUD trickles it in one

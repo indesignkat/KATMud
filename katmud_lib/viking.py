@@ -696,6 +696,144 @@ def parse_vtrade_prices(lines):
     return prices
 
 
+# Same lines as VTRADE_PRICE_RE, plus the shift's band '[ min - max]'.
+VTRADE_BAND_RE = re.compile(
+    r"^-~\*\s+([A-Za-z]+(?: [A-Za-z]+)*)\s+([\d,]+)\s+daler\s+"
+    r"\[\s*([\d,]+)\s*-\s*([\d,]+)\s*\]", re.IGNORECASE)
+# The per-good market overview: '-~*   Cheese - Market Overview' then
+# '-~*   price 82 daler  [band 50-124]'.
+_OVERVIEW_GOOD_RE = re.compile(
+    r"^-~\*\s+([A-Za-z]+(?: [A-Za-z]+)*)\s+-\s+Market Overview\b")
+_OVERVIEW_BAND_RE = re.compile(
+    r"^-~\*\s+price\s+[\d,]+\s+daler\s+\[band\s+([\d,]+)\s*-\s*"
+    r"([\d,]+)\]")
+
+
+def parse_overview_good(line):
+    """A market overview's title line -> canonical good, or None."""
+    m = _OVERVIEW_GOOD_RE.match(line)
+    good = _canon_good(m.group(1)) if m else None
+    return good if good in _GOOD_SET else None
+
+
+def parse_overview_band(line):
+    """A market overview's 'price N daler [band lo-hi]' -> (lo, hi)."""
+    m = _OVERVIEW_BAND_RE.match(line)
+    return (tuple(int(g.replace(",", "")) for g in m.groups())
+            if m else None)
+
+
+def parse_vtrade_bands(lines):
+    """A `vtrade prices` readout -> {good: (price, min, max)}: this
+    shift's price and the band it moves in."""
+    bands = {}
+    for line in lines:
+        m = VTRADE_BAND_RE.match(line)
+        if not m:
+            continue
+        good = _canon_good(m.group(1))
+        if good in _GOOD_SET:
+            bands[good] = tuple(int(m.group(i).replace(",", ""))
+                                for i in (2, 3, 4))
+    return bands
+
+
+def band_position(price, lo, hi):
+    """How far up its band a price sits, 0-100 (a flat band reads 100).
+    Can pass 100: a settlement's sell price is not capped by the band."""
+    if hi <= lo:
+        return 100
+    return round(100 * (price - lo) / (hi - lo))
+
+
+def sell_band(row, bands):
+    """The row's SELL price placed in its good's band {good: (min, max,
+    ...)}, or None
+    without band data. The rule (finery: 140 in a 130-350 band is a bad
+    sale even as the best price in the land) is about what the buyer
+    pays, not the shift's headline price."""
+    b = (bands or {}).get(row["good"])
+    return band_position(row["sell"], b[0], b[1]) if b else None
+
+
+# Goods tab rules: a good is worth selling now only when its best buyer
+# pays near the best price anywhere AND this shift's price sits high in
+# its band. Finery is the case that set them: the best price in the land
+# can still be 47% up a 110-340 band, and finery is slow to replace.
+SELL_PCT_MAX = 95
+SELL_BAND_PCT = 75
+# "Worth waiting for" is the near misses only: band already high, best
+# buyer just short of the sell line.
+WAIT_PCT_MAX = 90
+MIDGARD_MARGIN_PCT = 10
+
+
+def classify_sells(rows, bands, pct_max=SELL_PCT_MAX,
+                   band_pct=SELL_BAND_PCT, wait_pct=WAIT_PCT_MAX):
+    """Mark each sell_plan row `verdict` 'sell', 'wait' (band qualifies,
+    best buyer within wait_pct..pct_max of max) or 'skip', and its `band`
+    position. No band data (none captured, or a past shift's) never
+    qualifies - the band is half the rule."""
+    for r in rows:
+        r["band"] = sell_band(r, bands)
+        r["reason"] = ""
+        if r["band"] is None or r["band"] < band_pct or r["pct_max"] < wait_pct:
+            r["verdict"] = "skip"
+        elif r["pct_max"] < pct_max:
+            r["verdict"] = "wait"
+            r["reason"] = f"best buyer {r['pct_max']}% of max"
+        else:
+            r["verdict"] = "sell"
+    return rows
+
+
+def standing_sells(rows, bands, band_pct=SELL_BAND_PCT, top=3):
+    """Best at Midgard: Midgard pays under the max on purpose (it buys
+    standing), so the % rule is off, but a good low in its band is no
+    better a sale here than anywhere. Rows gain `band`."""
+    out = []
+    for r in rows:
+        band = sell_band(r, bands)
+        if band is not None and band >= band_pct:
+            out.append(dict(r, band=band))
+    return out[:top]
+
+
+def route_to_midgard(rows, midgard_rows, bands,
+                     margin_pct=MIDGARD_MARGIN_PCT, band_pct=SELL_BAND_PCT):
+    """Send a qualifying sale to Midgard when Midgard realises within
+    `margin_pct` of the best buyer and its own price clears the band:
+    trading is the only way to raise Midgard standing (missions can't),
+    and that standing discounts building upgrades. The routed row keeps
+    `alt` = (best city, daler)."""
+    mid = {r["good"]: r for r in midgard_rows}
+    out = []
+    for r in rows:
+        m = mid.get(r["good"])
+        band = sell_band(m, bands) if m else None
+        if (r.get("verdict") == "sell" and m and r["city"] != m["city"]
+                and band is not None and band >= band_pct
+                and m["daler"] * 100 >= r["daler"] * (100 - margin_pct)):
+            out.append(dict(m, verdict="sell", reason="", band=band,
+                            alt=(r["city"], r["daler"])))
+        else:
+            out.append(r)
+    return out
+
+
+def cart_cap(state):
+    """The most one cart carries, off the idle carts (CIDLE `cap`) or the
+    carts on the road (CARTS `cap`); None until either has arrived."""
+    caps = []
+    for f in split_entries(state.get("CIDLE", "")):
+        if len(f) > 3 and f[3].isdigit():
+            caps.append(int(f[3]))
+    for c in parse_carts(state.get("CARTS", "")):
+        if str(c["cap"]).isdigit():
+            caps.append(int(c["cap"]))
+    return max(caps) if caps else None
+
+
 def goods_value(goods, prices):
     """[(qty, good), ...] -> total daler value at current market prices
     (see parse_vtrade_prices). A good missing from `prices` counts 0."""
@@ -781,6 +919,23 @@ def _mission_net(mission):
     return mission.get("net", mission["daler"])
 
 
+def _mission_score(mission):
+    """What the pick search maximizes: net daler, plus the rep bonus
+    apply_rep_weights adds for favoured towns. Without one it IS net."""
+    return mission.get("score", _mission_net(mission))
+
+
+def apply_rep_weights(missions, weights):
+    """`mission_rep_weights` {town: daler per rep point} -> each mission's
+    `score`. Towns match case-insensitively. Only a mission that already
+    makes money gets the bonus, so rep never rescues a daler loss."""
+    w = {str(k).lower(): v for k, v in (weights or {}).items()}
+    for m in missions:
+        bonus = w.get(m["town"].lower(), 0)
+        if bonus and _mission_net(m) > 0:
+            m["score"] = _mission_net(m) + m["rep"] * bonus
+
+
 def _greedy_mission_picks(missions, stock, max_picks):
     """Approximate fallback for best_mission_picks: only used when the
     candidate set is too large to brute-force. Highest-net-first, skip
@@ -788,8 +943,8 @@ def _greedy_mission_picks(missions, stock, max_picks):
     (a losing mission never helps the total)."""
     remaining = dict(stock)
     chosen = []
-    for m in sorted(missions, key=_mission_net, reverse=True):
-        if len(chosen) >= max_picks or _mission_net(m) <= 0:
+    for m in sorted(missions, key=_mission_score, reverse=True):
+        if len(chosen) >= max_picks or _mission_score(m) <= 0:
             break
         if all(remaining.get(g, 0) >= q for q, g in m["requirements"]):
             for q, g in m["requirements"]:
@@ -818,7 +973,7 @@ def best_mission_picks(missions, stock, max_picks):
                         for k in range(max_picks + 1))
     if total_combos > 300_000:
         return _greedy_mission_picks(missions, stock, max_picks)
-    best_combo, best_net, best_rep = [], 0, 0
+    best_combo, best_score, best_rep = [], 0, 0
     for k in range(1, max_picks + 1):
         for combo in itertools.combinations(missions, k):
             used = {}
@@ -833,11 +988,13 @@ def best_mission_picks(missions, stock, max_picks):
                     break
             if not ok:
                 continue
-            net = sum(_mission_net(m) for m in combo)
+            score = sum(_mission_score(m) for m in combo)
             rep = sum(m["rep"] for m in combo)
-            if net > best_net or (net == best_net and rep > best_rep):
-                best_combo, best_net, best_rep = list(combo), net, rep
-    return best_combo, best_net, best_rep
+            if score > best_score or (score == best_score
+                                      and rep > best_rep):
+                best_combo, best_score, best_rep = list(combo), score, rep
+    return (best_combo, sum(_mission_net(m) for m in best_combo),
+            best_rep)
 
 
 # --- `vmission newbie` board capture + pick optimizer (VNlist) --------
@@ -1086,6 +1243,7 @@ def sell_plan(state, hold=DEFAULT_HOLD_GOODS, hid=None):
             cured[chain[1]] = (ready, r["bldg"])
     consume = dict(parse_semi_pairs(state.get("SCONSUME", "")))
     hold = {g.lower() for g in (hold or ())}
+    cap = cart_cap(state)
 
     best, ceiling = {}, {}
     for hold_id, goods in parse_tgoods(state.get("TGOODS", "")):
@@ -1097,15 +1255,16 @@ def sell_plan(state, hold=DEFAULT_HOLD_GOODS, hid=None):
                 ceiling[good] = sell
             if hid is not None and hold_id != hid:
                 continue
-            have = stock.get(good, 0)
-            if not have or not sell or dem <= 0:
+            # Settlers eat this much per tick; selling it starves them.
+            have = stock.get(good, 0) - (consume.get(good) or 0)
+            if have <= 0 or not sell or dem <= 0:
                 continue
-            units = min(have, dem)
+            units = min(have, dem, cap or have)
             daler = units * sell
             if good not in best or daler > best[good]["daler"]:
                 best[good] = {
                     "good": good, "daler": daler, "sell": sell,
-                    "units": units, "stock": have, "demand": dem,
+                    "units": units, "stock": stock[good], "demand": dem,
                     "city": HOLD_NAMES.get(hold_id,
                                            "Hold %s" % hold_id),
                 }
@@ -2444,7 +2603,7 @@ def parse_voyage(value):
     f = value.split("|")
     g = lambda i: f[i].strip() if 0 <= i < len(f) else ""
     return {
-        "state": g(0), "ship": g(2), "contract": g(3), "type": g(4),
+        "state": g(0), "ship_id": g(1), "ship": g(2), "contract": g(3), "type": g(4),
         "danger": g(5), "col": g(6), "row": g(7),
         "grid_w": g(8), "grid_h": g(9),
         "hull": g(10), "morale": g(11), "supplies": g(12),
@@ -2818,6 +2977,10 @@ def gmcp_bbe_values(pkg, data):
                         ("VSPOILS", "vspoils")):
             if gk in data and not isinstance(data[gk], (list, dict)):
                 out[key] = str(data[gk])
+        # vresolve is a list on the wire (["probe", "search"],
+        # logs/gmcp_20261009_225009.log); readers want the 'a,b' form.
+        if isinstance(data.get("vresolve"), list):
+            out["VRESOLVE"] = ",".join(str(c) for c in data["vresolve"])
         path = data.get("vqpath")
         if isinstance(path, list) and path:
             # parse_vqpath accepts the flat 'c,r,c,r' form, which is what
@@ -3205,6 +3368,13 @@ def parse_counts(value):
     return out
 
 
+def boons_text(value):
+    """VBOONS 'rigging_bonus|1;storm_charm_ready|1;...' -> 'rigging
+    bonus: 1, storm charm ready: 1, ...' for the Sea tab."""
+    return ", ".join(f"{n.replace('_', ' ')}: {c}"
+                     for n, c in parse_counts(value))
+
+
 def parse_vchh(value):
     """VCHH 'w|h|mode' -> (width, height, mode); defaults to a 16x16 grid."""
     f = value.split("|")
@@ -3288,10 +3458,41 @@ def _pct(v):
 
 # The keys the one-line info-pane summary reads, so the client can gate
 # its redraw on a packet that can actually change the line.
-VOYAGE_LINE_KEYS = ("VOYAGE", "VQPATH", "VOYAGE_WAIT", "VRESOLVE")
+VOYAGE_LINE_KEYS = ("VOYAGE", "VQPATH", "VOYAGE_WAIT", "VRESOLVE",
+                    "LONGSHIP")
 
 
-def voyage_line(state):
+SETTLER_LINE_KEYS = ("SETTLERX", "SACTIONS")
+
+
+def settler_line(state):
+    """Info-pane line: the active edict with its time left (else its
+    cooldown, else NONE - one should be set) and the active settler
+    action (only one runs at a time) or NONE. Empty before either feed
+    has arrived."""
+    if not any(state.get(k) for k in SETTLER_LINE_KEYS):
+        return ""
+    parts = []
+    x = state.get("SETTLERX", "").split("|")
+    if state.get("SETTLERX"):
+        left = _settlerx_int(x, SETTLERX_EDICT_REMAINING)
+        cd = _settlerx_int(x, SETTLERX_EDICT_COOLDOWN)
+        if left > 0:
+            name = pretty_name(field(x, SETTLERX_EDICT_NAME, "")) or "active"
+            parts.append(f"Edict: {name} {fmt_secs(left)}")
+        elif cd > 0:
+            parts.append(f"Edict: cooldown {fmt_secs(cd)}")
+        else:
+            parts.append("Edict: NONE")
+    if state.get("SACTIONS"):
+        active = next(((n, s) for n, s in parse_sactions(state["SACTIONS"])
+                       if s > 0), None)
+        parts.append(f"Action: {pretty_name(active[0])} "
+                     f"{fmt_secs(active[1])}" if active else "Action: NONE")
+    return " | ".join(parts)
+
+
+def voyage_line(state, next_in=None):
     """One-line voyage summary for the client's info pane, mirroring the
     tail of `vvoyage status`:
 
@@ -3317,6 +3518,11 @@ def voyage_line(state):
     """
     v = parse_voyage(state.get("VOYAGE", ""))
     ship, st = v["ship"], v["state"]
+    if not ship and v["ship_id"]:
+        # The name rides voyage_meta, which a login sweep need not carry
+        # (logs/gmcp_20261009_125130.log) - the fleet list has it by id.
+        ship = next((s["name"] for s in parse_longship(
+            state.get("LONGSHIP", "")) if s["sid"] == v["ship_id"]), "")
     if not ship or not st:
         return "Launch a voyage!"
     head = f"{ship} {st.capitalize()}"
@@ -3331,8 +3537,11 @@ def voyage_line(state):
     steps = len(parse_vqpath(state.get("VQPATH", "")))
     if steps:
         parts.append(f"queued steps {steps}")
-    if v["next"].isdigit() and int(v["next"]) > 0:
-        parts.append(f"arrival in {fmt_secs(v['next'])}")
+    # next_in: the client's own countdown, since 2026-10-09 the record
+    # is no longer re-sent often enough for its next_move_in to tick.
+    nxt = str(next_in) if next_in is not None else v["next"]
+    if nxt.isdigit() and int(nxt) > 0:
+        parts.append(f"arrival in {fmt_secs(nxt)}")
     return ", ".join(parts)
 
 
@@ -3555,7 +3764,8 @@ class VikingStatus(tk.Toplevel):
     client may call it on every BBE packet."""
 
     def __init__(self, master, fonts=None, on_close=None, walk_cb=None,
-                 geometry=None, hold_goods=None, topmost=False):
+                 geometry=None, hold_goods=None, topmost=False,
+                 goods_rules=None):
         super().__init__(master)
         self.title("Viking Status")
         self.configure(bg=BG)
@@ -3565,6 +3775,14 @@ class VikingStatus(tk.Toplevel):
         # Goods the sell list refuses to rank: the `trade_hold_goods`
         # setting, else iron and timber.
         self.hold_goods = tuple(hold_goods or DEFAULT_HOLD_GOODS)
+        # trade_sell_pct / trade_band_pct / trade_midgard_margin settings
+        r = goods_rules or {}
+        self.sell_pct = r.get("sell_pct") or SELL_PCT_MAX
+        self.band_pct = r.get("band_pct") or SELL_BAND_PCT
+        self.midgard_margin = r.get("midgard_margin") or MIDGARD_MARGIN_PCT
+        # {good: (min, max, read at)} - kept across sessions, refreshed
+        # by `vtrade prices` and by any good's market overview.
+        self.bands = {}
         self.protocol("WM_DELETE_WINDOW", self._closed)
         widgets.add_window_menu(self, topmost)
         f = fonts or {}
@@ -4002,8 +4220,7 @@ class VikingStatus(tk.Toplevel):
 
         spoils_lists = [(label, parse_counts(st.get(key, "")))
                         for label, key in SPOILS_KEYS]
-        boons = [b.strip() for b in st.get("VBOONS", "").split(",")
-                 if b.strip()]
+        boons = boons_text(st.get("VBOONS", ""))
         if st.get("VSPOILS") or boons or \
                 any(items for _l, items in spoils_lists):
             txt.insert("end", "\nSpoils", "sec")
@@ -4018,7 +4235,7 @@ class VikingStatus(tk.Toplevel):
                         f"{n} x{c}" for n, c in items) + "\n", "val")
             if boons:
                 txt.insert("end", "  Boons: ", "dim")
-                txt.insert("end", ", ".join(boons) + "\n", "cyan")
+                txt.insert("end", boons + "\n", "cyan")
 
         saga = [s.strip() for s in st.get("VSAGA", "").split(";")
                 if s.strip()]
@@ -4247,8 +4464,15 @@ class VikingStatus(tk.Toplevel):
             # What this sale gives up: the best price ANY city lists for
             # the good, whether or not that city currently wants it.
             txt.insert("end", f"  {r['pct_max']}% of max", "dim")
+        if r.get("band") is not None:
+            txt.insert("end", f"  band {r['band']}%", "dim")
         txt.insert("end", "\n")
         notes = []
+        if r.get("reason"):
+            notes.append(r["reason"])
+        if r.get("alt"):
+            notes.append(f"for standing - {r['alt'][0]} pays "
+                         f"{r['alt'][1] - r['daler']:,} more")
         if r["cured"]:
             notes.append(f"{r['cured']} cured in "
                          f"{pretty_name(r['cured_bldg'])}")
@@ -4269,25 +4493,49 @@ class VikingStatus(tk.Toplevel):
         - that was 183 lines of mostly weak demand, and the question it
         never answered was the only one being asked: what makes the most
         daler."""
+        bands = self.bands
+        if bands:
+            now = time.time()
+            ats = [b[2] for b in bands.values()]
+            txt.insert("end", "Bands: ", "dim")
+            txt.insert("end", f"{len(bands)} goods, read "
+                              f"{fmt_secs(int(now - max(ats)))} ago"
+                              f" (oldest {fmt_secs(int(now - min(ats)))})"
+                              f"\n", "cycle")
+        else:
+            txt.insert("end", "Bands unknown - type vtrade prices\n",
+                       "dim")
         rows = sell_plan(state, self.hold_goods)
-        sellable = [r for r in rows if not r["held"]]
+        classify_sells(rows, bands, self.sell_pct, self.band_pct)
         held = [r for r in rows if r["held"]]
-        txt.insert("end", "Best sells", "sec")
+        rows = route_to_midgard(
+            [r for r in rows if not r["held"]],
+            sell_plan(state, self.hold_goods, hid=self.STANDING_HOLD),
+            bands, self.midgard_margin, self.band_pct)
+        sellable = [r for r in rows if r["verdict"] == "sell"]
+        waiting = [r for r in rows if r["verdict"] == "wait"]
+        txt.insert("end", "Sell now", "sec")
         if sellable:
             txt.insert("end", f"   {sum(r['daler'] for r in sellable):,}"
                               f" daler on the table", "gold")
-        txt.insert("end", "\n")
+        txt.insert("end", f"   (>={self.sell_pct}% of max, band"
+                          f" >={self.band_pct}%)\n", "dim")
         if not sellable:
-            txt.insert("end", "  Nothing sellable - no stock, or every"
-                              " market that wants it is filled.\n", "dim")
+            txt.insert("end", "  Nothing worth selling now.\n", "dim")
         for r in sellable:
             self._sell_row(txt, r)
+        if waiting:
+            txt.insert("end", "\nWorth waiting for", "sec")
+            txt.insert("end", f"   (>={WAIT_PCT_MAX}% of max, band"
+                              f" >={self.band_pct}%)\n", "dim")
+            for r in waiting:
+                self._sell_row(txt, r)
         if held:
             txt.insert("end", "\nHolding back", "sec")
             txt.insert("end", "   (setting: trade_hold_goods)\n", "dim")
             for r in held:
                 self._sell_row(txt, r)
-        self._render_standing_sells(txt, state)
+        self._render_standing_sells(txt, state, bands)
 
     # Trading with a city raises standing there, and Midgard is the one
     # hold that runs no missions - selling to it is the only lever on
@@ -4296,10 +4544,11 @@ class VikingStatus(tk.Toplevel):
     STANDING_HOLD = 0
     STANDING_TOP = 3
 
-    def _render_standing_sells(self, txt, state):
-        rows = [r for r in sell_plan(state, self.hold_goods,
-                                     hid=self.STANDING_HOLD)
-                if not r["held"]][:self.STANDING_TOP]
+    def _render_standing_sells(self, txt, state, bands):
+        rows = standing_sells(
+            [r for r in sell_plan(state, self.hold_goods,
+                                  hid=self.STANDING_HOLD)
+             if not r["held"]], bands, self.band_pct, self.STANDING_TOP)
         if not rows:
             return
         city = HOLD_NAMES.get(self.STANDING_HOLD,
@@ -4330,7 +4579,17 @@ class VikingStatus(tk.Toplevel):
         if self.state_data.get("WSTOCK"):
             held = stock_totals(self.state_data).get(good, 0)
             txt.insert("end", f" ({held:,})", "num")
-        txt.insert("end", "\n\n")
+        txt.insert("end", "\n")
+        # The band the sell/wait rules measure every price against.
+        band = self.bands.get(good)
+        if band:
+            txt.insert("end", "Band ", "dim")
+            txt.insert("end", f"{band[0]}-{band[1]}", "cycle")
+            txt.insert("end", f"   read {fmt_secs(int(time.time() - band[2]))}"
+                              " ago\n", "dim")
+        else:
+            txt.insert("end", "Band unknown - type vtrade prices\n", "dim")
+        txt.insert("end", "\n")
         if not rows:
             txt.insert("end", "  No market data for this good yet.\n",
                        "dim")
@@ -4786,6 +5045,14 @@ class VikingStatus(tk.Toplevel):
         txt.insert("end", f"  {label:<6}", "dim")
         txt.insert("end", fresh_bar(pct, 14), stat_band(pct))
         txt.insert("end", f"{cur:>6}/{mx}\n", "num")
+
+    def set_bands(self, bands):
+        """Fresh band data: the sell/wait rules need it."""
+        self.bands = bands
+        if self.goods_txt is not None:
+            st = self.state_data
+            self._render_goods(st.get("TGOODS", ""), st.get("DCYCLE", ""),
+                               st.get("NEXTTICK", ""))
 
     def set_vskills(self, data):
         """Store the latest parsed `vskills` (see parse_vskills) and re-render
