@@ -77,6 +77,9 @@ DICT_SECTIONS = ("aliases", "macros", "keys", "mip", "settings", "connection",
 KEYED_LIST_SECTIONS = {
     "triggers": lambda item: item.get("pattern"),
     "map_patches": lambda item: (item.get("room"), item.get("exit")),
+    # highlights: {pattern, color} - recolor the pattern's capture groups
+    # (the whole match if it has none) in the output window. Display only.
+    "highlights": lambda item: item.get("pattern"),
 }
 # Plain string lists merged as ordered sets (later layer can also
 # remove an inherited entry by listing it under "<section>_remove").

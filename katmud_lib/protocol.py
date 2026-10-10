@@ -203,7 +203,42 @@ def tag_to_style(tag):
             opts["bold"] = True
         elif part == "U":
             opts["underline"] = True
+        elif part.startswith("#"):
+            opts["foreground"] = part        # a highlight's own color
     return opts
+
+
+def highlight_spans(spans, clean, highlights):
+    """Recolor what each (regex, color) highlight matches in `clean` - its
+    capture groups, or the whole match if it has none. `clean` is the
+    spans' text joined, so offsets line up. Returns new spans; the
+    recolored pieces get tag 'hl_<color>'."""
+    ranges = []
+    for rx, color in highlights:
+        for m in rx.finditer(clean):
+            groups = range(1, len(m.groups()) + 1) if m.groups() else (0,)
+            for g in groups:
+                if m.start(g) < m.end(g):
+                    ranges.append((m.start(g), m.end(g), f"hl_{color}"))
+    if not ranges:
+        return spans
+    out, pos = [], 0
+    for chunk, tag in spans:
+        end = pos + len(chunk)
+        cuts = {0, len(chunk)}
+        for a, b, _t in ranges:
+            for x in (a, b):
+                if pos < x < end:
+                    cuts.add(x - pos)
+        cuts = sorted(cuts)
+        for i, j in zip(cuts, cuts[1:]):
+            piece_tag = tag
+            for a, b, t in ranges:
+                if a <= pos + i and pos + j <= b:
+                    piece_tag = t
+            out.append((chunk[i:j], piece_tag))
+        pos = end
+    return out
 
 
 # ==========================================================================

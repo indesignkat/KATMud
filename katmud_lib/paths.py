@@ -102,6 +102,12 @@ def viking_bands_file(mud):
     return os.path.join(mud_dir(mud), f"vikingbands-{safe_name(mud)}.json")
 
 
+def cube_map_file(mud):
+    """The masked-exit cubes' map ({room: {mask: dest}}), so a disconnect
+    or relaunch inside the cubes keeps what was learned this week."""
+    return os.path.join(mud_dir(mud), f"cubemap-{safe_name(mud)}.json")
+
+
 def viking_map_file(mud):
     """Cached Viking guild-map wall grid (MEE/MES rows) for a mud. The
     overland grid is guild-wide and static, but the MUD trickles it in one

@@ -1,7 +1,7 @@
 {
   "_comment": [
-    "Mages guild layer for 3s. Like Necromancers, this guild has NO private MIP tag - vitals ride the mud-wide FFF composite feed (A=hp C=sp E=gp1 G=gp2). Maxes self-calibrate from peak observed value. Cascade rule REPLACE (character file wins).",
-    "Pool labels: HP/SP verified from score; GP1, GP2 still GUESSED (value didn't echo to a named gscore line) - rename live. ",
+    "Mages guild layer for 3s. gp1 = Umbra %, gp2 = Concentration % (both out of 100), fed by katmud_lib/mage.py from the prompt (Umb:/Cnc:) and GMCP Guild.State; the status line under the bars shows bridges, imbues and school spells (count + reset %), the guild reset %, and the active protections from the prompt's second line. The prompt layout is the player's own (confhp), so every field is optional. MIP/FFF is gone mud-side (2026-09-15). Cascade rule REPLACE (character file wins).",
+    "No warning colours on Umbra/Concentration yet - whether high or low is bad is unknown.",
     "Attack: requires an explicit target ('kill <mob>'); plain 'kill' won't work. autoattack_command left empty so Hunt parses the room and sends 'kill <keyword>'."
   ],
   "login_commands": [],
@@ -36,14 +36,14 @@
       "width": 200
     },
     {
-      "label": "GP1",
+      "label": "Umbra",
       "cur": "gp1",
       "max": "gp1max",
       "color": "#9955cc",
       "width": 200
     },
     {
-      "label": "GP2",
+      "label": "Cnc",
       "cur": "gp2",
       "max": "gp2max",
       "color": "#cc8833",

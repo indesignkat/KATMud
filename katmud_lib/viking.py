@@ -1149,7 +1149,7 @@ PRODUCTION_KEYS = ("PRODUCTION", "BUILDS", "BUILDINGS",
 SKILLS_KEYS = ("DALER", "VIS", "KAP", "SOE", "AUD", "GOD_POWER",
                "GOD_POWER_NEXT", "GOD_POWER_FOCUS")
 
-RAIDS_KEYS = ("SHIPS", "RTARGETS")
+RAIDS_KEYS = ("SHIPS", "RTARGETS", "HEAT")
 
 # SHPLOTS/SCIVICS/SCONSUME/PATROL/STAFF/BDMG are named in the 2026-07
 # guild help doc with no field format; shown raw until captured.
@@ -1602,6 +1602,52 @@ def parse_rtargets(value):
         return out
 
     return grp(field(groups, 0, "")), grp(field(groups, 1, ""))
+
+
+# What a raid brings home (a `vlongship log` readout, 2026-10-10, 15
+# historical raids): ~1,050 daler per ship plus ~38 of EACH of the target's
+# two goods (Dorestad 39 milk + 39 beef, Paris 39 grain + 38 sunstone,
+# Jorvik 37 furs + 36 iron), plus the odd spoils/runestone/thrall.
+# Historical targets pay "halved rewards"; lineage x2 is an ASSUMPTION
+# until a lineage raid is logged.
+RAID_DALER = 1050
+RAID_UNITS = 38
+RAID_LINEAGE_MULT = 2
+
+
+def raid_targets(state, never=()):
+    """Rank the raid targets: (lineage, historical), each a list of
+    {name, g1, g2, p1, p2, value} best first. A good is valued at the
+    best price any settlement lists right now (None if none does - it
+    counts 0). `never` (case-insensitive names) drops lineage cities you
+    will not raid."""
+    best = {}
+    for _hid, goods in parse_tgoods(state.get("TGOODS", "")):
+        for good, _lvl, _sup, _dem, _buy, sell in goods:
+            if sell and sell > best.get(good, 0):
+                best[good] = sell
+    skip = {n.lower() for n in (never or ())}
+    lineage, historical = parse_rtargets(state.get("RTARGETS", ""))
+    # heat per lineage city, by HEAT_CITIES position (vheat-confirmed;
+    # re-confirmed 2026-10-10: Birka raided -> only slot 11 rose, to 81)
+    heats = parse_heat(state.get("HEAT", ""))
+    city_heat = {c.lower(): h for c, h in zip(HEAT_CITIES, heats)}
+
+    def rank(group, mult):
+        rows = []
+        for name, g1, g2 in group:
+            if name.lower() in skip:
+                continue
+            p1, p2 = best.get(g1), best.get(g2)
+            value = mult * (RAID_DALER + RAID_UNITS * ((p1 or 0) + (p2 or 0)))
+            row = {"name": name, "g1": g1, "g2": g2, "p1": p1, "p2": p2,
+                   "value": value}
+            if mult == RAID_LINEAGE_MULT:
+                row["heat"] = city_heat.get(name.lower())
+            rows.append(row)
+        return sorted(rows, key=lambda r: -r["value"])
+
+    return rank(lineage, RAID_LINEAGE_MULT), rank(historical, 1)
 
 
 def parse_farm(value):
@@ -3765,7 +3811,7 @@ class VikingStatus(tk.Toplevel):
 
     def __init__(self, master, fonts=None, on_close=None, walk_cb=None,
                  geometry=None, hold_goods=None, topmost=False,
-                 goods_rules=None):
+                 goods_rules=None, raid_never=None):
         super().__init__(master)
         self.title("Viking Status")
         self.configure(bg=BG)
@@ -3775,6 +3821,8 @@ class VikingStatus(tk.Toplevel):
         # Goods the sell list refuses to rank: the `trade_hold_goods`
         # setting, else iron and timber.
         self.hold_goods = tuple(hold_goods or DEFAULT_HOLD_GOODS)
+        # `raid_never` setting: lineage cities left off the raid ranking
+        self.raid_never = tuple(raid_never or ())
         # trade_sell_pct / trade_band_pct / trade_midgard_margin settings
         r = goods_rules or {}
         self.sell_pct = r.get("sell_pct") or SELL_PCT_MAX
@@ -4789,15 +4837,34 @@ class VikingStatus(tk.Toplevel):
                                + "\n", "dim")
 
         if "RTARGETS" in st:
-            lineage, historical = parse_rtargets(st["RTARGETS"])
-            for label, group in (("Lineage Targets", lineage),
-                                 ("Historical Targets", historical)):
+            # Ranked by what a raid brings home: daler + RAID_UNITS of each
+            # good at the best price listed anywhere (raid_targets).
+            never = getattr(self, "raid_never", ())
+            lineage, historical = raid_targets(st, never)
+            for label, note, group in (
+                    ("Historical Targets",
+                     f"value/ship = {RAID_DALER} daler + {RAID_UNITS} of "
+                     "each good", historical),
+                    ("Lineage Targets",
+                     f"x{RAID_LINEAGE_MULT} assumed; raids raise heat",
+                     lineage)):
                 if not group:
                     continue
-                txt.insert("end", label + "\n", "sec")
-                for name, g1, g2 in group:
-                    self._row(txt, f"  {name}", "val",
-                              f"{g1}, {g2}", "dim")
+                txt.insert("end", label, "sec")
+                txt.insert("end", f"   ({note})\n", "dim")
+                for t in group:
+                    goods = "  +  ".join(
+                        f"{pretty_name(g)} {p if p is not None else '?'}"
+                        for g, p in ((t["g1"], t["p1"]), (t["g2"], t["p2"])))
+                    txt.insert("end", f"  {t['name']:<16}", "val")
+                    txt.insert("end", f"{goods:<34}", "dim")
+                    txt.insert("end", f"~{t['value']:>7,}", "gold")
+                    if t.get("heat"):
+                        txt.insert("end", f"  heat {t['heat']}%", "dim")
+                    txt.insert("end", "\n")
+            if never:
+                txt.insert("end", "  never raided: "
+                           + ", ".join(never) + "\n", "dim")
 
         self._redraw_end(txt, pos)
 

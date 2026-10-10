@@ -1,8 +1,8 @@
 {
   "_comment": [
-    "Juggernauts guild layer for 3s. Like Necromancers, this guild has NO private MIP tag - vitals ride the mud-wide FFF composite feed (A=hp C=sp E=gp1 G=gp2). Maxes self-calibrate from peak observed value. Cascade rule REPLACE (character file wins).",
-    "Pool labels: HP/SP verified from score; GP1, GP2 still GUESSED (value didn't echo to a named gscore line) - rename live. ",
-    "Attack: Attack: 'ki' (alt: 'flipbird'). Assumed to self-target; if it needs a target use 'ki {t}'."
+    "Juggernauts guild layer for 3s. gp1 = Stim %, gp2 = Heat % (both out of 100), fed by katmud_lib/juggernaut.py from the prompt (S:[..%] H:[..%]) and GMCP Guild.State; the status line under the bars shows the suit, clan powers and missiles from the same sources. MIP/FFF is gone mud-side (2026-09-15). Cascade rule REPLACE (character file wins).",
+    "Stim heals the juggernaut: low Stim = no healing left (warned like HP). Heat warnings (amber 50%, red 80%) are a GUESS - tune them. Battery only powers the flashlight - not shown.",
+    "Attack: 'flipbird <mob>' starts combat with that mob; 'flipbird all' attacks the whole room. It needs an argument. Hunt/Bot send 'flipbird <keyword>', one fight at a time."
   ],
   "login_commands": [],
   "aliases": {},
@@ -36,18 +36,38 @@
       "width": 200
     },
     {
-      "label": "GP1",
+      "label": "Stim",
       "cur": "gp1",
       "max": "gp1max",
-      "color": "#9955cc",
-      "width": 200
+      "color": "#2a9d8f",
+      "width": 200,
+      "warn": [
+        [
+          0.25,
+          "#cc3333"
+        ],
+        [
+          0.5,
+          "#cc9933"
+        ]
+      ]
     },
     {
-      "label": "GP2",
+      "label": "Heat",
       "cur": "gp2",
       "max": "gp2max",
       "color": "#cc8833",
-      "width": 200
+      "width": 200,
+      "warn_above": [
+        [
+          0.5,
+          "#cc9933"
+        ],
+        [
+          0.8,
+          "#cc3333"
+        ]
+      ]
     },
     {
       "label": "Enemy",
@@ -59,6 +79,6 @@
   "mip_required": [],
   "map_patches": [],
   "settings": {
-    "autoattack_command": "ki"
+    "autoattack_command": "flipbird {t}"
   }
 }

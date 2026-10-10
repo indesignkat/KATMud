@@ -1,8 +1,8 @@
 {
   "_comment": [
-    "Knights guild layer for 3s. Like Necromancers, this guild has NO private MIP tag - vitals ride the mud-wide FFF composite feed (A=hp C=sp E=gp1 G=gp2). Maxes self-calibrate from peak observed value. Cascade rule REPLACE (character file wins).",
-    "Pool labels: HP/SP verified from score; GP2 still GUESSED (value didn't echo to a named gscore line) - rename live. ",
-    "Attack: requires an explicit target ('kill <mob>'); plain 'kill' won't work. autoattack_command left empty so Hunt parses the room and sends 'kill <keyword>'."
+    "Knights guild layer for 3s. Bars: Stamina (STM, gp1), Strain (STN, gp2 - a % where HIGH is bad), Mount (the mount's stamina, MST / GMCP mount_stamina). Fed by katmud_lib/knight.py from the three-line prompt, gs (Morale) and GMCP Guild.State; the status line shows stance + method, Prepared (UNPREPARED in capitals - 'prepare on' after gearing up), Battlecry when up, Second Wind %, Morale, last fight's rounds and the mount. MIP/FFF is gone mud-side (2026-09-15). Cascade rule REPLACE (character file wins).",
+    "BA on the prompt is not decoded (meaning unknown). Strain warnings (amber 50%, red 80%) are a guess - tune them.",
+    "Attack: requires an explicit target ('kill <mob>'); plain 'kill' won't work. autoattack_command left empty so Hunt parses the room and sends 'kill <keyword>'. Charge is a separate combat method (higher glvl + a quest), not an attack command."
   ],
   "login_commands": [],
   "aliases": {},
@@ -36,18 +36,55 @@
       "width": 200
     },
     {
-      "label": "STM",
+      "label": "Stamina",
       "cur": "gp1",
       "max": "gp1max",
       "color": "#9955cc",
-      "width": 200
+      "width": 200,
+      "warn": [
+        [
+          0.25,
+          "#cc3333"
+        ],
+        [
+          0.5,
+          "#cc9933"
+        ]
+      ]
     },
     {
-      "label": "GP2",
+      "label": "Strain",
       "cur": "gp2",
       "max": "gp2max",
       "color": "#cc8833",
-      "width": 200
+      "width": 200,
+      "warn_above": [
+        [
+          0.5,
+          "#cc9933"
+        ],
+        [
+          0.8,
+          "#cc3333"
+        ]
+      ]
+    },
+    {
+      "label": "Mount",
+      "cur": "mount",
+      "max": "mountmax",
+      "color": "#8a6d3b",
+      "width": 200,
+      "warn": [
+        [
+          0.25,
+          "#cc3333"
+        ],
+        [
+          0.5,
+          "#cc9933"
+        ]
+      ]
     },
     {
       "label": "Enemy",

@@ -31,11 +31,14 @@ from collections import deque, namedtuple
 from tkinter import font as tkfont
 from tkinter import simpledialog
 
-from . import (angel, bard, blade, changeling, config, credentials, dialogs,
-               elemental, gentech, mapdata, mapparse, mapsql, mobdb, monk,
+from . import (angel, bard, blade, changeling, config, credentials, cube,
+               dialogs,
+               elemental, gentech, juggernaut, knight, mage, mapdata,
+               mapparse,
+               mapsql, mobdb, monk,
                necro, paths,
                picker, profiles, viking, warder)
-from .protocol import (MudConnection, parse_composite,
+from .protocol import (MudConnection, highlight_spans, parse_composite,
                        strip_mip_colors, tag_to_style)
 from .widgets import MONO, MapPane, VitalsBar
 
@@ -428,6 +431,12 @@ class MudClient:
         self._gentech_line = ""         # last rendered status line
         self.monk = {}                  # merged GMCP + prompt/gs monk fields
         self._monk_line = ""            # last rendered status line
+        self.jugger = {}                # merged GMCP + prompt juggernaut
+        self._jugger_line = ""          # last rendered status line
+        self.mage = {}                  # merged GMCP + prompt mage
+        self._mage_line = ""            # last rendered status line
+        self.knight = {}                # merged GMCP + prompt knight
+        self._knight_line = ""          # last rendered status line
         self.warder = {}                # merged GMCP + prompt/gs warder fields
         self._warder_line = ""          # last rendered status line
         self.blade_win = None           # detached Bladesinger Status panel
@@ -464,6 +473,23 @@ class MudClient:
         self._viking_voyage = {}        # voyage + voyage_meta, merged
         self._voyage_due = None         # next voyage arrival (time.time())
         self._settler_line = None       # last info-pane edict/action line
+        # Cube: the masked-exit cube explorer (see cmd_cube)
+        self._cube_on = False
+        self._cube_job = None
+        self._cube_map = None           # cube.CubeMap, loaded on first use
+        self._cube_last = None          # last Room.Info (num, name, exits)
+        self._cube_pending = None       # (from room, mask, sent at)
+        self._cube_fought = False
+        self._cube_combat_end = 0.0
+        self._cube_arrived = 0.0
+        self._cube_fight_t0 = 0.0       # when the current fight started
+        self._cube_wait_t0 = None       # waiting on a devil here since
+        self._cube_swung = False        # ... and already sent it a kill
+        self._cube_portals = set()      # portal rooms already stopped at
+        self._cube_goal = None          # `Cube to <room>` destination
+        self._cube_why = ""             # what the walker is waiting on
+        self._cube_find = None          # `Cube find <word>`: NPC to stop at
+        self._cube_seen = set()         # rooms entered this run (find tour)
         self._cart_cd_until = None      # cart cooldown end (time.time())
         # Guild.Map sends w, h and pos on three DIFFERENT packets, so the
         # pieces of VMAPH are held here until all four are known.
@@ -1002,6 +1028,21 @@ class MudClient:
                 pass
         return out
 
+    @staticmethod
+    def compile_highlights(items):
+        """[{pattern, color}] -> [(regex, color)]; bad entries skipped."""
+        out = []
+        for h in items:
+            color = h.get("color") if isinstance(h, dict) else None
+            if not (isinstance(color, str) and
+                    re.fullmatch(r"#[0-9a-fA-F]{6}", color)):
+                continue
+            try:
+                out.append((re.compile(h.get("pattern") or ""), color))
+            except re.error:
+                pass
+        return out
+
     def setting(self, key, default=None):
         return (self.cascade.get("settings", {}) or {}).get(key,
                                                             default)
@@ -1064,6 +1105,8 @@ class MudClient:
                                     or {})
         self.keys = dict(c.get("keys", {}) or {})
         self.gags = self.compile_gags(c.get("gags", []) or [])
+        self.highlights = self.compile_highlights(
+            c.get("highlights", []) or [])
         self.chat_gags = self.compile_gags(c.get("chat_gags", []) or [])
         kp = c.get("kill_patterns", []) or DEFAULT_KILL_PATTERNS
         self.kill_res = self.compile_gags(kp)
@@ -1446,6 +1489,7 @@ class MudClient:
                             width=spec.get("width", 190),
                             warn=spec.get("warn"),
                             warn_below=spec.get("warn_below"),
+                            warn_above=spec.get("warn_above"),
                             hide_max=bool(spec.get("hide_max")),
                             font=self.small_bold)
             bar.pack(side="left", padx=4, pady=3)
@@ -1666,6 +1710,8 @@ class MudClient:
             self._agent_stop(why); acted = True
         if self._macro_on:
             self._macro_stop(why); acted = True
+        if getattr(self, "_cube_on", False):
+            self._cube_stop(why); acted = True
         # also halt the script-based bot (katmud_scripts.py reads this var;
         # "off" is its documented stop) so this is one kill switch for every
         # automation style.
@@ -1737,6 +1783,12 @@ class MudClient:
             text = self.necro_status
         elif self.guild.lower() == "monks" and self._monk_line:
             text = self._monk_line
+        elif self.guild.lower() == "juggernauts" and self._jugger_line:
+            text = self._jugger_line
+        elif self.guild.lower() == "mages" and self._mage_line:
+            text = self._mage_line
+        elif self.guild.lower() == "knights" and self._knight_line:
+            text = self._knight_line
         elif self.guild.lower() == "warders" and self._warder_line:
             text = self._warder_line
         elif self.stat1 or self.stat2:
@@ -4898,7 +4950,14 @@ class MudClient:
         """The room MIP packet (BAD/DDD) is the other completion signal, and on
         3s it lands right after the room text - BEFORE a GA that the server may
         hold until its next tick. Whichever arrives first marks the room ready,
-        so the bot never waits a tick for a laggy prompt."""
+        so the bot never waits a tick for a laggy prompt.
+
+        NOT when GMCP Room.Info fed it: that packet arrives BEFORE the room's
+        Room.Contents and text, so a room judged here looked empty and the
+        bot walked on (logs/din-20261009.log, Ruins of Niroth). On GMCP the
+        room is released by gmcp_room_contents instead."""
+        if getattr(self, "_gmcp_info_feed", False):
+            return
         if self._bot_on and not self._bot_homing:
             self._bot_room_displayed("packet")
 
@@ -5112,6 +5171,29 @@ class MudClient:
                 and self._resume_text in clean:
             self._resume_pending = False
 
+    def _bot_name_hostile(self, name):
+        """A mob name (Room.Contents) or italic line worth attacking: not
+        scenery GMCP called an item (the Blood Eagle ritual scene renders
+        italic in the mob slot), and not our own follower - Room.Contents
+        lists the merc, the thrall and "A warband in service to <char>" as
+        monsters, so any word that is the merc's or thrall's name, or a
+        party/own name, rules it out."""
+        low = name.strip().lower()
+        if low.endswith("."):
+            low = low[:-1].strip()
+        if low in getattr(self, "_gmcp_room_items", ()):
+            return False
+        words = {re.sub(r"[^a-z0-9']", "", t) for t in low.split()}
+        merc = str((getattr(self, "merc_state", None) or {})
+                   .get("name") or "").lower()
+        thrall = viking.parse_thrall_follower(
+            (getattr(self, "viking_state", None) or {})
+            .get("THRALL_FOLLOWER", ""))
+        for own in (merc, (thrall or {}).get("name", "").lower()):
+            if own and own in words:
+                return False
+        return not self._line_is_party(name)
+
     def _bot_scan_markers(self, spans, clean):
         """One room line, while waiting for the room display: italic -> a mob
         is here (keep the line for a kill keyword). Read on the prompt by
@@ -5119,7 +5201,7 @@ class MudClient:
         if not self._bot_first_line_at and clean.strip():
             self._bot_first_line_at = time.time()    # wire RTT marker
         ital, _under = self._line_markers(spans)
-        if ital:
+        if ital and self._bot_name_hostile(clean):
             self._bot_room_mob = True
             self._bot_mob_lines.append(clean)
             self._bot_mob_lines = self._bot_mob_lines[-10:]
@@ -5596,6 +5678,299 @@ class MudClient:
             self._raw_send(c)                   # bypasses the deadman gate
         self._bot_job = self.root.after(
             int(self._bot_move_s() * 1000), self._bot_home_step)
+
+    # ---- Cube: walk the masked-exit cubes by room number ---------------
+    # The exits there are thisway/thatway/... masks, assigned PER ROOM and
+    # reshuffled weekly; room numbers are honest. katmud_lib/cube.py holds
+    # the map and the plan; this is the walker: one step, wait for the
+    # room, wait out any fight and the post-kill hold, step again.
+    # A refused step: the cubes' "There is no reason to 'thatway' here."
+    # and the 9th plane's "You cannot go east." (full direction name).
+    CUBE_REFUSED_RE = re.compile(r"There is no reason to '(\w+)' here"
+                                 r"|You cannot go (\w+)")
+    CUBE_LONG_DIRS = {"n": "north", "s": "south", "e": "east", "w": "west"}
+
+    def _cube_load(self):
+        if self._cube_map is None:
+            data, err = paths.load_json(paths.cube_map_file(self.mud))
+            self._cube_map = cube.CubeMap.from_json({} if err else data)
+        elif not isinstance(self._cube_map, cube.CubeMap):
+            # built by the class from before a #hotswap: rebuild it on the
+            # reloaded one, or every new method on it fails silently
+            self._cube_map = cube.CubeMap.from_json(self._cube_map.to_json())
+        return self._cube_map
+
+    def _cube_save(self):
+        try:
+            paths.save_json(paths.cube_map_file(self.mud),
+                            self._cube_map.to_json())
+        except OSError as e:
+            self.write_local(f"[cube] map save failed: {e}", "#cc6666")
+
+    def _cube_on_room(self, num, name, exits):
+        """Every Room.Info: learn masked rooms (walking by hand teaches the
+        map too) and every room while Cube runs, resolve the walker's
+        pending step, and stop it on a room not named like the one Cube
+        started in, or at a portal it has not stopped at before (the 6th
+        plane's way down - it never steps through one itself)."""
+        self._cube_last = (num, name, exits)
+        masked = cube.is_masked(exits)
+        learning = masked or self._cube_on
+        reshuffled = False
+        if learning:
+            reshuffled = self._cube_load().observe(num,
+                                                   cube.walk_exits(exits))
+        p = self._cube_pending
+        if self._cube_on and p and num != p[0]:
+            reshuffled |= self._cube_load().learn(p[0], p[1], num)
+            self._cube_pending = None
+            self._cube_arrived = time.time()
+            self._cube_wait_t0 = None
+            self._cube_swung = False
+            self._cube_seen.add(num)
+        if "portal" in exits and num not in self._cube_load().portals:
+            self._cube_map.portals.add(num)
+            learning = True
+        if learning:
+            self._cube_save()
+        if not self._cube_on:
+            return
+        if reshuffled:
+            self.write_local("[cube] the exits no longer match the saved "
+                             "map - the masks were reshuffled, relearning.",
+                             "#ffaa33")
+        if self._cube_goal is not None:
+            self._cube_reschedule(1.0)          # `Cube to`: the tick decides
+            return
+        # A search (`Cube find`) walks through differently named rooms
+        # (the woman's "The Chamber of Agony" on the 9th plane).
+        if self._cube_find is None and                 self._cube_base(name) != self._cube_name:
+            self._cube_stop(f"reached '{name}' [{num}]")
+            play_sound(self.setting("tell_sound", "beep"))
+            return
+        if "portal" in exits and num not in self._cube_portals:
+            self._cube_portals.add(num)
+            self._cube_stop(f"found a portal at [{num}] - Cube again to "
+                            "keep looking past it")
+            play_sound(self.setting("tell_sound", "beep"))
+            return
+        # Room.Contents ticks us the moment it lands; this is the fallback
+        self._cube_reschedule(1.0)
+
+    @staticmethod
+    def _cube_base(name):
+        """'Swirling Mists - With A Big Sign' -> 'Swirling Mists': on 3s the
+        sign sits in cube 3's CENTER, a cube room like the rest."""
+        return name.split(" - ")[0].strip()
+
+    def _cube_scan_line(self, clean):
+        # `Cube find <word>` also reads the room text: with brief mode off a
+        # long description names the River Styx and nothing else does.
+        want = self._cube_find
+        if isinstance(want, str) and want and want in clean.lower():
+            here = self._cube_last[0] if self._cube_last else "?"
+            self._cube_stop(f"saw '{want}' at [{here}]: {clean.strip()[:70]}")
+            play_sound(self.setting("tell_sound", "beep"))
+            return
+        m = self.CUBE_REFUSED_RE.search(clean)
+        p = self._cube_pending
+        word = m and (m.group(1) or m.group(2)).lower()
+        if m and p and word in (p[1], self.CUBE_LONG_DIRS.get(p[1])):
+            self._cube_load().dead(p[0], p[1])
+            self._cube_save()
+            self._cube_pending = None
+            self._cube_reschedule(0.3)
+
+    def _cube_reschedule(self, secs):
+        if self._cube_job:
+            self.root.after_cancel(self._cube_job)
+        self._cube_job = self.root.after(int(secs * 1000), self._cube_tick)
+
+    def _cube_tick(self):
+        self._cube_job = None
+        if not self._cube_on:
+            return
+        if not (self.conn and self.conn.alive):
+            self._cube_stop("disconnected"); return
+        if self.deadman_tripped:
+            self._cube_stop("deadman tripped - stopped in place"); return
+        now = time.time()
+        if self._cube_pending:
+            if now - self._cube_pending[2] > 8:
+                self._cube_stop("no answer to the last move"); return
+            self._cube_why = "waiting for the last move to land"
+            self._cube_reschedule(0.5); return
+        # fights: wait them out, then the post-kill hold, then resume
+        if self.in_combat:
+            if not self._cube_fought:
+                self._cube_fight_t0 = now
+            self._cube_fought = True
+            self._cube_wait_t0 = None       # the next devil gets a fresh wait
+            self._cube_swung = False
+            self._cube_why = "in combat"
+            self._cube_reschedule(1.0); return
+        if self._cube_fought:
+            self._cube_fought = False
+            # The post-kill hold only after an actual kill: a devil that
+            # engaged and broke off (logs/din-20261010.log [22252]) left
+            # revalrie's resume line never coming, and the hold sat out
+            # its whole timeout.
+            if self._last_kill_at >= self._cube_fight_t0:
+                self._cube_combat_end = now
+                self._arm_post_kill_resume()
+                self._cube_reschedule(self._bot_postcombat_s()); return
+        if (now - self._cube_combat_end < self._bot_postcombat_s()
+                or self._post_kill_holding()):
+            self._cube_why = "post-kill hold (corpse routine / revalrie)"
+            self._cube_reschedule(0.5); return
+        # Room.Contents (the mobs) lands just after Room.Info and ticks us
+        # itself (gmcp_room_contents); this is only the fallback if it never
+        # comes.
+        if not getattr(self, "_gmcp_room_seen", False) \
+                and now - self._cube_arrived < 1.0:
+            self._cube_why = "waiting for the room's Room.Contents"
+            self._cube_reschedule(1.0 - (now - self._cube_arrived)); return
+        # Everything in the cubes is aggro: a devil here means a fight is
+        # coming, so wait for it rather than leave and get hunted. Room.Death
+        # counts each one out. Safety net for one that never swings: attack
+        # it after 5s, and if that starts nothing either, move on.
+        hostile = [n for n in self._gmcp_room_monsters
+                   if self._bot_name_hostile(n)]
+        if hostile:
+            if self._cube_wait_t0 is None:
+                self._cube_wait_t0 = now
+            if now - self._cube_wait_t0 < 5.0:
+                self._cube_why = f"waiting for {hostile[0]} to attack"
+                self._cube_reschedule(0.5); return
+            if not self._cube_swung:
+                self._cube_swung = True
+                self._cube_wait_t0 = now
+                kw = (self._keyword_from_mob_line(hostile[0])
+                      or hostile[0].split()[-1])
+                self.write_local(f"[cube] {hostile[0]} has not attacked - "
+                                 f"kill {kw}", "#66aacc")
+                self.send_line(f"kill {kw}")
+                self._cube_reschedule(0.5); return
+            self.write_local(f"[cube] {hostile[0]} never fought - moving "
+                             "on.", "#cc9933")
+        self._cube_why = ""
+        cur = self._cube_last[0]
+        if self._cube_goal is not None:
+            path = self._cube_load().route(cur, self._cube_goal)
+            if path == []:
+                self._cube_stop(f"arrived at [{cur}]")
+                play_sound(self.setting("tell_sound", "beep"))
+                return
+            if path is None:
+                self._cube_stop(f"no known route from [{cur}] to "
+                                f"[{self._cube_goal}]"); return
+            mask, why = path[0], f"to [{self._cube_goal}], {len(path)} left"
+        else:
+            plan = self._cube_load().plan(cur)
+            if plan is None and self._cube_find:
+                # a search keeps going: walk the known rooms not yet seen
+                # this run, so their descriptions get read
+                step = self._cube_map.tour(cur, self._cube_seen)
+                plan = step and (step[0], f"revisit [{step[1]}]")
+            if plan is None:
+                self._cube_stop("nothing left to explore from here"); return
+            mask, why = plan
+        self._cube_pending = (cur, mask, now)
+        self.write_local(f"[cube] [{cur}] {mask} ({why}) - "
+                         f"{len(self._cube_map.rooms)} rooms known",
+                         "#66aacc")
+        self.send_line(mask)
+        self._cube_reschedule(0.5)
+
+    def _cube_stop(self, why):
+        self._cube_on = False
+        self._cube_goal = None
+        self._cube_find = None
+        self._cube_pending = None
+        if self._cube_job:
+            self.root.after_cancel(self._cube_job)
+            self._cube_job = None
+        self.write_local(f"[cube] stopped: {why}.", "#ffaa33")
+
+    def cmd_cube(self, arg):
+        """`Cube`: walk the masked-exit cubes by room number, pausing for
+        fights, until a room that is not one of them. `Cube off` stops,
+        `Cube reset` forgets the saved map, `Cube status` reports."""
+        arg = arg.strip().lower()
+        if arg in ("off", "stop"):
+            if self._cube_on:
+                self._cube_stop("off")
+            return
+        if arg == "retry":
+            n = self._cube_load().forget_dead_ends()
+            self._cube_save()
+            self.write_local(f"[cube] {n} exits that went nowhere (or were "
+                             "refused) will be tried again.", "#66aacc")
+            return
+        if arg == "reset":
+            self._cube_map = cube.CubeMap()
+            self._cube_save()
+            self.write_local("[cube] saved map cleared.", "#66aacc")
+            return
+        if arg == "status":
+            m = self._cube_load()
+            if not self._cube_portals <= m.portals:
+                m.portals |= self._cube_portals
+                self._cube_save()
+            portals = ", ".join(f"[{p}]" for p in sorted(m.portals))                 or "none yet"
+            self.write_local(
+                f"[cube] {'running' if self._cube_on else 'off'}; "
+                f"{len(m.rooms)} rooms known; here: "
+                f"{self._cube_last[0] if self._cube_last else '?'}; "
+                f"portal rooms: {portals}"
+                + (f"; waiting: {self._cube_why}"
+                   if self._cube_on and self._cube_why else ""), "#66aacc")
+            return
+        goal = find = None
+        if arg.startswith("find "):
+            find = arg[5:].strip()
+        elif arg.startswith("to"):
+            try:
+                goal = int(arg[2:].strip().strip("[]"))
+            except ValueError:
+                self.write_local("[cube] usage: Cube to <room number>",
+                                 "#cc6666")
+                return
+        elif arg not in ("", "on"):
+            self.write_local("[cube] usage: Cube [to <room>|off|reset|"
+                             "status]", "#cc6666")
+            return
+        last = self._cube_last
+        if not last:
+            self.write_local("[cube] no room seen yet - move or look first.",
+                             "#cc9933")
+            return
+        if "portal" in last[2]:
+            self._cube_portals.add(last[0])     # already found: look past it
+        # the start room was seen before Cube ran (only masked rooms are
+        # learned passively), so seed it
+        self._cube_load().observe(last[0], cube.walk_exits(last[2]))
+        self._cube_load()
+        self._cube_on = True
+        self._cube_goal = goal
+        self._cube_find = find or None
+        self._cube_seen = {last[0]}
+        self._cube_name = self._cube_base(last[1])
+        self._cube_pending = None
+        self._cube_fought = False
+        self._cube_combat_end = 0.0
+        self._cube_arrived = time.time()
+        if goal is not None:
+            self.write_local(f"[cube] walking from [{last[0]}] to [{goal}] "
+                             "by known exits. Cube off / Esc to stop.",
+                             "#66aacc")
+            self._cube_reschedule(0)
+            return
+        self.write_local(f"[cube] exploring from [{last[0]}] - stops at any "
+                         f"room not named '{self._cube_name}'. Cube off / "
+                         "Esc to "
+                         "stop.", "#66aacc")
+        self._cube_reschedule(0)
 
     def cmd_chaossea(self, arg):
         a = arg.strip().lower()
@@ -8444,8 +8819,10 @@ class MudClient:
                     gagged = swallowed or (
                         (kind == "line") and self.is_gagged(clean))
                     if not gagged:
-                        self.write_spans(spans,
-                                         newline=(kind == "line"))
+                        self.write_spans(
+                            highlight_spans(spans, clean, self.highlights)
+                            if self.highlights else spans,
+                            newline=(kind == "line"))
                     if self.log_file:
                         if not swallowed:
                             self.log_file.write(
@@ -8476,6 +8853,18 @@ class MudClient:
                             self.gentech_scan_line(clean)
                         elif self.guild.lower() == "monks":
                             self.monk_scan_line(clean)
+                        elif self.guild.lower() == "juggernauts":
+                            upd = juggernaut.parse_prompt(clean)
+                            if upd:
+                                self._jugger_update(upd)
+                        elif self.guild.lower() == "mages":
+                            upd = mage.parse_prompt(clean)
+                            if upd:
+                                self._mage_update(upd)
+                        elif self.guild.lower() == "knights":
+                            upd = knight.parse_line(clean)
+                            if upd:
+                                self._knight_update(upd)
                         elif self.guild.lower() == "warders":
                             self.warder_scan_line(clean)
                         elif self.guild.lower() == "vikings":
@@ -8490,7 +8879,8 @@ class MudClient:
                             self.vscan_scan_line(clean)
                             self._glance_scan_line(clean)
                         self._merc_scan_line(clean)
-                        if self._bot_on or self._run_on or self._chaossea_on:
+                        if (self._bot_on or self._run_on or self._chaossea_on
+                                or self._cube_on):
                             self._scan_pwho(clean)       # seed party whitelist
                             self._resume_scan_line(clean)  # post-kill hold
                         self._hunt_note_no_target(clean)
@@ -8520,6 +8910,8 @@ class MudClient:
                         self.maybe_handshake(clean)
                         self.check_auth_failure(clean)
                         self.check_triggers(clean)
+                        if self._cube_on:
+                            self._cube_scan_line(clean)
                         self.call_hook("on_line", clean)
                     if kind == "prompt":
                         if self.guild.lower() == "changelings":
@@ -8981,6 +9373,8 @@ class MudClient:
                                 exits if exits else "{}"), "#55aacc")
             return
 
+        self._cube_on_room(num, name, exits)
+
         # sql_on_bad reads the biome flag straight off the string's prefix,
         # and decides whether to chart from it - so the prefix must survive.
         prefix = ("[%d]" % self.VIKING_BIOME_VNUM
@@ -9010,7 +9404,13 @@ class MudClient:
         # "~280". Both parse the same, but the clean form is what a real
         # DDD looked like, and the vnum is the whole point here - dropping
         # the packet because a room has no exits would freeze '@' again.
-        self.mip_exits("~".join(dirs + [str(num)]), None)
+        # Room.Info lands BEFORE Room.Contents and the room text, so it must
+        # not release the bots' room wait (see _bot_on_room_packet).
+        self._gmcp_info_feed = True
+        try:
+            self.mip_exits("~".join(dirs + [str(num)]), None)
+        finally:
+            self._gmcp_info_feed = False
 
     # The room title a glance prints with DISPLAY_ROOMID on:
     # "Layer one of the Sea of Chaos (w,e,out,n) [60494]" - on a move it is
@@ -9122,6 +9522,39 @@ class MudClient:
                 and getattr(self, "_run_waiting_room", False)
                 and getattr(self, "_run_expect_room", False)):
             self._run_on_prompt()
+        # Same for Bot/Hunt/Fence: the mob list is right here, so the room
+        # is decided now rather than on italic lines that have not arrived.
+        # The names double as mob lines for the kill keyword.
+        if (getattr(self, "_bot_on", False) and not self._bot_homing
+                and self._bot_waiting_room and not self._bot_room_ready):
+            # ASSIGN, not add: the previous room's late text can land
+            # after the move and set the flag for this one.
+            names = [n for n in self._gmcp_room_mob_names.values()
+                     if self._bot_name_hostile(n)]
+            self._bot_room_mob = bool(names)
+            self._bot_mob_lines = names
+            self._bot_room_displayed("contents")
+        # Cube decides the room as soon as its mobs are known. A Contents
+        # with the step still pending had no Room.Info before it: the move
+        # went nowhere (the 6th plane's fake exits) - that direction loops.
+        if getattr(self, "_cube_on", False):
+            # `Cube find <word>`: stop on her BEFORE any fight logic - the
+            # aggro wait would otherwise `kill` a listed NPC after 5s.
+            want = getattr(self, "_cube_find", None)
+            hit = isinstance(want, str) and want and next(
+                (n for n in self._gmcp_room_mob_names.values()
+                 if want in n.lower()), None)
+            if hit:
+                here = self._cube_last[0] if self._cube_last else "?"
+                self._cube_stop(f"found '{hit}' at [{here}]")
+                play_sound(self.setting("tell_sound", "beep"))
+                return
+            p = self._cube_pending
+            if p:
+                self._cube_load().learn(p[0], p[1], p[0])
+                self._cube_save()
+                self._cube_pending = None
+            self._cube_reschedule(0)
 
     def gmcp_room_death(self, data):
         """A mob died here - decrement the Room.Contents count.
@@ -9207,6 +9640,12 @@ class MudClient:
             self._gentech_gmcp(data)
         if self.guild.lower() == "monks":
             self._monk_gmcp(data)
+        if self.guild.lower() == "juggernauts" and isinstance(data, dict):
+            self._jugger_update(juggernaut.parse_gmcp(data))
+        if self.guild.lower() == "mages" and isinstance(data, dict):
+            self._mage_update(mage.parse_gmcp(data))
+        if self.guild.lower() == "knights" and isinstance(data, dict):
+            self._knight_update(knight.parse_gmcp(data))
         if self.guild.lower() == "changelings":
             self._changeling_update(changeling.parse_gmcp(data))
         # Guild.State is also the Viking STFX carrier (fx.stfx), so it goes
@@ -9338,6 +9777,63 @@ class MudClient:
             self.show_status()
         if self.monk.get("peace_level") != old_peace:
             self.update_info()
+
+    def _jugger_update(self, upd):
+        """Juggernaut prompt / Guild.State / Guild.Info fields: Stim and
+        Heat on the gp1/gp2 bars, the rest on the status line."""
+        self._pct_guild_update(upd, self.jugger, juggernaut.status_line,
+                               "_jugger_line")
+
+    def _mage_update(self, upd):
+        """Mage prompt / Guild.State fields: Umbra and Concentration on
+        the gp1/gp2 bars, the rest on the status line."""
+        self._pct_guild_update(upd, self.mage, mage.status_line,
+                               "_mage_line")
+
+    def _knight_update(self, upd):
+        """Knight prompt / gs / Guild.State fields: Stamina (gp1, its own
+        max), Strain (gp2, a %), the mount's stamina, and the status line."""
+        upd = dict(upd)
+        dirty = False
+        for key in ("gp1", "gp1max", "mount", "mountmax"):
+            if key in upd:
+                v = upd.pop(key)
+                if self.vitals.get(key) != v:
+                    self.vitals[key] = v
+                    dirty = True
+        if "gp2" in upd:
+            v = upd.pop("gp2")
+            if self.vitals.get("gp2") != v or self.vitals_max.get("gp2") != 100:
+                self.vitals["gp2"] = v
+                self.vitals_max["gp2"] = 100
+                dirty = True
+        if dirty:
+            self.update_vitals()
+        self.knight.update(upd)
+        line = knight.status_line(self.knight)
+        if line != self._knight_line:
+            self._knight_line = line
+            self.show_status()
+
+    def _pct_guild_update(self, upd, state, render, line_attr):
+        """A guild whose gp1/gp2 are percentages (bars out of 100) and
+        whose other fields make a status line under the bars."""
+        upd = dict(upd)
+        dirty = False
+        for f in ("gp1", "gp2"):
+            if f in upd:
+                v = upd.pop(f)
+                if self.vitals.get(f) != v or self.vitals_max.get(f) != 100:
+                    self.vitals[f] = v
+                    self.vitals_max[f] = 100
+                    dirty = True
+        if dirty:
+            self.update_vitals()
+        state.update(upd)
+        line = render(state)
+        if line != getattr(self, line_attr):
+            setattr(self, line_attr, line)
+            self.show_status()
 
     def monk_scan_line(self, clean):
         """The prompt (Chi max, AE count) and the `gs` readout (method and
@@ -9482,6 +9978,9 @@ class MudClient:
             return
         if isinstance(data, dict) and self.guild.lower() == "monks":
             self._monk_gmcp(data)
+            return
+        if isinstance(data, dict) and self.guild.lower() == "juggernauts":
+            self._jugger_update(juggernaut.parse_gmcp(data))
             return
         if isinstance(data, dict) and self.guild.lower() == "warders":
             self._warder_gmcp(data)
@@ -10861,6 +11360,10 @@ class MudClient:
                 self.viking_win.winfo_exists():
             self.viking_win.deiconify()
             self.viking_win.lift()
+            # re-read: a window open across a #hotswap or a settings edit
+            # still held the old (or no) never-raid list
+            self.viking_win.raid_never = tuple(
+                self.setting("raid_never") or ())
             self.viking_win.update_state(self.viking_state)
             return
         self.viking_win = viking.VikingStatus(
@@ -10871,6 +11374,7 @@ class MudClient:
             geometry=self._win_state("viking_geometry"),
             hold_goods=self.setting("trade_hold_goods"),
             topmost=self._win_state("viking_topmost"),
+            raid_never=self.setting("raid_never"),
             goods_rules={
                 "sell_pct": self.setting("trade_sell_pct"),
                 "band_pct": self.setting("trade_band_pct"),
@@ -12599,11 +13103,23 @@ class MudClient:
         ("_viking_voyage", dict), ("_voyage_due", lambda: None),
         ("_bands_lines", lambda: None), ("_vtrade_bands", dict),
         ("_settler_line", lambda: None),
+        ("_cube_on", lambda: False), ("_cube_job", lambda: None),
+        ("_cube_map", lambda: None), ("_cube_last", lambda: None),
+        ("_cube_pending", lambda: None), ("_cube_fought", lambda: False),
+        ("_cube_combat_end", float), ("_cube_arrived", float),
+        ("_cube_fight_t0", float), ("_cube_wait_t0", lambda: None),
+        ("_cube_swung", lambda: False), ("_cube_portals", set),
+        ("_cube_goal", lambda: None), ("_cube_why", str),
+        ("_cube_find", lambda: None), ("_cube_seen", set),
         ("_overview_good", lambda: None),
         ("gentech", dict), ("_gentech_line", str),
         ("monk", dict), ("_monk_line", str),
+        ("jugger", dict), ("_jugger_line", str),
+        ("mage", dict), ("_mage_line", str),
+        ("knight", dict), ("_knight_line", str),
         ("warder", dict), ("_warder_line", str),
         ("changeling", dict),
+        ("highlights", list),
     )
 
     def _hotswap_fixups(self):
@@ -12948,7 +13464,7 @@ class MudClient:
                     "Reminder", "Reminders", "Corpse", "Combat",
                     "Mapfind", "Mapgo",
                     "Vskills", "Missionlist", "VNlist",
-                    "Chaossea", "Pouchtrim")
+                    "Chaossea", "Pouchtrim", "Cube")
                     # a guild "macros" entry (e.g. bladesinger autoregen).
                     # ANY capitalisation, unlike the list above: the name
                     # comes from the user's own config, not this hardcoded
@@ -13794,8 +14310,10 @@ class MudClient:
                 else "character")
 
     # How long in_combat may stand with no blow landing before the fight is
-    # assumed over. 3s rounds are 2s, so the default is ~4 roundless rounds.
-    COMBAT_STALE_S = 8
+    # assumed over. 3s rounds are 2s and are never skipped (2,305 consecutive
+    # Char.Combat rounds across every capture rose by exactly 1), so 3s is
+    # one round's grace.
+    COMBAT_STALE_S = 3
 
     # How long after a kill a damage line naming that same mob is read as
     # the tail of the killing round rather than a new fight.
@@ -15205,6 +15723,8 @@ class MudClient:
             self.cmd_fence(arg)
         elif name == "chaossea":
             self.cmd_chaossea(arg)
+        elif name == "cube":
+            self.cmd_cube(arg)
         elif name == "run":
             self.cmd_run(arg)
         elif name == "explore":

@@ -18,7 +18,8 @@ class VitalsBar(tk.Canvas):
     """One labelled gradient bar: name, current/max, colored fill."""
 
     def __init__(self, parent, label, color, width=190, font=None,
-                 warn=None, warn_below=None, hide_max=False, **kw):
+                 warn=None, warn_below=None, hide_max=False,
+                 warn_above=None, **kw):
         super().__init__(parent, width=width, height=22, bg="#15151c",
                          highlightthickness=0, **kw)
         self.label = label
@@ -29,6 +30,9 @@ class VitalsBar(tk.Canvas):
         # Absolute thresholds [[value, color], ...] - for a pool with no
         # known maximum (3s monk Peace), where a fraction means nothing.
         self.warn_below = warn_below or []
+        # [[fraction, color], ...] for a pool where HIGH is bad (3s
+        # juggernaut Heat): the highest threshold reached wins.
+        self.warn_above = warn_above or []
         self.hide_max = hide_max
         self.font = font or (MONO, 9, "bold")
         self.set(0, 0)
@@ -49,6 +53,10 @@ class VitalsBar(tk.Canvas):
             if cur < threshold:
                 fill = color
                 break
+        if top:
+            for threshold, color in sorted(getattr(self, "warn_above", [])):
+                if frac >= threshold:
+                    fill = color
         self.create_rectangle(0, 0, int(self.w * frac), h,
                               fill=fill, width=0)
         self.create_text(6, h // 2, anchor="w", fill="#ffffff",
